@@ -51,9 +51,9 @@ __sigil_accept_line() {
   elif [[ "$b" == \?\?* ]]; then
     rest="${b#\?\?}"; rest="${rest## }"
     if [[ -n "$rest" ]]; then
-      BUFFER=""
+      BUFFER="?? ${(qqq)rest}"
       zle -I
-      print -r -- "?? ${rest}"
+      BUFFER=""
       sigil_follow_up "$rest"
       zle reset-prompt
       return
@@ -61,9 +61,9 @@ __sigil_accept_line() {
   elif [[ "$b" == \?* ]]; then
     rest="${b#\?}"; rest="${rest## }"
     if [[ -n "$rest" ]]; then
-      BUFFER=""
+      BUFFER="? ${(qqq)rest}"
       zle -I
-      print -r -- "? ${rest}"
+      BUFFER=""
       sigil_question "$rest"
       zle reset-prompt
       return
