@@ -33,10 +33,45 @@ sigil_follow_up() {
   "$__sigil_bin" follow-up "$*"
 }
 
+sigil_fix() {
+  local selected
+  selected="$("$__sigil_bin" fix)" || return $?
+  [[ -n "$selected" ]] && print -r -- "$selected"
+}
+
+sigil_previous_fix() {
+  local selected
+  selected="$("$__sigil_bin" previous-fix)" || return $?
+  [[ -n "$selected" ]] && print -r -- "$selected"
+}
+
 function ',' { sigil_command "$*" }
 function ',,' { sigil_previous_command "$*" }
 function '?' { sigil_question "$*" }
 function '??' { sigil_follow_up "$*" }
+function '^' { sigil_fix "$*" }
+function '^^' { sigil_previous_fix "$*" }
+
+autoload -Uz add-zsh-hook
+typeset -g __sigil_preexec_command=""
+
+__sigil_preexec() {
+  __sigil_preexec_command="$1"
+}
+
+__sigil_precmd() {
+  local exit_status=$?
+  if (( exit_status != 0 )) && [[ -n "$__sigil_preexec_command" ]]; then
+    case "$__sigil_preexec_command" in
+      ,*|\?*|\^*|@*) __sigil_preexec_command=""; return ;;
+    esac
+    "$__sigil_bin" failure record --status "$exit_status" --cwd "$PWD" "$__sigil_preexec_command" >/dev/null 2>&1
+  fi
+  __sigil_preexec_command=""
+}
+
+add-zsh-hook preexec __sigil_preexec
+add-zsh-hook precmd __sigil_precmd
 
 __sigil_accept_line() {
   emulate -L zsh
@@ -56,6 +91,26 @@ __sigil_accept_line() {
   elif [[ "$b" == @!* || "$b" == @* ]]; then
     zle -I
     print -u2 -- "${__sigil_muted}❯ sigil @ · blocked · no promotion mutation${__sigil_reset}"
+    zle reset-prompt
+    return
+  elif [[ "$b" == \^\^* ]]; then
+    local selected
+    BUFFER="^^"
+    zle -I
+    BUFFER=""
+    selected="$(sigil_previous_fix)" || { zle reset-prompt; return }
+    BUFFER="$selected"
+    CURSOR=${#BUFFER}
+    zle reset-prompt
+    return
+  elif [[ "$b" == \^* ]]; then
+    local selected
+    BUFFER="^"
+    zle -I
+    BUFFER=""
+    selected="$(sigil_fix)" || { zle reset-prompt; return }
+    BUFFER="$selected"
+    CURSOR=${#BUFFER}
     zle reset-prompt
     return
   elif [[ "$b" == \?!* ]]; then
@@ -92,7 +147,7 @@ zshaddhistory() {
   emulate -L zsh
   local line="${1%%$'\n'}"
   case "$line" in
-    ,*|\\\?*) return 1 ;;
+    ,*|\\\?*|\^*) return 1 ;;
   esac
   return 0
 }

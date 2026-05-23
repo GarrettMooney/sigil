@@ -14,6 +14,8 @@ calls, selection UI, Pi streaming, rendering, and persistent state.
 ```text
 ,   generate shell command candidates
 ,,  reopen the previous command selector
+^   suggest fixes for the last failed command
+^^  reopen previous fix candidates
 ?   answer a question with Pi using read + web search
 ??  continue the previous question discussion
 ```
@@ -50,6 +52,8 @@ Core commands:
 ```sh
 sigil command --select "find wav files"
 sigil previous-command --select
+sigil fix
+sigil previous-fix
 sigil question "what is tldraw?"
 sigil follow-up "how would that work in practice?"
 sigil session show
@@ -75,6 +79,8 @@ Current files:
 ```text
 events.jsonl                                 append-only global event log
 sessions/<session-id>/last-command.json      latest command candidates for `,,`
+sessions/<session-id>/last-failure.json      latest failed shell command
+sessions/<session-id>/last-fix.json          latest fix candidates for `^^`
 sessions/<session-id>/last-question.jsonl    question transcript; reset by `?`
 sessions/<session-id>/last-tools.jsonl       latest Pi tool trace
 ```

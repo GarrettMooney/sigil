@@ -13,7 +13,13 @@ from typing import Any
 
 from .state import session_dir, session_id, state_dir
 
-SESSION_FILES = ("last-command.json", "last-question.jsonl", "last-tools.jsonl")
+SESSION_FILES = (
+    "last-command.json",
+    "last-question.jsonl",
+    "last-tools.jsonl",
+    "last-failure.json",
+    "last-fix.json",
+)
 
 
 def session_paths() -> dict[str, str]:

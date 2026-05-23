@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .ansi import MUTED, RESET
 from .commands import generate, previous, select
+from .failure import record_failure, select_fix, select_previous_fix
 from .pi_stream import stream_events
 from .question import ask
 from .security import inherited_label, make_security, normalize_security, record_id
@@ -133,6 +134,30 @@ def cmd_session(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_failure_record(args: argparse.Namespace) -> int:
+    """Record a failed shell command for later repair."""
+    record_failure(args.command, args.status, args.cwd)
+    return 0
+
+
+def cmd_fix(args: argparse.Namespace) -> int:
+    """Suggest fixes for the last recorded failed shell command."""
+    command = select_fix()
+    if command:
+        append_event({"type": "fix_selected", "command": command})
+        print(command)
+    return 0
+
+
+def cmd_previous_fix(args: argparse.Namespace) -> int:
+    """Reopen previous repair candidates."""
+    command = select_previous_fix()
+    if command:
+        append_event({"type": "fix_selected", "command": command})
+        print(command)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse the shell-agnostic Sigil CLI surface."""
     parser = argparse.ArgumentParser(prog="sigil")
@@ -164,6 +189,21 @@ def main(argv: list[str] | None = None) -> int:
     session.add_argument("session_command", nargs="?", choices=("show", "path", "list", "clear"), default="show")
     session.add_argument("--json", action="store_true")
     session.set_defaults(func=cmd_session)
+
+    failure = sub.add_parser("failure")
+    failure_sub = failure.add_subparsers(dest="failure_command", required=True)
+
+    failure_record = failure_sub.add_parser("record")
+    failure_record.add_argument("--status", type=int, required=True)
+    failure_record.add_argument("--cwd")
+    failure_record.add_argument("command")
+    failure_record.set_defaults(func=cmd_failure_record)
+
+    fix = sub.add_parser("fix")
+    fix.set_defaults(func=cmd_fix)
+
+    previous_fix = sub.add_parser("previous-fix")
+    previous_fix.set_defaults(func=cmd_previous_fix)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
