@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sigil-sh"
+version = "0.1.0"
+description = "Punctuation-native LLM interaction for the shell."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+  { name = "Rémi Louf" }
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/rlouf/sigil"
+Repository = "https://github.com/rlouf/sigil"
+Issues = "https://github.com/rlouf/sigil/issues"
+
+[project.scripts]
+sigil = "sigil.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sigil"]

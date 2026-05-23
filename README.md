@@ -38,11 +38,24 @@ executable insertion path through `??`.
 The full trust model is documented in
 [docs/security-lattice.md](docs/security-lattice.md).
 
+## Install
+
+Current rough install:
+
+```sh
+uv tool install git+https://github.com/rlouf/sigil
+curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/scripts/install.zsh | zsh
+```
+
+The installer downloads the zsh binding to `~/.sigil/shell/zsh/sigil.zsh` and
+adds an idempotent source block to `~/.zshrc`.
+
 ## Layout
 
 ```text
 bin/sigil              shell-agnostic CLI
 bin/stream-pi-json     Pi JSON event filter
+scripts/install.zsh    zsh binding installer
 sigil/                 Python core runtime
 zsh/sigil.zsh          zsh bindings only
 ```
@@ -109,7 +122,7 @@ behavior. Shell globals are intentionally not used for session continuity.
 Source the zsh entrypoint from `.zshrc`:
 
 ```zsh
-source "$HOME/projects/sigil/zsh/sigil.zsh"
+source "$HOME/.sigil/shell/zsh/sigil.zsh"
 ```
 
 ## Requirements

@@ -48,7 +48,7 @@ def continuation_prompt(question: str, turns: list[dict[str, object]]) -> str:
     )
 
 
-def ask(question: str, stream_filter: str, *, follow_up: bool = False) -> int:
+def ask(question: str, stream_filter: str | None = None, *, follow_up: bool = False) -> int:
     """Run Pi for a question while recording transcript and tool trace state."""
     if not start_qwen_for_pi():
         return 1
@@ -115,7 +115,7 @@ def ask(question: str, stream_filter: str, *, follow_up: bool = False) -> int:
         QUESTION_SYSTEM_PROMPT,
         prompt,
     ]
-    filter_cmd = [stream_filter]
+    filter_cmd = [stream_filter, "stream-pi-json"] if stream_filter else [sys.argv[0], "stream-pi-json"]
     renderer_cmd = ["glow", "-s", "dark", "-"] if shutil.which("glow") else ["cat"]
     filter_env = {
         **os.environ,

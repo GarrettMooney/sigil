@@ -74,12 +74,12 @@ def cmd_previous_command(args: argparse.Namespace) -> int:
 
 def cmd_question(args: argparse.Namespace) -> int:
     """Answer a fresh shell question and reset the session transcript."""
-    return ask(args.question, str(project_root() / "bin" / "stream-pi-json"))
+    return ask(args.question)
 
 
 def cmd_follow_up(args: argparse.Namespace) -> int:
     """Continue the current session transcript with a follow-up question."""
-    return ask(args.question, str(project_root() / "bin" / "stream-pi-json"), follow_up=True)
+    return ask(args.question, follow_up=True)
 
 
 def print_json(value: object) -> None:
