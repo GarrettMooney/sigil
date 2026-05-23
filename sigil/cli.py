@@ -5,10 +5,12 @@ import json
 import sys
 from pathlib import Path
 
+from .ansi import MUTED, RESET
 from .commands import generate, previous, select
 from .pi_stream import stream_events
 from .question import ask
-from .state import append_event
+from .security import inherited_label, make_security, normalize_security, record_id
+from .state import append_event, read_json
 
 
 def project_root() -> Path:
@@ -17,13 +19,23 @@ def project_root() -> Path:
 
 def cmd_command(args: argparse.Namespace) -> int:
     candidates = generate(args.prompt)
+    source = normalize_security(read_json("last-command.json") or {})
+    security = make_security(
+        glyph=",",
+        integrity="local_model",
+        capability="propose",
+        taint=["model"],
+        inputs=[record_id(source)],
+        input_records=[source],
+        fresh_human=True,
+    )
     if args.json:
         print(json.dumps({"prompt": args.prompt, "commands": candidates}, ensure_ascii=False))
         return 0
     if args.select:
-        command = select(args.prompt, candidates)
+        command = select(args.prompt, candidates, security)
         if command:
-            append_event({"type": "command_selected", "command": command})
+            append_event({"type": "command_selected", "command": command, **security})
             print(command)
         return 0
     for item in candidates:
@@ -32,13 +44,19 @@ def cmd_command(args: argparse.Namespace) -> int:
 
 
 def cmd_previous_command(args: argparse.Namespace) -> int:
-    prompt, candidates = previous()
+    prompt, candidates, security = previous()
+    continued = append_event({"type": "command_continued", "prompt": prompt, **security})
+    security = {**security, "inputs": [continued["id"]]}
+    print(
+        f"{MUTED}❯ sigil ,, · inherited: {inherited_label(security)}{RESET}",
+        file=sys.stderr,
+    )
     if args.json:
-        print(json.dumps({"prompt": prompt, "commands": candidates}, ensure_ascii=False))
+        print(json.dumps({"prompt": prompt, "commands": candidates, **security}, ensure_ascii=False))
         return 0
-    command = select(prompt, candidates) if args.select else candidates[0]["command"]
+    command = select(prompt, candidates, security) if args.select else candidates[0]["command"]
     if command:
-        append_event({"type": "command_selected", "command": command})
+        append_event({"type": "command_selected", "command": command, **security})
         print(command)
     return 0
 

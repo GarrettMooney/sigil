@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 from .ansi import MUTED, RESET
+from .security import inherit_security, inherited_label, make_security, normalize_security
 from .server import start_qwen_for_pi
 from .state import append_event, append_jsonl, read_jsonl, write_jsonl
 
@@ -15,12 +16,15 @@ QUESTION_SYSTEM_PROMPT = (
 )
 
 
-def continuation_prompt(question: str) -> str:
-    turns = [
+def discussion_turns() -> list[dict[str, object]]:
+    return [
         turn
         for turn in read_jsonl("last-question.jsonl")
         if turn.get("role") in {"user", "assistant"} and turn.get("content")
     ]
+
+
+def continuation_prompt(question: str, turns: list[dict[str, object]]) -> str:
     if not turns:
         return question
     transcript = "\n\n".join(
@@ -40,27 +44,55 @@ def ask(question: str, stream_filter: str, *, follow_up: bool = False) -> int:
     if not start_qwen_for_pi():
         return 1
 
-    prompt = continuation_prompt(question) if follow_up else question
+    previous_turns = discussion_turns() if follow_up else []
+    prompt = continuation_prompt(question, previous_turns) if follow_up else question
+    if follow_up:
+        input_records = [normalize_security(turn) for turn in previous_turns]
+        security = inherit_security(
+            glyph="??",
+            input_records=input_records,
+            capability="read",
+            extra_taint=["web"],
+            provisional=True,
+        )
+    else:
+        security = make_security(
+            glyph="?",
+            integrity="web",
+            capability="read",
+            taint=["web"],
+            provisional=True,
+            fresh_human=True,
+        )
+    question_event = append_event(
+        {
+            "type": "question",
+            "question": question,
+            "prompt": prompt,
+            "follow_up": follow_up,
+            **security,
+        }
+    )
     question_turn = {
         "role": "user",
         "content": question,
         "prompt": prompt,
         "follow_up": follow_up,
+        "event_id": question_event["id"],
+        **security,
     }
     if follow_up:
         append_jsonl("last-question.jsonl", question_turn)
     else:
         write_jsonl("last-question.jsonl", [question_turn])
     write_jsonl("last-tools.jsonl", [])
-    append_event(
-        {
-            "type": "question",
-            "question": question,
-            "prompt": prompt,
-            "follow_up": follow_up,
-        }
-    )
-    print(f"{MUTED}❯ pi · read + web{RESET}", file=sys.stderr)
+    if follow_up:
+        print(
+            f"{MUTED}❯ pi ??    · inherited: {inherited_label(security)} · provisional{RESET}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"{MUTED}❯ pi ?     · read+web · no execute path{RESET}", file=sys.stderr)
 
     pi_cmd = [
         "pi",
@@ -80,6 +112,12 @@ def ask(question: str, stream_filter: str, *, follow_up: bool = False) -> int:
         **os.environ,
         "SIGIL_CAPTURE_ANSWER": "1",
         "SIGIL_CAPTURE_TRACE": "1",
+        "SIGIL_SECURITY_GLYPH": str(security["glyph"]),
+        "SIGIL_SECURITY_INTEGRITY": str(security["integrity"]),
+        "SIGIL_SECURITY_CAPABILITY": str(security["capability"]),
+        "SIGIL_SECURITY_TAINT": ",".join(security["taint"]),
+        "SIGIL_SECURITY_PROVISIONAL": "1" if security["provisional"] else "0",
+        "SIGIL_SECURITY_INPUTS": question_event["id"] or ",".join(security["inputs"]),
     }
 
     pi_proc = subprocess.Popen(pi_cmd, stdout=subprocess.PIPE)

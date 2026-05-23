@@ -8,6 +8,7 @@ import time
 from typing import TextIO
 
 from .ansi import MUTED, RESET
+from .security import normalize_capability, normalize_integrity
 from .state import append_event, append_jsonl
 
 
@@ -28,9 +29,31 @@ def summarize(tool: str, args: object) -> str:
     )
 
 
+def env_security() -> dict[str, object]:
+    taint = [
+        item
+        for item in os.environ.get("SIGIL_SECURITY_TAINT", "").split(",")
+        if item
+    ]
+    inputs = [
+        item
+        for item in os.environ.get("SIGIL_SECURITY_INPUTS", "").split(",")
+        if item
+    ]
+    return {
+        "glyph": os.environ.get("SIGIL_SECURITY_GLYPH", "?"),
+        "inputs": inputs,
+        "integrity": normalize_integrity(os.environ.get("SIGIL_SECURITY_INTEGRITY")),
+        "capability": normalize_capability(os.environ.get("SIGIL_SECURITY_CAPABILITY")),
+        "taint": taint or ["web"],
+        "provisional": os.environ.get("SIGIL_SECURITY_PROVISIONAL") == "1",
+    }
+
+
 def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr: TextIO = sys.stderr) -> int:
     started_text = False
     answer_chunks: list[str] = []
+    security = env_security()
     spinner_running = True
     spinner_paused = False
     spinner_lock = threading.Lock()
@@ -88,6 +111,7 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
                     "tool": tool,
                     "detail": detail,
                     "args": event.get("args"),
+                    **security,
                 }
                 if os.environ.get("SIGIL_CAPTURE_TRACE") == "1":
                     append_jsonl("last-tools.jsonl", trace_event)
@@ -99,7 +123,7 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
                 continue
 
             if event.get("type") == "tool_execution_end":
-                trace_event = {"type": "tool_end", "tool": event.get("toolName", "")}
+                trace_event = {"type": "tool_end", "tool": event.get("toolName", ""), **security}
                 if os.environ.get("SIGIL_CAPTURE_TRACE") == "1":
                     append_jsonl("last-tools.jsonl", trace_event)
                 append_event(trace_event)
@@ -124,7 +148,17 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
             stop_spinner()
         answer = "".join(answer_chunks)
         if answer:
+            answer_event = append_event(
+                {"type": "answer_done", "bytes": len(answer.encode("utf-8")), **security}
+            )
             if os.environ.get("SIGIL_CAPTURE_ANSWER") == "1":
-                append_jsonl("last-question.jsonl", {"role": "assistant", "content": answer})
-            append_event({"type": "answer_done", "bytes": len(answer.encode("utf-8"))})
+                append_jsonl(
+                    "last-question.jsonl",
+                    {
+                        "role": "assistant",
+                        "content": answer,
+                        "event_id": answer_event["id"],
+                        **security,
+                    },
+                )
     return 0

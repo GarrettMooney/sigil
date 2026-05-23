@@ -6,6 +6,7 @@ from typing import Any
 
 from .ansi import LOVE, MUTED, RESET
 from .qwen import chat_json, ensure_server
+from .security import candidate_prefix, inherit_security, make_security, normalize_security
 from .state import append_event, read_json, write_json
 
 COMMAND_SCHEMA: dict[str, Any] = {
@@ -40,6 +41,7 @@ COMMAND_SYSTEM = (
 def generate(prompt: str) -> list[dict[str, str]]:
     if not ensure_server():
         raise SystemExit(1)
+    print(f"{MUTED}❯ sigil ,  · propose · model-authored{RESET}", file=sys.stderr)
     print(f"{MUTED}⟳ thinking…{RESET}", end="", file=sys.stderr, flush=True)
     try:
         data = chat_json(COMMAND_SYSTEM, prompt, COMMAND_SCHEMA)
@@ -58,34 +60,49 @@ def generate(prompt: str) -> list[dict[str, str]]:
         print(f"{LOVE}✗ no candidates{RESET}", file=sys.stderr)
         raise SystemExit(1)
 
-    state = {"prompt": prompt, "commands": candidates}
+    security = make_security(
+        glyph=",",
+        integrity="local_model",
+        capability="propose",
+        taint=["model"],
+        fresh_human=True,
+    )
+    event = append_event({"type": "command_generated", "prompt": prompt, "commands": candidates, **security})
+    state = {
+        "prompt": prompt,
+        "commands": candidates,
+        "event_id": event["id"],
+        **security,
+    }
     write_json("last-command.json", state)
-    append_event({"type": "command_generated", **state})
     return candidates
 
 
-def previous() -> tuple[str, list[dict[str, str]]]:
+def previous() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
     data = read_json("last-command.json")
     if not data or not data.get("commands"):
         print(f"{LOVE}✗ no previous command suggestions{RESET}", file=sys.stderr)
         raise SystemExit(1)
-    return str(data.get("prompt", "")), list(data["commands"])
+    security = inherit_security(glyph=",,", input_records=[normalize_security(data)], capability="propose")
+    return str(data.get("prompt", "")), list(data["commands"]), security
 
 
-def select(prompt: str, candidates: list[dict[str, str]]) -> str | None:
+def select(prompt: str, candidates: list[dict[str, str]], metadata: dict[str, Any] | None = None) -> str | None:
+    metadata = normalize_security(metadata or {})
     if len(candidates) == 1:
         return candidates[0]["command"]
 
     try:
         subprocess.run(["fzf", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     except Exception:
-        return select_numbered(prompt, candidates)
+        return select_numbered(prompt, candidates, metadata)
 
     records = []
+    prefix = candidate_prefix(metadata)
     for index, item in enumerate(candidates, start=1):
         command = item["command"].replace("\t", " ")
         note = item.get("note", "").replace("\t", " ")
-        records.append(f"{index}\t{command}\t{command}\n{MUTED}  {note}{RESET}\n\0")
+        records.append(f"{index}\t{command}\t{prefix} {command}\n{MUTED}  {note}{RESET}\n\0")
     proc = subprocess.run(
         [
             "fzf",
@@ -116,10 +133,15 @@ def select(prompt: str, candidates: list[dict[str, str]]) -> str | None:
     return selected[1]
 
 
-def select_numbered(prompt: str, candidates: list[dict[str, str]]) -> str | None:
+def select_numbered(
+    prompt: str,
+    candidates: list[dict[str, str]],
+    metadata: dict[str, Any] | None = None,
+) -> str | None:
+    prefix = candidate_prefix(metadata or {})
     print(f"{MUTED}commands for {prompt}{RESET}", file=sys.stderr)
     for index, item in enumerate(candidates, start=1):
-        print(f"  {index}  {item['command']}", file=sys.stderr)
+        print(f"  {index}  {prefix} {item['command']}", file=sys.stderr)
         if item.get("note"):
             print(f"     {MUTED}{item['note']}{RESET}", file=sys.stderr)
     print(f"  pick 1-{len(candidates)}  ↵=1  q=cancel › ", end="", file=sys.stderr, flush=True)
@@ -133,4 +155,3 @@ def select_numbered(prompt: str, candidates: list[dict[str, str]]) -> str | None
         return candidates[int(choice) - 1]["command"]
     print(f"{LOVE}invalid choice{RESET}", file=sys.stderr)
     return None
-

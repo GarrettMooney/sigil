@@ -42,12 +42,27 @@ __sigil_accept_line() {
   emulate -L zsh
   local b="$BUFFER" rest
   if [[ "$b" == ,* ]]; then
-    if [[ "$b" == ,,* ]]; then
+    if [[ "$b" == ,!* ]]; then
+      zle -I
+      print -u2 -- "${__sigil_muted}❯ sigil ,! · blocked · bang requires sandbox${__sigil_reset}"
+      zle reset-prompt
+      return
+    elif [[ "$b" == ,,* ]]; then
       BUFFER=",,"
     else
       rest="${b#,}"; rest="${rest## }"
       [[ -n "$rest" ]] && BUFFER=", ${(qqq)rest}"
     fi
+  elif [[ "$b" == @!* || "$b" == @* ]]; then
+    zle -I
+    print -u2 -- "${__sigil_muted}❯ sigil @ · blocked · no promotion mutation${__sigil_reset}"
+    zle reset-prompt
+    return
+  elif [[ "$b" == \?!* ]]; then
+    zle -I
+    print -u2 -- "${__sigil_muted}❯ pi ?!    · blocked · no execute path${__sigil_reset}"
+    zle reset-prompt
+    return
   elif [[ "$b" == \?\?* ]]; then
     rest="${b#\?\?}"; rest="${rest## }"
     if [[ -n "$rest" ]]; then

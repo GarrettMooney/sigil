@@ -18,6 +18,24 @@ calls, selection UI, Pi streaming, rendering, and persistent state.
 ??  continue the previous question discussion
 ```
 
+Sigil records every glyph invocation with trust metadata. The current grammar
+maps to:
+
+```text
+,   human prompt -> local model proposal   local_model / propose / model-tainted
+,,  command continuation                   inherits prior command taint
+?   read + web question                    web / read / web-tainted / provisional
+??  question continuation                  inherits prior question taint / provisional
+```
+
+This matters because Sigil crosses the shell boundary by inserting text into the
+prompt. Model-authored command suggestions are proposals, not executed actions.
+Web-tainted question answers are read-only and provisional, and cannot become an
+executable insertion path through `??`.
+
+The full trust model is documented in
+[docs/security-lattice.md](docs/security-lattice.md).
+
 ## Layout
 
 ```text
@@ -56,6 +74,22 @@ sessions/<session-id>/last-command.json      latest command candidates for `,,`
 sessions/<session-id>/last-question.jsonl    question transcript; reset by `?`
 sessions/<session-id>/last-tools.jsonl       latest Pi tool trace
 ```
+
+Events and session JSONL entries include these trust fields:
+
+```json
+{
+  "glyph": "?",
+  "inputs": ["event-id"],
+  "integrity": "web",
+  "capability": "read",
+  "taint": ["web"],
+  "provisional": true
+}
+```
+
+Legacy state that predates those fields is treated as low-trust:
+`integrity=unknown`, `capability=none`, and `taint=["legacy"]`.
 
 The event log is the durable substrate for future `@.`, `@@`, and `!!`
 behavior. Shell globals are intentionally not used for session continuity.
