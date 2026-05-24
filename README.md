@@ -2,8 +2,14 @@
 
 Punctuation-native LLM interaction for the shell.
 
+![15-second Sigil terminal demo](docs/demo.gif)
+
 Status: this is currently a "works on my machine" repo. If you are interested
 in an easier-to-install version, please open an issue.
+
+The Python package is named `sigil-sh` because `sigil` was not available as a
+distribution name. The installed command is still `sigil`, and this repository
+uses `sigil` everywhere else.
 
 Sigil is structured as a shell-agnostic core with thin shell bindings. The zsh
 layer owns prompt interception and buffer insertion; the Python CLI owns model
@@ -20,8 +26,16 @@ calls, selection UI, Pi streaming, rendering, and persistent state.
 ??  continue the previous question discussion
 ```
 
-Sigil records every glyph invocation with trust metadata. The current grammar
-maps to:
+Sigil records every glyph invocation with trust metadata. This is the core trust
+lattice:
+
+```text
+integrity:  human > local_model > local_file > web > unknown
+capability: none < propose < read < write_boxed < exec_boxed
+taint:      model, web, legacy
+```
+
+The current grammar maps to:
 
 ```text
 ,   human prompt -> local model proposal   local_model / propose / model-tainted
@@ -35,12 +49,21 @@ prompt. Model-authored command suggestions are proposals, not executed actions.
 Web-tainted question answers are read-only and provisional, and cannot become an
 executable insertion path through `??`.
 
+Current no-execute guarantees:
+
+```text
+no ?! parser route
+no auto-run from web-tainted state
+no promotion mutation
+no bang unless sandbox exists
+```
+
 The full trust model is documented in
 [docs/security-lattice.md](docs/security-lattice.md).
 
 ## Install
 
-Current rough install:
+Current rough install for early users:
 
 ```sh
 uv tool install git+https://github.com/rlouf/sigil
@@ -49,11 +72,42 @@ curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/shell/zsh/install.
 curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/shell/bash/install.bash | bash
 ```
 
+Manual install, if you want to inspect each step before sourcing shell code:
+
+```sh
+uv tool install git+https://github.com/rlouf/sigil
+
+mkdir -p ~/.sigil/shell/zsh
+curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/shell/zsh/sigil.zsh \
+  -o ~/.sigil/shell/zsh/sigil.zsh
+printf '\n# Sigil\nsource "$HOME/.sigil/shell/zsh/sigil.zsh"\n' >> ~/.zshrc
+```
+
+For Bash, replace the last three lines with:
+
+```sh
+mkdir -p ~/.sigil/shell/bash
+curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/shell/bash/sigil.bash \
+  -o ~/.sigil/shell/bash/sigil.bash
+printf '\n# Sigil\nsource "$HOME/.sigil/shell/bash/sigil.bash"\n' >> ~/.bashrc
+```
+
 The installer downloads the zsh binding to `~/.sigil/shell/zsh/sigil.zsh` and
-adds an idempotent source block to `~/.zshrc`.
+adds an idempotent source block to `~/.zshrc`. It also warns if `sigil`, `fzf`,
+`glow`, `pi`, or the local model endpoint are not available.
 
 The Bash installer downloads the binding to `~/.sigil/shell/bash/sigil.bash`
-and adds an idempotent source block to `~/.bashrc`.
+and adds an idempotent source block to `~/.bashrc`. It performs the same checks.
+
+After install, verify the local pieces:
+
+```sh
+command -v sigil fzf glow pi
+curl -fsS "${QWEN_URL:-http://127.0.0.1:8080/v1/chat/completions}" >/dev/null
+```
+
+The endpoint check is expected to fail unless your local OpenAI-compatible model
+server is already running. Sigil will also check this before command generation.
 
 ## Layout
 
@@ -161,6 +215,12 @@ glyph expression at the prompt and press `Ctrl-X ,`.
 - `glow` for Markdown rendering
 - `pi` for question answering
 
+`pi` is the .txt agent CLI used by the `?` and `??` routes. Sigil invokes it as
+`pi --json --tools read,web_search ...`, then renders the event stream through
+`sigil render-pi-stream` so tool calls, answer text, and trust metadata are
+recorded in Sigil state. `pi` must be on `PATH`, and for the current local setup
+it should be able to start or reach the same Qwen endpoint used by Sigil.
+
 Environment knobs:
 
 ```sh
@@ -168,3 +228,8 @@ QWEN_URL=http://127.0.0.1:8080/v1/chat/completions
 QWEN_MODEL=qwen3.6-27b-q8-local
 QWEN_MODEL_PATH=/path/to/model.gguf
 ```
+
+By convention this repo expects the helper script
+`~/.config/pi/run-qwen36-q8.sh` to start a llama.cpp-compatible server on
+`127.0.0.1:8080`. You can also run `llama-server` yourself with the same alias
+and port.
