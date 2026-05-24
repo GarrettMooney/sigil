@@ -115,7 +115,7 @@ def ask(question: str, stream_filter: str | None = None, *, follow_up: bool = Fa
         QUESTION_SYSTEM_PROMPT,
         prompt,
     ]
-    filter_cmd = [stream_filter, "stream-pi-json"] if stream_filter else [sys.argv[0], "stream-pi-json"]
+    filter_cmd = [stream_filter, "render-pi-stream"] if stream_filter else [sys.argv[0], "render-pi-stream"]
     renderer_cmd = ["glow", "-s", "dark", "-"] if shutil.which("glow") else ["cat"]
     filter_env = {
         **os.environ,

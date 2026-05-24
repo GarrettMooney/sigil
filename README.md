@@ -71,7 +71,6 @@ sigil session show
 sigil session path
 sigil session list
 sigil session clear
-sigil stream-pi-json
 ```
 
 The zsh binding calls those commands and inserts selected commands back into the

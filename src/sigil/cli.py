@@ -154,6 +154,14 @@ def cmd_previous_fix(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Parse the shell-agnostic Sigil CLI surface."""
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "render-pi-stream":
+        if len(argv) > 1:
+            print("usage: sigil render-pi-stream", file=sys.stderr)
+            return 2
+        return stream_events()
+
     parser = argparse.ArgumentParser(prog="sigil")
     sub = parser.add_subparsers(dest="command_name", required=True)
 
@@ -175,9 +183,6 @@ def main(argv: list[str] | None = None) -> int:
     follow_up = sub.add_parser("follow-up")
     follow_up.add_argument("question")
     follow_up.set_defaults(func=cmd_follow_up)
-
-    stream_pi = sub.add_parser("stream-pi-json")
-    stream_pi.set_defaults(func=lambda _args: stream_events())
 
     session = sub.add_parser("session")
     session.add_argument("session_command", nargs="?", choices=("show", "path", "list", "clear"), default="show")
