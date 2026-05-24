@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .security import normalize_security
 from .state import session_dir, session_id, state_dir
 
 SESSION_FILES = (
@@ -69,6 +70,103 @@ def read_session_file(path: Path) -> Any:
         except json.JSONDecodeError:
             return path.read_text(encoding="utf-8")
     return path.read_text(encoding="utf-8")
+
+
+def read_event_log() -> list[dict[str, Any]]:
+    """Read the global event log, skipping malformed lines."""
+    path = state_dir() / "events.jsonl"
+    if not path.exists():
+        return []
+    events = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(normalize_security(event))
+    return events
+
+
+def latest_event_id(events: list[dict[str, Any]]) -> str | None:
+    """Return the latest event id for the current session, falling back globally."""
+    current_session = session_id()
+    for event in reversed(events):
+        event_id = event.get("id")
+        if event.get("session") == current_session and isinstance(event_id, str):
+            return event_id
+    for event in reversed(events):
+        event_id = event.get("id")
+        if isinstance(event_id, str):
+            return event_id
+    return None
+
+
+def event_lineage(event_id: str | None = None) -> dict[str, Any]:
+    """Return an event and the transitive inputs it inherited from."""
+    events = read_event_log()
+    selected = event_id or latest_event_id(events)
+    by_id = {str(event["id"]): event for event in events if event.get("id")}
+    if not selected:
+        return {"event_id": None, "nodes": [], "missing_inputs": []}
+
+    nodes = []
+    missing = []
+    seen = set()
+    queue = [(selected, 0)]
+    while queue:
+        current, depth = queue.pop(0)
+        if current in seen:
+            continue
+        seen.add(current)
+        event = by_id.get(current)
+        if event is None:
+            missing.append(current)
+            continue
+        nodes.append({"id": current, "depth": depth, "event": event})
+        for input_id in event.get("inputs", []):
+            if isinstance(input_id, str) and input_id:
+                queue.append((input_id, depth + 1))
+
+    return {"event_id": selected, "nodes": nodes, "missing_inputs": missing}
+
+
+def session_summary(limit: int = 8) -> dict[str, Any]:
+    """Return a read-only summary of the current Sigil session."""
+    snapshot = current_session_snapshot()
+    files = snapshot["files"]
+    events = [
+        event for event in read_event_log() if event.get("session") == session_id()
+    ][-limit:]
+
+    last_question = files.get("last-question.jsonl") or []
+    last_tools = files.get("last-tools.jsonl") or []
+    summary = {
+        "session_id": snapshot["session_id"],
+        "path": snapshot["path"],
+        "continuity": {
+            "has_command": files.get("last-command.json") is not None,
+            "has_failure": files.get("last-failure.json") is not None,
+            "has_fix": files.get("last-fix.json") is not None,
+            "question_turns": len(last_question)
+            if isinstance(last_question, list)
+            else 0,
+            "tool_events": len(last_tools) if isinstance(last_tools, list) else 0,
+        },
+        "recent_events": [
+            {
+                "id": event.get("id", ""),
+                "type": event.get("type", "event"),
+                "glyph": event.get("glyph", ""),
+                "integrity": event.get("integrity", "unknown"),
+                "capability": event.get("capability", "none"),
+                "taint": event.get("taint", []),
+                "inputs": event.get("inputs", []),
+            }
+            for event in events
+        ],
+    }
+    return summary
 
 
 def current_session_snapshot() -> dict[str, Any]:

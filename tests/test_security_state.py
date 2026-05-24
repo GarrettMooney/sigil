@@ -13,8 +13,9 @@ from click.testing import CliRunner
 
 from sigil.cli import cli, main
 from sigil.commands import previous, select
+from sigil.failure import generate_fixes, previous_fix, record_failure, select_fix
 from sigil.pi_stream import should_color, stream_events
-from sigil.question import renderer_command
+from sigil.question import ask, renderer_command
 from sigil.security import (
     SecurityViolation,
     inherit_security,
@@ -94,6 +95,8 @@ class CliHelpTests(unittest.TestCase):
         )
         self.assertIn("sigil install zsh", result.output)
         self.assertIn("sigil doctor", result.output)
+        self.assertIn("sigil summary", result.output)
+        self.assertIn("sigil events lineage", result.output)
         self.assertIn("sigil session show --json", result.output)
         self.assertIn("https://github.com/rlouf/sigil", result.output)
 
@@ -155,6 +158,117 @@ class CliHelpTests(unittest.TestCase):
                     payload["commands"][0]["command"], "git status --short"
                 )
                 self.assertEqual(payload["glyph"], ",,")
+                self.assertEqual(payload["taint"], ["model"])
+                self.assertEqual(payload["integrity"], "local_model")
+            finally:
+                if old_state_dir is None:
+                    os.environ.pop("SIGIL_STATE_DIR", None)
+                else:
+                    os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                if old_session_id is None:
+                    os.environ.pop("SIGIL_SESSION_ID", None)
+                else:
+                    os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    def test_events_lineage_json_follows_transitive_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+            old_session_id = os.environ.get("SIGIL_SESSION_ID")
+            os.environ["SIGIL_STATE_DIR"] = tmp
+            os.environ["SIGIL_SESSION_ID"] = "test"
+            try:
+                root = append_event(
+                    {
+                        "type": "command_generated",
+                        "glyph": ",",
+                        "integrity": "local_model",
+                        "capability": "propose",
+                        "taint": ["model"],
+                    }
+                )
+                child = append_event(
+                    {
+                        "type": "command_continued",
+                        "glyph": ",,",
+                        "inputs": [root["id"]],
+                        "integrity": "local_model",
+                        "capability": "propose",
+                        "taint": ["model"],
+                    }
+                )
+                selected = append_event(
+                    {
+                        "type": "command_selected",
+                        "glyph": ",,",
+                        "inputs": [child["id"]],
+                        "integrity": "local_model",
+                        "capability": "propose",
+                        "taint": ["model"],
+                    }
+                )
+
+                result = CliRunner().invoke(
+                    cli, ["events", "lineage", selected["id"], "--json"]
+                )
+
+                self.assertEqual(result.exit_code, 0, result.output)
+                lineage = json.loads(result.output)
+                self.assertEqual(lineage["event_id"], selected["id"])
+                self.assertEqual(
+                    [node["event"]["type"] for node in lineage["nodes"]],
+                    ["command_selected", "command_continued", "command_generated"],
+                )
+                self.assertEqual(
+                    [node["depth"] for node in lineage["nodes"]], [0, 1, 2]
+                )
+            finally:
+                if old_state_dir is None:
+                    os.environ.pop("SIGIL_STATE_DIR", None)
+                else:
+                    os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                if old_session_id is None:
+                    os.environ.pop("SIGIL_SESSION_ID", None)
+                else:
+                    os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    def test_summary_json_is_read_only_session_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+            old_session_id = os.environ.get("SIGIL_SESSION_ID")
+            os.environ["SIGIL_STATE_DIR"] = tmp
+            os.environ["SIGIL_SESSION_ID"] = "test"
+            try:
+                append_event(
+                    {
+                        "type": "question",
+                        "glyph": "?",
+                        "integrity": "web",
+                        "capability": "read",
+                        "taint": ["web"],
+                    }
+                )
+                write_json(
+                    "last-command.json",
+                    {
+                        "prompt": "status",
+                        "commands": [
+                            {"command": "git status --short", "note": "show changes"}
+                        ],
+                        "glyph": ",",
+                        "integrity": "local_model",
+                        "capability": "propose",
+                        "taint": ["model"],
+                    },
+                )
+
+                result = CliRunner().invoke(cli, ["summary", "--json"])
+
+                self.assertEqual(result.exit_code, 0, result.output)
+                summary = json.loads(result.output)
+                self.assertEqual(summary["session_id"], "test")
+                self.assertTrue(summary["continuity"]["has_command"])
+                self.assertEqual(summary["recent_events"][0]["type"], "question")
+                self.assertEqual(summary["recent_events"][0]["taint"], ["web"])
             finally:
                 if old_state_dir is None:
                     os.environ.pop("SIGIL_STATE_DIR", None)
@@ -293,6 +407,234 @@ class StateTests(unittest.TestCase):
                 self.assertEqual(security["integrity"], "unknown")
                 self.assertEqual(security["taint"], ["legacy"])
                 self.assertEqual(security["inputs"], ["legacy-command"])
+            finally:
+                if old_state_dir is None:
+                    os.environ.pop("SIGIL_STATE_DIR", None)
+                else:
+                    os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                if old_session_id is None:
+                    os.environ.pop("SIGIL_SESSION_ID", None)
+                else:
+                    os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    def test_question_and_follow_up_record_web_taint(self) -> None:
+        class FakeProc:
+            def __init__(self, stdout: StringIO | None = None) -> None:
+                self.stdout = stdout
+
+            def wait(self) -> int:
+                return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+            old_session_id = os.environ.get("SIGIL_SESSION_ID")
+            os.environ["SIGIL_STATE_DIR"] = tmp
+            os.environ["SIGIL_SESSION_ID"] = "test"
+            try:
+                popen_calls = []
+
+                def fake_popen(
+                    cmd: list[str], *args: object, **kwargs: object
+                ) -> FakeProc:
+                    popen_calls.append(cmd)
+                    if cmd[0] == "pi":
+                        return FakeProc(StringIO(""))
+                    return FakeProc()
+
+                with patch("sigil.question.start_qwen_for_pi", return_value=True):
+                    with patch(
+                        "sigil.question.subprocess.Popen", side_effect=fake_popen
+                    ):
+                        self.assertEqual(ask("what is sigil?", json_output=True), 0)
+
+                fresh_turn = read_jsonl("last-question.jsonl")[0]
+                self.assertEqual(fresh_turn["glyph"], "?")
+                self.assertEqual(fresh_turn["integrity"], "web")
+                self.assertEqual(fresh_turn["capability"], "read")
+                self.assertEqual(fresh_turn["taint"], ["web"])
+                self.assertTrue(fresh_turn["provisional"])
+
+                write_jsonl(
+                    "last-question.jsonl",
+                    [
+                        {
+                            "role": "user",
+                            "content": "what is sigil?",
+                            "event_id": "question-event",
+                            "glyph": "?",
+                            "integrity": "web",
+                            "capability": "read",
+                            "taint": ["web"],
+                            "provisional": True,
+                        },
+                        {
+                            "role": "assistant",
+                            "content": "answer",
+                            "event_id": "answer-event",
+                            "glyph": "?",
+                            "integrity": "web",
+                            "capability": "read",
+                            "taint": ["web"],
+                            "provisional": True,
+                        },
+                    ],
+                )
+
+                with patch("sigil.question.start_qwen_for_pi", return_value=True):
+                    with patch(
+                        "sigil.question.subprocess.Popen", side_effect=fake_popen
+                    ):
+                        self.assertEqual(
+                            ask("continue", follow_up=True, json_output=True), 0
+                        )
+
+                follow_up_turn = read_jsonl("last-question.jsonl")[-1]
+                self.assertEqual(follow_up_turn["glyph"], "??")
+                self.assertEqual(
+                    follow_up_turn["inputs"], ["question-event", "answer-event"]
+                )
+                self.assertEqual(follow_up_turn["integrity"], "web")
+                self.assertEqual(follow_up_turn["capability"], "read")
+                self.assertEqual(follow_up_turn["taint"], ["web"])
+                self.assertTrue(follow_up_turn["provisional"])
+                self.assertTrue(popen_calls)
+            finally:
+                if old_state_dir is None:
+                    os.environ.pop("SIGIL_STATE_DIR", None)
+                else:
+                    os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                if old_session_id is None:
+                    os.environ.pop("SIGIL_SESSION_ID", None)
+                else:
+                    os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    def test_fix_and_previous_fix_inherit_model_taint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+            old_session_id = os.environ.get("SIGIL_SESSION_ID")
+            os.environ["SIGIL_STATE_DIR"] = tmp
+            os.environ["SIGIL_SESSION_ID"] = "test"
+            try:
+                record_failure("bad command", 2, "/tmp")
+
+                captured_prompts = []
+
+                def fake_chat_json(
+                    system: str, prompt: str, schema: dict[str, object]
+                ) -> dict[str, object]:
+                    del system, schema
+                    captured_prompts.append(prompt)
+                    return {
+                        "commands": [
+                            {
+                                "command": "fixed command",
+                                "note": "repair the failed command",
+                            }
+                        ]
+                    }
+
+                with patch("sigil.failure.ensure_server", return_value=True):
+                    with patch("sigil.failure.chat_json", side_effect=fake_chat_json):
+                        prompt, candidates, security = generate_fixes()
+
+                self.assertEqual(prompt, "bad command")
+                self.assertEqual(candidates[0]["command"], "fixed command")
+                self.assertEqual(security["glyph"], "^")
+                self.assertEqual(security["integrity"], "local_model")
+                self.assertEqual(security["capability"], "propose")
+                self.assertEqual(security["taint"], ["model"])
+                self.assertTrue(security["inputs"][0])
+                self.assertIn("Failed command: bad command", captured_prompts[0])
+                self.assertIn("Working directory: /tmp", captured_prompts[0])
+
+                previous_prompt, previous_candidates, previous_security = previous_fix()
+                self.assertEqual(previous_prompt, "bad command")
+                self.assertEqual(previous_candidates[0]["command"], "fixed command")
+                self.assertEqual(previous_security["glyph"], "^^")
+                self.assertEqual(previous_security["integrity"], "local_model")
+                self.assertEqual(previous_security["capability"], "propose")
+                self.assertEqual(previous_security["taint"], ["model"])
+                self.assertTrue(previous_security["inputs"][0])
+            finally:
+                if old_state_dir is None:
+                    os.environ.pop("SIGIL_STATE_DIR", None)
+                else:
+                    os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                if old_session_id is None:
+                    os.environ.pop("SIGIL_SESSION_ID", None)
+                else:
+                    os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    def test_failure_records_snippets_and_safe_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+            old_session_id = os.environ.get("SIGIL_SESSION_ID")
+            os.environ["SIGIL_STATE_DIR"] = tmp
+            os.environ["SIGIL_SESSION_ID"] = "test"
+            try:
+                with patch(
+                    "sigil.failure.cwd_context",
+                    return_value={
+                        "cwd": "/repo",
+                        "git_branch": "main",
+                        "git_status": [" M file.py"],
+                    },
+                ):
+                    record_failure(
+                        "pytest tests",
+                        1,
+                        "/repo",
+                        stdout_snippet="stdout line",
+                        stderr_snippet="stderr line",
+                    )
+
+                failure = json.loads(
+                    (Path(tmp) / "sessions" / "test" / "last-failure.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(failure["stdout_snippet"], "stdout line")
+                self.assertEqual(failure["stderr_snippet"], "stderr line")
+                self.assertEqual(failure["context"]["git_branch"], "main")
+                self.assertEqual(failure["context"]["git_status"], [" M file.py"])
+            finally:
+                if old_state_dir is None:
+                    os.environ.pop("SIGIL_STATE_DIR", None)
+                else:
+                    os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                if old_session_id is None:
+                    os.environ.pop("SIGIL_SESSION_ID", None)
+                else:
+                    os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    def test_select_fix_prints_note_to_stderr_but_stdout_is_command_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+            old_session_id = os.environ.get("SIGIL_SESSION_ID")
+            os.environ["SIGIL_STATE_DIR"] = tmp
+            os.environ["SIGIL_SESSION_ID"] = "test"
+            stderr = StringIO()
+            try:
+                record_failure("bad command", 2, "/tmp")
+                with patch("sigil.failure.ensure_server", return_value=True):
+                    with patch(
+                        "sigil.failure.chat_json",
+                        return_value={
+                            "commands": [
+                                {
+                                    "command": "fixed command",
+                                    "note": "because bad command missed an argument",
+                                }
+                            ]
+                        },
+                    ):
+                        with redirect_stderr(stderr):
+                            command = select_fix()
+
+                self.assertEqual(command, "fixed command")
+                self.assertIn(
+                    "why: because bad command missed an argument", stderr.getvalue()
+                )
             finally:
                 if old_state_dir is None:
                     os.environ.pop("SIGIL_STATE_DIR", None)

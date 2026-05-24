@@ -24,6 +24,7 @@ calls, selection UI, Pi streaming, rendering, and persistent state.
 ^^  reopen previous fix candidates
 ?   answer a question with Pi using read + web search
 ??  continue the previous question discussion
+@.  summarize the current Sigil session without mutation
 ```
 
 Sigil records every glyph invocation with trust metadata. This is the core trust
@@ -42,6 +43,7 @@ The current grammar maps to:
 ,,  command continuation                   inherits prior command taint
 ?   read + web question                    web / read / web-tainted / provisional
 ??  question continuation                  inherits prior question taint / provisional
+@.  read-only session summary              local_file / read / no mutation
 ```
 
 This matters because Sigil crosses the shell boundary by inserting text into the
@@ -129,8 +131,10 @@ sigil fix
 sigil fix --previous
 sigil question "what is tldraw?"
 sigil question --follow-up "how would that work in practice?"
+sigil summary
 sigil install zsh
 sigil doctor
+sigil events lineage
 sigil session show
 sigil session path
 sigil session list
@@ -158,6 +162,11 @@ sessions/<session-id>/last-fix.json          latest fix candidates for `^^`
 sessions/<session-id>/last-question.jsonl    question transcript; reset by `?`
 sessions/<session-id>/last-tools.jsonl       latest Pi tool trace
 ```
+
+Failure records include command, status, cwd, safe cwd/git context, and optional
+bounded stdout/stderr snippets when a wrapper provides them. Fix suggestions
+show their rationale on stderr or in the selector, while stdout remains only the
+selected command.
 
 Events and session JSONL entries include these trust fields:
 

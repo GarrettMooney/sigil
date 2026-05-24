@@ -12,8 +12,10 @@ written to stdout.
 ```sh
 sigil command --select "find large files"
 sigil question --json "what changed in this repo?"
+sigil summary
 sigil install zsh
 sigil doctor
+sigil events lineage
 sigil session show --json
 ```
 
@@ -131,6 +133,45 @@ Stable fields:
 
 `sigil question --follow-up --json` uses the same shape with `follow_up: true`.
 
+## `sigil summary --json`
+
+Summarizes the current Sigil session without writing new state.
+
+```sh
+sigil summary
+sigil summary --json
+sigil summary --limit 20
+```
+
+The JSON form returns:
+
+- `session_id`: current shell session id.
+- `path`: current session state directory.
+- `continuity`: booleans and counts for command, question, failure, fix, and
+  tool state.
+- `recent_events`: latest events from this session, with normalized trust
+  metadata.
+
+## `sigil events lineage --json`
+
+Inspects the read-only global event log and returns the selected event plus the
+transitive input events it inherited from.
+
+```sh
+sigil events lineage
+sigil events lineage <event-id>
+sigil events lineage <event-id> --json
+```
+
+When no event id is provided, Sigil uses the latest event from the current
+session, falling back to the latest global event. The JSON form returns:
+
+- `event_id`: selected event id.
+- `nodes`: ordered lineage nodes starting with the selected event.
+- `nodes[].depth`: distance from the selected event.
+- `nodes[].event`: normalized event payload with trust metadata.
+- `missing_inputs`: input ids referenced by events but absent from the log.
+
 ## `sigil session --json`
 
 `session` has four JSON forms:
@@ -157,6 +198,11 @@ user-facing API:
 
 They exist so shell bindings can keep a small, explicit boundary with the Python
 runtime.
+
+`record-failure` accepts optional `--stdout-snippet` and `--stderr-snippet`
+fields. The passive shell hooks cannot safely capture arbitrary command output
+by themselves, but terminal wrappers or future execution sandboxes can pass
+bounded snippets through this stable hidden boundary.
 
 ## `sigil install`
 

@@ -29,8 +29,10 @@ from .security import inherited_label, make_security, normalize_security, record
 from .session import (
     clear_current_session,
     current_session_snapshot,
+    event_lineage,
     known_sessions,
     session_paths,
+    session_summary,
 )
 from .state import append_event, read_json
 
@@ -47,6 +49,8 @@ def cli() -> None:
       sigil question --follow-up "summarize that as a command"
       sigil install zsh
       sigil doctor
+      sigil summary
+      sigil events lineage
       sigil session show --json
 
     \b
@@ -249,6 +253,78 @@ def print_json(value: object) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
+@cli.group("events")
+def cmd_events() -> None:
+    """Inspect Sigil's read-only event log."""
+
+
+@cmd_events.command("lineage")
+@click.argument("event_id", required=False)
+@click.option("--json", "json_output", is_flag=True)
+def cmd_events_lineage(event_id: str | None, json_output: bool) -> int:
+    """Show the provenance chain for an event."""
+    lineage = event_lineage(event_id)
+    if json_output:
+        print_json(lineage)
+        return 0 if lineage["nodes"] else 1
+
+    if not lineage["nodes"]:
+        print(
+            "no events recorded" if event_id is None else f"event not found: {event_id}"
+        )
+        return 1
+    for node in lineage["nodes"]:
+        event = node["event"]
+        indent = "  " * int(node["depth"])
+        event_type = event.get("type", "event")
+        glyph = event.get("glyph", "?")
+        integrity = event.get("integrity", "unknown")
+        capability = event.get("capability", "none")
+        taint = ",".join(event.get("taint", [])) or "none"
+        inputs = ",".join(event.get("inputs", [])) or "-"
+        print(
+            f"{indent}{node['id']} {event_type} "
+            f"{glyph} {integrity}/{capability} taint={taint} inputs={inputs}"
+        )
+    for missing in lineage["missing_inputs"]:
+        print(f"missing input: {missing}")
+    return 0
+
+
+@cli.command("summary")
+@click.option("--json", "json_output", is_flag=True)
+@click.option("--limit", type=int, default=8, show_default=True)
+def cmd_summary(json_output: bool, limit: int) -> int:
+    """Summarize the current session without mutating state."""
+    summary = session_summary(limit=max(0, limit))
+    if json_output:
+        print_json(summary)
+        return 0
+
+    continuity = summary["continuity"]
+    print(f"session {summary['session_id']}")
+    print(summary["path"])
+    print(
+        "continuity "
+        f"command={continuity['has_command']} "
+        f"failure={continuity['has_failure']} "
+        f"fix={continuity['has_fix']} "
+        f"questions={continuity['question_turns']} "
+        f"tools={continuity['tool_events']}"
+    )
+    if summary["recent_events"]:
+        print("recent events")
+    for event in summary["recent_events"]:
+        taint = ",".join(event["taint"]) or "none"
+        inputs = ",".join(event["inputs"]) or "-"
+        print(
+            f"  {event['id']} {event['type']} {event['glyph']} "
+            f"{event['integrity']}/{event['capability']} "
+            f"taint={taint} inputs={inputs}"
+        )
+    return 0
+
+
 @cli.command("session")
 @click.argument(
     "session_command",
@@ -307,10 +383,18 @@ def cmd_session(session_command: str, json_output: bool) -> int:
 @cli.command("record-failure", hidden=True)
 @click.option("--status", type=int, required=True)
 @click.option("--cwd")
+@click.option("--stdout-snippet", default="")
+@click.option("--stderr-snippet", default="")
 @click.argument("command")
-def cmd_record_failure(command: str, status: int, cwd: str | None) -> int:
+def cmd_record_failure(
+    command: str,
+    status: int,
+    cwd: str | None,
+    stdout_snippet: str,
+    stderr_snippet: str,
+) -> int:
     """Record a failed shell command for later repair."""
-    record_failure(command, status, cwd)
+    record_failure(command, status, cwd, stdout_snippet, stderr_snippet)
     return 0
 
 

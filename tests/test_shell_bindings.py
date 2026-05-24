@@ -28,6 +28,8 @@ class ShellBindingTests(unittest.TestCase):
                   "fix --previous") printf '%s\\n' "echo previous-fix" ;;
                   "question hello") printf '%s\\n' "answer" ;;
                   "question --follow-up hello") printf '%s\\n' "follow-up" ;;
+                  "summary") printf '%s\\n' "summary" ;;
+                  "summary now") printf '%s\\n' "summary now" ;;
                   record-failure*) printf '%s\\n' "recorded" ;;
                   *) printf '%s\\n' "unexpected:$*" >&2; exit 64 ;;
                 esac
@@ -190,6 +192,28 @@ class ShellBindingTests(unittest.TestCase):
             self.assertEqual(self.read_log(tmp), ["question --follow-up hello"])
             self.assertIn("follow_up_buffer=", result.stdout)
 
+    def test_bash_summary_route_is_read_only_and_clears_the_prompt_buffer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            stub = self.make_stub(tmp)
+            result = self.run_shell(
+                "bash",
+                textwrap.dedent(
+                    """\
+                    source shell/bash/sigil.bash
+                    READLINE_LINE="@. now"
+                    READLINE_POINT=${#READLINE_LINE}
+                    __sigil_readline_dispatch
+                    printf 'summary_buffer=%s\\n' "$READLINE_LINE"
+                    """
+                ),
+                tmp,
+                stub,
+            )
+            self.assert_success(result)
+            self.assertEqual(self.read_log(tmp), ["summary now"])
+            self.assertIn("summary_buffer=", result.stdout)
+
     def test_bash_records_failed_non_sigil_history_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)
@@ -215,6 +239,60 @@ class ShellBindingTests(unittest.TestCase):
             self.assertEqual(
                 self.read_log(tmp),
                 [f"record-failure --status 1 --cwd {ROOT} bad command"],
+            )
+
+    def test_bash_does_not_record_failed_sigil_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            stub = self.make_stub(tmp)
+            result = self.run_shell(
+                "bash",
+                textwrap.dedent(
+                    """\
+                    source shell/bash/sigil.bash
+                    __sigil_history_line() { printf '%s\\n' "sigil bad"; }
+                    false
+                    __sigil_precmd
+                    __sigil_history_line() { printf '%s\\n' "^"; }
+                    false
+                    __sigil_precmd
+                    :
+                    """
+                ),
+                tmp,
+                stub,
+            )
+            self.assert_success(result)
+            self.assertEqual(self.read_log(tmp), [])
+
+    def test_bash_passes_failure_snippet_env_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            stub = self.make_stub(tmp)
+            result = self.run_shell(
+                "bash",
+                textwrap.dedent(
+                    """\
+                    source shell/bash/sigil.bash
+                    __sigil_history_line() { printf '%s\\n' "bad command"; }
+                    export SIGIL_FAILURE_STDOUT="stdout line"
+                    export SIGIL_FAILURE_STDERR="stderr line"
+                    false
+                    __sigil_precmd
+                    :
+                    """
+                ),
+                tmp,
+                stub,
+            )
+            self.assert_success(result)
+            self.assertEqual(
+                self.read_log(tmp),
+                [
+                    f"record-failure --status 1 --cwd {ROOT} "
+                    "--stdout-snippet stdout line "
+                    "--stderr-snippet stderr line bad command"
+                ],
             )
 
     @unittest.skipIf(shutil.which("zsh") is None, "zsh is not installed")
@@ -307,6 +385,54 @@ class ShellBindingTests(unittest.TestCase):
             self.assertIn("bang_buffer=,! rm -rf nope", result.stdout)
             self.assertIn("at_buffer=@ promote", result.stdout)
             self.assertIn("question_bang_buffer=?! run", result.stdout)
+
+    @unittest.skipIf(shutil.which("zsh") is None, "zsh is not installed")
+    def test_zsh_does_not_record_failed_sigil_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            stub = self.make_stub(tmp)
+            result = self.run_shell(
+                "zsh",
+                textwrap.dedent(
+                    """\
+                    source shell/zsh/sigil.zsh
+                    __sigil_preexec "sigil bad"
+                    false
+                    __sigil_precmd
+                    __sigil_preexec "^"
+                    false
+                    __sigil_precmd
+                    :
+                    """
+                ),
+                tmp,
+                stub,
+            )
+            self.assert_success(result)
+            self.assertEqual(self.read_log(tmp), [])
+
+    @unittest.skipIf(shutil.which("zsh") is None, "zsh is not installed")
+    def test_zsh_summary_route_is_read_only_and_clears_the_prompt_buffer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            stub = self.make_stub(tmp)
+            result = self.run_shell(
+                "zsh",
+                textwrap.dedent(
+                    """\
+                    function zle { :; }
+                    source shell/zsh/sigil.zsh
+                    BUFFER="@. now"
+                    __sigil_accept_line
+                    print -- "summary_buffer=$BUFFER"
+                    """
+                ),
+                tmp,
+                stub,
+            )
+            self.assert_success(result)
+            self.assertEqual(self.read_log(tmp), ["summary now"])
+            self.assertIn("summary_buffer=", result.stdout)
 
 
 if __name__ == "__main__":

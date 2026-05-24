@@ -154,6 +154,18 @@ question event.
 This means the event log can reconstruct every continuation input instead of
 relying on shell globals or implicit session memory.
 
+Use `sigil events lineage [event-id]` to inspect the recorded provenance chain.
+Without an event id, Sigil shows the latest event from the current shell session.
+
+`@.` / `sigil summary` is read-only inspection of local Sigil session state. It
+does not call a model, append events, write session files, or create executable
+shell text.
+
+Failure repair records may include bounded stdout/stderr snippets and safe local
+cwd/git context. These are inputs to model-authored repair proposals, so `^` and
+`^^` remain `local_model / propose / model-tainted` and still insert only the
+selected command for human review.
+
 ## Enforcement Before New Glyphs
 
 The lattice exists before higher-risk glyphs are added. Current enforcement is
