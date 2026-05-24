@@ -125,6 +125,13 @@ def select(
     metadata = normalize_security(metadata or {})
     if len(candidates) == 1:
         return candidates[0]["command"]
+    if not sys.stdin.isatty():
+        print(
+            f"{LOVE}✗ --select requires an interactive terminal; "
+            f"rerun without --select to print candidates{RESET}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     try:
         subprocess.run(

@@ -4,13 +4,15 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from click.testing import CliRunner
 
 from sigil.cli import cli
-from sigil.commands import previous
+from sigil.commands import previous, select
 from sigil.pi_stream import should_color, stream_events
 from sigil.security import (
     SecurityViolation,
@@ -86,6 +88,31 @@ class CliHelpTests(unittest.TestCase):
         )
         self.assertIn("sigil session show --json", result.output)
         self.assertIn("https://github.com/rlouf/sigil", result.output)
+
+
+class SelectionTests(unittest.TestCase):
+    def test_select_rejects_multiple_candidates_without_interactive_stdin(self) -> None:
+        stderr = StringIO()
+        with patch("sys.stdin", StringIO("")):
+            with redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as raised:
+                    select(
+                        "status",
+                        [
+                            {"command": "git status --short", "note": "short status"},
+                            {"command": "git status", "note": "full status"},
+                        ],
+                    )
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--select requires an interactive terminal", stderr.getvalue())
+
+    def test_select_returns_single_candidate_without_interactive_stdin(self) -> None:
+        with patch("sys.stdin", StringIO("")):
+            selected = select(
+                "status",
+                [{"command": "git status --short", "note": "short status"}],
+            )
+        self.assertEqual(selected, "git status --short")
 
 
 class StateTests(unittest.TestCase):
