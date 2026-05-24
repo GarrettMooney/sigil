@@ -85,15 +85,6 @@ sigil doctor --shell bash
 idempotent source block to `.zshrc` or `.bashrc`. Running it again updates the
 binding without duplicating the rc block.
 
-Manual install still works if you want to inspect each step before sourcing
-shell code:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/shell/zsh/install.zsh | zsh
-# or
-curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/shell/bash/install.bash | bash
-```
-
 `sigil doctor` checks the local pieces:
 
 ```sh
@@ -115,9 +106,7 @@ server is already running.
 ## Layout
 
 ```text
-shell/bash/install.bash  Bash binding installer
 shell/bash/sigil.bash    Bash binding
-shell/zsh/install.zsh  zsh binding installer
 shell/zsh/sigil.zsh    zsh binding
 src/sigil/             Python core runtime
 ```
