@@ -1,439 +1,295 @@
 from __future__ import annotations
-
+import pytest
 import os
 import shutil
 import stat
 import subprocess
 import tempfile
 import textwrap
-import unittest
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class ShellBindingTests(unittest.TestCase):
-    def make_stub(self, tmp: Path) -> Path:
-        stub = tmp / "sigil-stub"
-        stub.write_text(
+def make_stub(tmp: Path) -> Path:
+    stub = tmp / "sigil-stub"
+    stub.write_text(
+        textwrap.dedent(
+            '                #!/usr/bin/env bash\n                printf \'%s\\n\' "$*" >> "$SIGIL_STUB_LOG"\n                case "$*" in\n                  "command --select hello") printf \'%s\\n\' "echo generated" ;;\n                  "command --previous --select") printf \'%s\\n\' "echo previous" ;;\n                  "fix") printf \'%s\\n\' "echo fix" ;;\n                  "fix --previous") printf \'%s\\n\' "echo previous-fix" ;;\n                  "question hello") printf \'%s\\n\' "answer" ;;\n                  "question --follow-up hello") printf \'%s\\n\' "follow-up" ;;\n                  "summary") printf \'%s\\n\' "summary" ;;\n                  "summary now") printf \'%s\\n\' "summary now" ;;\n                  record-failure*) printf \'%s\\n\' "recorded" ;;\n                  *) printf \'%s\\n\' "unexpected:$*" >&2; exit 64 ;;\n                esac\n                '
+        ),
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+    return stub
+
+
+def run_shell(
+    shell: str, script: str, tmp: Path, stub: Path
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["SIGIL_BIN"] = str(stub)
+    env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
+    env["SIGIL_SESSION_ID"] = "shell-test"
+    return subprocess.run(
+        [shell, "-c", script],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def assert_success(result: subprocess.CompletedProcess[str]) -> None:
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+
+
+def read_log(tmp: Path) -> list[str]:
+    path = tmp / "calls.log"
+    if not path.exists():
+        return []
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def test_bash_wrappers_call_current_cli_contract() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
             textwrap.dedent(
-                """\
-                #!/usr/bin/env bash
-                printf '%s\\n' "$*" >> "$SIGIL_STUB_LOG"
-                case "$*" in
-                  "command --select hello") printf '%s\\n' "echo generated" ;;
-                  "command --previous --select") printf '%s\\n' "echo previous" ;;
-                  "fix") printf '%s\\n' "echo fix" ;;
-                  "fix --previous") printf '%s\\n' "echo previous-fix" ;;
-                  "question hello") printf '%s\\n' "answer" ;;
-                  "question --follow-up hello") printf '%s\\n' "follow-up" ;;
-                  "summary") printf '%s\\n' "summary" ;;
-                  "summary now") printf '%s\\n' "summary now" ;;
-                  record-failure*) printf '%s\\n' "recorded" ;;
-                  *) printf '%s\\n' "unexpected:$*" >&2; exit 64 ;;
-                esac
-                """
+                "                    source shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_previous_command\n                    sigil_question hello\n                    sigil_follow_up hello\n                    sigil_fix\n                    sigil_previous_fix\n                    "
             ),
-            encoding="utf-8",
+            tmp,
+            stub,
         )
-        stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
-        return stub
+        assert_success(result)
+        assert read_log(tmp) == [
+            "command --select hello",
+            "command --previous --select",
+            "question hello",
+            "question --follow-up hello",
+            "fix",
+            "fix --previous",
+        ]
+        assert "echo generated" in result.stdout
+        assert "echo previous-fix" in result.stdout
 
-    def run_shell(
-        self,
-        shell: str,
-        script: str,
-        tmp: Path,
-        stub: Path,
-    ) -> subprocess.CompletedProcess[str]:
-        env = os.environ.copy()
-        env["SIGIL_BIN"] = str(stub)
-        env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
-        env["SIGIL_SESSION_ID"] = "shell-test"
-        return subprocess.run(
-            [shell, "-c", script],
-            cwd=ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
+
+def test_bash_readline_dispatch_inserts_proposals_without_executing() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                '                    source shell/bash/sigil.bash\n                    READLINE_LINE=", hello"\n                    READLINE_POINT=${#READLINE_LINE}\n                    __sigil_readline_dispatch >/tmp/sigil-shell-test.out\n                    printf \'command_buffer=%s\\n\' "$READLINE_LINE"\n\n                    READLINE_LINE="^^"\n                    READLINE_POINT=${#READLINE_LINE}\n                    __sigil_readline_dispatch >/tmp/sigil-shell-test.out\n                    printf \'fix_buffer=%s\\n\' "$READLINE_LINE"\n                    '
+            ),
+            tmp,
+            stub,
         )
+        assert_success(result)
+        assert read_log(tmp) == ["command --select hello", "fix --previous"]
+        assert "command_buffer=echo generated" in result.stdout
+        assert "fix_buffer=echo previous-fix" in result.stdout
 
-    def assert_success(self, result: subprocess.CompletedProcess[str]) -> None:
-        self.assertEqual(
-            result.returncode,
-            0,
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+
+def test_bash_blocks_execute_and_promotion_routes_before_cli() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                '                    source shell/bash/sigil.bash\n                    READLINE_LINE=",! rm -rf nope"\n                    __sigil_readline_dispatch >/tmp/sigil-shell-test.out\n                    printf \'bang_buffer=%s\\n\' "$READLINE_LINE"\n\n                    READLINE_LINE="@ promote"\n                    __sigil_readline_dispatch >/tmp/sigil-shell-test.out\n                    printf \'at_buffer=%s\\n\' "$READLINE_LINE"\n\n                    READLINE_LINE="?! run"\n                    __sigil_readline_dispatch >/tmp/sigil-shell-test.out\n                    printf \'question_bang_buffer=%s\\n\' "$READLINE_LINE"\n                    '
+            ),
+            tmp,
+            stub,
         )
-
-    def read_log(self, tmp: Path) -> list[str]:
-        path = tmp / "calls.log"
-        if not path.exists():
-            return []
-        return path.read_text(encoding="utf-8").splitlines()
-
-    def test_bash_wrappers_call_current_cli_contract(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "bash",
-                textwrap.dedent(
-                    """\
-                    source shell/bash/sigil.bash
-                    sigil_command hello
-                    sigil_previous_command
-                    sigil_question hello
-                    sigil_follow_up hello
-                    sigil_fix
-                    sigil_previous_fix
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(
-                self.read_log(tmp),
-                [
-                    "command --select hello",
-                    "command --previous --select",
-                    "question hello",
-                    "question --follow-up hello",
-                    "fix",
-                    "fix --previous",
-                ],
-            )
-            self.assertIn("echo generated", result.stdout)
-            self.assertIn("echo previous-fix", result.stdout)
-
-    def test_bash_readline_dispatch_inserts_proposals_without_executing(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "bash",
-                textwrap.dedent(
-                    """\
-                    source shell/bash/sigil.bash
-                    READLINE_LINE=", hello"
-                    READLINE_POINT=${#READLINE_LINE}
-                    __sigil_readline_dispatch >/tmp/sigil-shell-test.out
-                    printf 'command_buffer=%s\\n' "$READLINE_LINE"
-
-                    READLINE_LINE="^^"
-                    READLINE_POINT=${#READLINE_LINE}
-                    __sigil_readline_dispatch >/tmp/sigil-shell-test.out
-                    printf 'fix_buffer=%s\\n' "$READLINE_LINE"
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(
-                self.read_log(tmp),
-                ["command --select hello", "fix --previous"],
-            )
-            self.assertIn("command_buffer=echo generated", result.stdout)
-            self.assertIn("fix_buffer=echo previous-fix", result.stdout)
-
-    def test_bash_blocks_execute_and_promotion_routes_before_cli(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "bash",
-                textwrap.dedent(
-                    """\
-                    source shell/bash/sigil.bash
-                    READLINE_LINE=",! rm -rf nope"
-                    __sigil_readline_dispatch >/tmp/sigil-shell-test.out
-                    printf 'bang_buffer=%s\\n' "$READLINE_LINE"
-
-                    READLINE_LINE="@ promote"
-                    __sigil_readline_dispatch >/tmp/sigil-shell-test.out
-                    printf 'at_buffer=%s\\n' "$READLINE_LINE"
-
-                    READLINE_LINE="?! run"
-                    __sigil_readline_dispatch >/tmp/sigil-shell-test.out
-                    printf 'question_bang_buffer=%s\\n' "$READLINE_LINE"
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(self.read_log(tmp), [])
-            self.assertIn("bang_buffer=", result.stdout)
-            self.assertIn("at_buffer=", result.stdout)
-            self.assertIn("question_bang_buffer=", result.stdout)
-
-    def test_bash_question_routes_clear_the_prompt_buffer(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "bash",
-                textwrap.dedent(
-                    """\
-                    source shell/bash/sigil.bash
-                    READLINE_LINE="?? hello"
-                    READLINE_POINT=${#READLINE_LINE}
-                    __sigil_readline_dispatch
-                    printf 'follow_up_buffer=%s\\n' "$READLINE_LINE"
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(self.read_log(tmp), ["question --follow-up hello"])
-            self.assertIn("follow_up_buffer=", result.stdout)
-
-    def test_bash_summary_route_is_read_only_and_clears_the_prompt_buffer(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "bash",
-                textwrap.dedent(
-                    """\
-                    source shell/bash/sigil.bash
-                    READLINE_LINE="@. now"
-                    READLINE_POINT=${#READLINE_LINE}
-                    __sigil_readline_dispatch
-                    printf 'summary_buffer=%s\\n' "$READLINE_LINE"
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(self.read_log(tmp), ["summary now"])
-            self.assertIn("summary_buffer=", result.stdout)
-
-    def test_bash_records_failed_non_sigil_history_entries(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "bash",
-                textwrap.dedent(
-                    """\
-                    source shell/bash/sigil.bash
-                    __sigil_history_line() { printf '%s\\n' "bad command"; }
-                    false
-                    __sigil_precmd
-                    __sigil_history_line() { printf '%s\\n' ", should not record"; }
-                    false
-                    __sigil_precmd
-                    :
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(
-                self.read_log(tmp),
-                [f"record-failure --status 1 --cwd {ROOT} bad command"],
-            )
-
-    def test_bash_does_not_record_failed_sigil_commands(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "bash",
-                textwrap.dedent(
-                    """\
-                    source shell/bash/sigil.bash
-                    __sigil_history_line() { printf '%s\\n' "sigil bad"; }
-                    false
-                    __sigil_precmd
-                    __sigil_history_line() { printf '%s\\n' "^"; }
-                    false
-                    __sigil_precmd
-                    :
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(self.read_log(tmp), [])
-
-    def test_bash_passes_failure_snippet_env_when_present(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "bash",
-                textwrap.dedent(
-                    """\
-                    source shell/bash/sigil.bash
-                    __sigil_history_line() { printf '%s\\n' "bad command"; }
-                    export SIGIL_FAILURE_STDOUT="stdout line"
-                    export SIGIL_FAILURE_STDERR="stderr line"
-                    false
-                    __sigil_precmd
-                    :
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(
-                self.read_log(tmp),
-                [
-                    f"record-failure --status 1 --cwd {ROOT} "
-                    "--stdout-snippet stdout line "
-                    "--stderr-snippet stderr line bad command"
-                ],
-            )
-
-    @unittest.skipIf(shutil.which("zsh") is None, "zsh is not installed")
-    def test_zsh_wrappers_call_current_cli_contract(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "zsh",
-                textwrap.dedent(
-                    """\
-                    source shell/zsh/sigil.zsh
-                    sigil_command hello
-                    sigil_previous_command
-                    sigil_question hello
-                    sigil_follow_up hello
-                    sigil_fix >/tmp/sigil-zsh-fix.out
-                    sigil_previous_fix >/tmp/sigil-zsh-prev-fix.out
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(
-                self.read_log(tmp),
-                [
-                    "command --select hello",
-                    "command --previous --select",
-                    "question hello",
-                    "question --follow-up hello",
-                    "fix",
-                    "fix --previous",
-                ],
-            )
-
-    @unittest.skipIf(shutil.which("zsh") is None, "zsh is not installed")
-    def test_zsh_accept_line_inserts_fix_proposals_without_executing(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "zsh",
-                textwrap.dedent(
-                    """\
-                    function zle { :; }
-                    source shell/zsh/sigil.zsh
-                    BUFFER="^"
-                    CURSOR=1
-                    __sigil_accept_line
-                    print -- "buffer=$BUFFER"
-                    print -- "cursor=$CURSOR"
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(self.read_log(tmp), ["fix"])
-            self.assertIn("buffer=echo fix", result.stdout)
-            self.assertIn("cursor=8", result.stdout)
-
-    @unittest.skipIf(shutil.which("zsh") is None, "zsh is not installed")
-    def test_zsh_blocks_execute_and_promotion_routes_before_cli(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "zsh",
-                textwrap.dedent(
-                    """\
-                    function zle { :; }
-                    source shell/zsh/sigil.zsh
-                    BUFFER=",! rm -rf nope"
-                    __sigil_accept_line
-                    print -- "bang_buffer=$BUFFER"
-                    BUFFER="@ promote"
-                    __sigil_accept_line
-                    print -- "at_buffer=$BUFFER"
-                    BUFFER="?! run"
-                    __sigil_accept_line
-                    print -- "question_bang_buffer=$BUFFER"
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(self.read_log(tmp), [])
-            self.assertIn("bang_buffer=,! rm -rf nope", result.stdout)
-            self.assertIn("at_buffer=@ promote", result.stdout)
-            self.assertIn("question_bang_buffer=?! run", result.stdout)
-
-    @unittest.skipIf(shutil.which("zsh") is None, "zsh is not installed")
-    def test_zsh_does_not_record_failed_sigil_commands(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "zsh",
-                textwrap.dedent(
-                    """\
-                    source shell/zsh/sigil.zsh
-                    __sigil_preexec "sigil bad"
-                    false
-                    __sigil_precmd
-                    __sigil_preexec "^"
-                    false
-                    __sigil_precmd
-                    :
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(self.read_log(tmp), [])
-
-    @unittest.skipIf(shutil.which("zsh") is None, "zsh is not installed")
-    def test_zsh_summary_route_is_read_only_and_clears_the_prompt_buffer(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp = Path(tmp_dir)
-            stub = self.make_stub(tmp)
-            result = self.run_shell(
-                "zsh",
-                textwrap.dedent(
-                    """\
-                    function zle { :; }
-                    source shell/zsh/sigil.zsh
-                    BUFFER="@. now"
-                    __sigil_accept_line
-                    print -- "summary_buffer=$BUFFER"
-                    """
-                ),
-                tmp,
-                stub,
-            )
-            self.assert_success(result)
-            self.assertEqual(self.read_log(tmp), ["summary now"])
-            self.assertIn("summary_buffer=", result.stdout)
+        assert_success(result)
+        assert read_log(tmp) == []
+        assert "bang_buffer=" in result.stdout
+        assert "at_buffer=" in result.stdout
+        assert "question_bang_buffer=" in result.stdout
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_bash_question_routes_clear_the_prompt_buffer() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                '                    source shell/bash/sigil.bash\n                    READLINE_LINE="?? hello"\n                    READLINE_POINT=${#READLINE_LINE}\n                    __sigil_readline_dispatch\n                    printf \'follow_up_buffer=%s\\n\' "$READLINE_LINE"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == ["question --follow-up hello"]
+        assert "follow_up_buffer=" in result.stdout
+
+
+def test_bash_summary_route_is_read_only_and_clears_the_prompt_buffer() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                '                    source shell/bash/sigil.bash\n                    READLINE_LINE="@. now"\n                    READLINE_POINT=${#READLINE_LINE}\n                    __sigil_readline_dispatch\n                    printf \'summary_buffer=%s\\n\' "$READLINE_LINE"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == ["summary now"]
+        assert "summary_buffer=" in result.stdout
+
+
+def test_bash_records_failed_non_sigil_history_entries() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf '%s\\n' \"bad command\"; }\n                    false\n                    __sigil_precmd\n                    __sigil_history_line() { printf '%s\\n' \", should not record\"; }\n                    false\n                    __sigil_precmd\n                    :\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == [f"record-failure --status 1 --cwd {ROOT} bad command"]
+
+
+def test_bash_does_not_record_failed_sigil_commands() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf '%s\\n' \"sigil bad\"; }\n                    false\n                    __sigil_precmd\n                    __sigil_history_line() { printf '%s\\n' \"^\"; }\n                    false\n                    __sigil_precmd\n                    :\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == []
+
+
+def test_bash_passes_failure_snippet_env_when_present() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                '                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf \'%s\\n\' "bad command"; }\n                    export SIGIL_FAILURE_STDOUT="stdout line"\n                    export SIGIL_FAILURE_STDERR="stderr line"\n                    false\n                    __sigil_precmd\n                    :\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == [
+            f"record-failure --status 1 --cwd {ROOT} --stdout-snippet stdout line --stderr-snippet stderr line bad command"
+        ]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_wrappers_call_current_cli_contract() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                "                    source shell/zsh/sigil.zsh\n                    sigil_command hello\n                    sigil_previous_command\n                    sigil_question hello\n                    sigil_follow_up hello\n                    sigil_fix >/tmp/sigil-zsh-fix.out\n                    sigil_previous_fix >/tmp/sigil-zsh-prev-fix.out\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == [
+            "command --select hello",
+            "command --previous --select",
+            "question hello",
+            "question --follow-up hello",
+            "fix",
+            "fix --previous",
+        ]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_accept_line_inserts_fix_proposals_without_executing() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    function zle { :; }\n                    source shell/zsh/sigil.zsh\n                    BUFFER="^"\n                    CURSOR=1\n                    __sigil_accept_line\n                    print -- "buffer=$BUFFER"\n                    print -- "cursor=$CURSOR"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == ["fix"]
+        assert "buffer=echo fix" in result.stdout
+        assert "cursor=8" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_blocks_execute_and_promotion_routes_before_cli() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    function zle { :; }\n                    source shell/zsh/sigil.zsh\n                    BUFFER=",! rm -rf nope"\n                    __sigil_accept_line\n                    print -- "bang_buffer=$BUFFER"\n                    BUFFER="@ promote"\n                    __sigil_accept_line\n                    print -- "at_buffer=$BUFFER"\n                    BUFFER="?! run"\n                    __sigil_accept_line\n                    print -- "question_bang_buffer=$BUFFER"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == []
+        assert "bang_buffer=,! rm -rf nope" in result.stdout
+        assert "at_buffer=@ promote" in result.stdout
+        assert "question_bang_buffer=?! run" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_does_not_record_failed_sigil_commands() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    source shell/zsh/sigil.zsh\n                    __sigil_preexec "sigil bad"\n                    false\n                    __sigil_precmd\n                    __sigil_preexec "^"\n                    false\n                    __sigil_precmd\n                    :\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == []
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_summary_route_is_read_only_and_clears_the_prompt_buffer() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    function zle { :; }\n                    source shell/zsh/sigil.zsh\n                    BUFFER="@. now"\n                    __sigil_accept_line\n                    print -- "summary_buffer=$BUFFER"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == ["summary now"]
+        assert "summary_buffer=" in result.stdout
