@@ -123,6 +123,47 @@ class CliHelpTests(unittest.TestCase):
         self.assertEqual(payload["prompt"], "status")
         self.assertEqual(payload["commands"][0]["command"], "git status --short")
 
+    def test_command_previous_json_invokes_previous_route(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+            old_session_id = os.environ.get("SIGIL_SESSION_ID")
+            os.environ["SIGIL_STATE_DIR"] = tmp
+            os.environ["SIGIL_SESSION_ID"] = "test"
+            try:
+                write_json(
+                    "last-command.json",
+                    {
+                        "id": "command-event",
+                        "prompt": "status",
+                        "commands": [
+                            {"command": "git status --short", "note": "show changes"}
+                        ],
+                        "glyph": ",",
+                        "integrity": "local_model",
+                        "capability": "propose",
+                        "taint": ["model"],
+                    },
+                )
+
+                result = CliRunner().invoke(cli, ["command", "--previous", "--json"])
+
+                self.assertEqual(result.exit_code, 0, result.output)
+                payload = json.loads(result.output.splitlines()[0])
+                self.assertEqual(payload["prompt"], "status")
+                self.assertEqual(
+                    payload["commands"][0]["command"], "git status --short"
+                )
+                self.assertEqual(payload["glyph"], ",,")
+            finally:
+                if old_state_dir is None:
+                    os.environ.pop("SIGIL_STATE_DIR", None)
+                else:
+                    os.environ["SIGIL_STATE_DIR"] = old_state_dir
+                if old_session_id is None:
+                    os.environ.pop("SIGIL_SESSION_ID", None)
+                else:
+                    os.environ["SIGIL_SESSION_ID"] = old_session_id
+
 
 class SelectionTests(unittest.TestCase):
     def test_select_rejects_multiple_candidates_without_interactive_stdin(self) -> None:
