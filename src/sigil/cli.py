@@ -28,7 +28,18 @@ from .state import append_event, read_json
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
-    """Punctuation-native LLM interaction for the shell."""
+    """Punctuation-native LLM interaction for the shell.
+
+    \b
+    Examples:
+      sigil command --select "find large files"
+      sigil question --json "what changed in this repo?"
+      sigil session show --json
+
+    \b
+    Docs and issues:
+      https://github.com/rlouf/sigil
+    """
 
 
 @cli.command("command")

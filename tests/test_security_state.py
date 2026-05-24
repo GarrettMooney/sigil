@@ -7,6 +7,9 @@ import unittest
 from io import StringIO
 from pathlib import Path
 
+from click.testing import CliRunner
+
+from sigil.cli import cli
 from sigil.commands import previous
 from sigil.pi_stream import should_color, stream_events
 from sigil.security import (
@@ -71,6 +74,18 @@ class SecurityTests(unittest.TestCase):
     def test_reject_promotion_mutation_without_fresh_human(self) -> None:
         with self.assertRaises(SecurityViolation):
             reject_promotion({"integrity": "web"}, {"integrity": "local_model"})
+
+
+class CliHelpTests(unittest.TestCase):
+    def test_top_level_help_leads_with_examples_and_support_path(self) -> None:
+        result = CliRunner().invoke(cli, ["--help"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn('sigil command --select "find large files"', result.output)
+        self.assertIn(
+            'sigil question --json "what changed in this repo?"', result.output
+        )
+        self.assertIn("sigil session show --json", result.output)
+        self.assertIn("https://github.com/rlouf/sigil", result.output)
 
 
 class StateTests(unittest.TestCase):
