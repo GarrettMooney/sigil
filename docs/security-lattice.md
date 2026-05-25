@@ -157,9 +157,8 @@ relying on shell globals or implicit session memory.
 Use `sigil events lineage [event-id]` to inspect the recorded provenance chain.
 Without an event id, Sigil shows the latest event from the current shell session.
 
-`@.` / `sigil summary` is read-only inspection of local Sigil session state. It
-does not call a model, append events, write session files, or create executable
-shell text.
+Session state files can be inspected with `sigil session show` for debugging.
+This does not call a model, append events, or create executable shell text.
 
 Failure repair records may include bounded stdout/stderr snippets and safe local
 cwd/git context. These are inputs to model-authored repair proposals, so `^` and

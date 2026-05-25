@@ -15,7 +15,7 @@ def make_stub(tmp: Path) -> Path:
     stub = tmp / "sigil-stub"
     stub.write_text(
         textwrap.dedent(
-            '                #!/usr/bin/env bash\n                printf \'%s\\n\' "$*" >> "$SIGIL_STUB_LOG"\n                case "$*" in\n                  "command --select hello") printf \'%s\\n\' "echo generated" ;;\n                  "command --previous --select") printf \'%s\\n\' "echo previous" ;;\n                  "fix") printf \'%s\\n\' "echo fix" ;;\n                  "fix --previous") printf \'%s\\n\' "echo previous-fix" ;;\n                  "question hello") printf \'%s\\n\' "answer" ;;\n                  "question --follow-up hello") printf \'%s\\n\' "follow-up" ;;\n                  "summary") printf \'%s\\n\' "summary" ;;\n                  "summary now") printf \'%s\\n\' "summary now" ;;\n                  op*) printf \'%s\\n\' "op:$*" ;;\n                  record-failure*) printf \'%s\\n\' "recorded" ;;\n                  *) printf \'%s\\n\' "unexpected:$*" >&2; exit 64 ;;\n                esac\n                '
+            '                #!/usr/bin/env bash\n                printf \'%s\\n\' "$*" >> "$SIGIL_STUB_LOG"\n                case "$*" in\n                  "command --select hello") printf \'%s\\n\' "echo generated" ;;\n                  "command --previous --select") printf \'%s\\n\' "echo previous" ;;\n                  "fix") printf \'%s\\n\' "echo fix" ;;\n                  "fix --previous") printf \'%s\\n\' "echo previous-fix" ;;\n                  "question hello") printf \'%s\\n\' "answer" ;;\n                  "question --follow-up hello") printf \'%s\\n\' "follow-up" ;;\n                  op*) printf \'%s\\n\' "op:$*" ;;\n                  record-failure*) printf \'%s\\n\' "recorded" ;;\n                  *) printf \'%s\\n\' "unexpected:$*" >&2; exit 64 ;;\n                esac\n                '
         ),
         encoding="utf-8",
     )
@@ -239,23 +239,6 @@ def test_bash_question_routes_clear_the_prompt_buffer() -> None:
         assert_success(result)
         assert read_log(tmp) == ["question --follow-up hello"]
         assert "follow_up_buffer=" in result.stdout
-
-
-def test_bash_summary_route_is_read_only_and_clears_the_prompt_buffer() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "bash",
-            textwrap.dedent(
-                '                    source shell/bash/sigil.bash\n                    READLINE_LINE="@. now"\n                    READLINE_POINT=${#READLINE_LINE}\n                    __sigil_readline_dispatch\n                    printf \'summary_buffer=%s\\n\' "$READLINE_LINE"\n                    '
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert read_log(tmp) == ["summary now"]
-        assert "summary_buffer=" in result.stdout
 
 
 def test_bash_records_failed_non_sigil_history_entries() -> None:
@@ -509,21 +492,3 @@ def test_zsh_question_routes_do_not_quote_the_visible_buffer() -> None:
             "-I:?? hello",
             "reset-prompt:",
         ]
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_summary_route_is_read_only_and_clears_the_prompt_buffer() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "zsh",
-            textwrap.dedent(
-                '                    function zle { :; }\n                    source shell/zsh/sigil.zsh\n                    BUFFER="@. now"\n                    __sigil_accept_line\n                    print -- "summary_buffer=$BUFFER"\n                    '
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert read_log(tmp) == ["summary now"]
-        assert "summary_buffer=" in result.stdout

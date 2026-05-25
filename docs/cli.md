@@ -12,7 +12,6 @@ written to stdout.
 ```sh
 sigil command --select "find large files"
 sigil question --json "what changed in this repo?"
-sigil summary
 sigil install zsh
 sigil doctor
 sigil events lineage
@@ -132,25 +131,6 @@ Stable fields:
 - `security`: trust metadata applied to the answer and tool trace.
 
 `sigil question --follow-up --json` uses the same shape with `follow_up: true`.
-
-## `sigil summary --json`
-
-Summarizes the current Sigil session without writing new state.
-
-```sh
-sigil summary
-sigil summary --json
-sigil summary --limit 20
-```
-
-The JSON form returns:
-
-- `session_id`: current shell session id.
-- `path`: current session state directory.
-- `continuity`: booleans and counts for command, question, failure, fix, and
-  tool state.
-- `recent_events`: latest events from this session, with normalized trust
-  metadata.
 
 ## `sigil events lineage --json`
 

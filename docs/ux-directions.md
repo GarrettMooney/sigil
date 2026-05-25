@@ -79,7 +79,6 @@ manually reconstruct context.
 Possible interactions:
 
 ```text
-@.          summarize the current shell session
 @@ query    search past Sigil memory
 ```
 

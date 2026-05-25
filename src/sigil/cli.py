@@ -38,7 +38,6 @@ from .session import (
     event_lineage,
     known_sessions,
     session_paths,
-    session_summary,
 )
 from .state import append_event, read_json
 
@@ -273,40 +272,6 @@ def cmd_events_lineage(event_id: str | None, json_output: bool) -> int:
         )
     for missing in lineage["missing_inputs"]:
         print(f"missing input: {missing}")
-    return 0
-
-
-@cli.command("summary")
-@click.option("--json", "json_output", is_flag=True)
-@click.option("--limit", type=int, default=8, show_default=True)
-def cmd_summary(json_output: bool, limit: int) -> int:
-    """Summarize the current session without mutating state."""
-    summary = session_summary(limit=max(0, limit))
-    if json_output:
-        pretty_print_json(summary)
-        return 0
-
-    continuity = summary["continuity"]
-    print(f"session {summary['session_id']}")
-    print(summary["path"])
-    print(
-        "continuity "
-        f"command={continuity['has_command']} "
-        f"failure={continuity['has_failure']} "
-        f"fix={continuity['has_fix']} "
-        f"questions={continuity['question_turns']} "
-        f"tools={continuity['tool_events']}"
-    )
-    if summary["recent_events"]:
-        print("recent events")
-    for event in summary["recent_events"]:
-        taint = ",".join(event["taint"]) or "none"
-        inputs = ",".join(event["inputs"]) or "-"
-        print(
-            f"  {event['id']} {event['type']} {event['glyph']} "
-            f"{event['integrity']}/{event['capability']} "
-            f"taint={taint} inputs={inputs}"
-        )
     return 0
 
 

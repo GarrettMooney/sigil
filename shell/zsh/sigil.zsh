@@ -94,17 +94,12 @@ sigil_previous_fix() {
   [[ -n "$selected" ]] && print -z -- "$selected"
 }
 
-sigil_summary() {
-  "$__sigil_bin" summary "$*"
-}
-
 function ',' { sigil_command "$*" }
 function ',,' { sigil_previous_command "$*" }
 function '?' { sigil_question "$*" }
 function '??' { sigil_follow_up "$*" }
 function '^' { sigil_fix "$*" }
 function '^^' { sigil_previous_fix "$*" }
-function '@.' { sigil_summary "$*" }
 
 alias ','='noglob sigil_command'
 alias ',,'='noglob sigil_previous_command'
@@ -112,7 +107,6 @@ alias '?'='noglob sigil_question'
 alias '??'='noglob sigil_follow_up'
 alias '^'='noglob sigil_fix'
 alias '^^'='noglob sigil_previous_fix'
-alias '@.'='noglob sigil_summary'
 
 autoload -Uz add-zsh-hook
 typeset -g __sigil_preexec_command=""
@@ -125,7 +119,7 @@ __sigil_precmd() {
   local exit_status=$?
   if (( exit_status != 0 )) && [[ -n "$__sigil_preexec_command" ]]; then
     case "$__sigil_preexec_command" in
-      ,*|\?*|\^*|@*|sigil\ *|__sigil_*) __sigil_preexec_command=""; return ;;
+      ,*|\?*|\^*|sigil\ *|__sigil_*) __sigil_preexec_command=""; return ;;
     esac
     local record_args=(record-failure --status "$exit_status" --cwd "$PWD")
     [[ -n "${SIGIL_FAILURE_STDOUT:-}" ]] && record_args+=(--stdout-snippet "$SIGIL_FAILURE_STDOUT")
@@ -170,18 +164,6 @@ __sigil_accept_line() {
         return
       fi
     fi
-  elif [[ "$b" == @.* ]]; then
-    rest="${b#@.}"; rest="${rest## }"
-    zle -I
-    BUFFER=""
-    sigil_summary "$rest"
-    zle reset-prompt
-    return
-  elif [[ "$b" == @!* || "$b" == @* ]]; then
-    zle -I
-    print -u2 -- "${__sigil_muted}❯ sigil @ · blocked · no promotion mutation${__sigil_reset}"
-    zle reset-prompt
-    return
   elif [[ "$b" == \^\^* ]]; then
     local selected
     BUFFER="^^"
@@ -234,7 +216,7 @@ zshaddhistory() {
   emulate -L zsh
   local line="${1%%$'\n'}"
   case "$line" in
-    ,*|\\\?*|\^*|@*) return 1 ;;
+    ,*|\\\?*|\^*) return 1 ;;
   esac
   return 0
 }

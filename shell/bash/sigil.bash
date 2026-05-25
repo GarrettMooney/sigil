@@ -175,10 +175,6 @@ sigil_previous_fix() {
   fi
 }
 
-sigil_summary() {
-  "$__sigil_bin" summary "$*"
-}
-
 # ── Glyph functions ──────────────────────────────────────────────────────
 
 function , { sigil_command "$*"; }
@@ -187,7 +183,6 @@ function ? { sigil_question "$*"; }
 function ?? { sigil_follow_up "$*"; }
 function ^ { sigil_fix "$*"; }
 function ^^ { sigil_previous_fix "$*"; }
-function @. { sigil_summary "$*"; }
 
 if [[ $- == *i* ]]; then
   alias ,='sigil_command'
@@ -196,7 +191,6 @@ if [[ $- == *i* ]]; then
   alias '??'='sigil_follow_up'
   alias '^'='sigil_fix'
   alias '^^'='sigil_previous_fix'
-  alias '@.'='sigil_summary'
 fi
 
 # ── Readline glyph dispatch (Ctrl-X ,) ───────────────────────────────────
@@ -237,17 +231,6 @@ __sigil_readline_dispatch() {
     printf '\n' >&2
     selected="$("$__sigil_bin" command --select "$rest")" || return $?
     __sigil_set_readline_buffer "$selected"
-    return 0
-  elif [[ "$b" == @.* ]]; then
-    rest="${b#@.}"
-    rest="$(__sigil_trim_leading_spaces "$rest")"
-    printf '\n' >&2
-    READLINE_LINE=""
-    READLINE_POINT=0
-    "$__sigil_bin" summary "$rest"
-    return $?
-  elif [[ "$b" == @!* || "$b" == @* ]]; then
-    __sigil_block_readline "> sigil @ - blocked - no promotion mutation"
     return 0
   elif [[ "$b" == ^^* ]]; then
     printf '\n' >&2
@@ -309,7 +292,7 @@ __sigil_precmd() {
   command="$(__sigil_history_line)" || return "$exit_status"
   if [[ $exit_status -ne 0 && -n "$command" && "$command" != "$__sigil_last_failed_history" ]]; then
     case "$command" in
-      ,*|\?*|\^*|@*|sigil\ *|__sigil_*) ;;
+      ,*|\?*|\^*|sigil\ *|__sigil_*) ;;
       *)
         record_args=(record-failure --status "$exit_status" --cwd "$PWD")
         [[ -n "${SIGIL_FAILURE_STDOUT:-}" ]] && record_args+=(--stdout-snippet "$SIGIL_FAILURE_STDOUT")

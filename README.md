@@ -24,7 +24,6 @@ calls, selection UI, Pi streaming, rendering, and persistent state.
 ^^  reopen previous fix candidates
 ?   answer a question with Pi using read + web search
 ??  continue the previous question discussion
-@.  summarize the current Sigil session without mutation
 ```
 
 Sigil records every glyph invocation with trust metadata. This is the core trust
@@ -43,7 +42,6 @@ The current grammar maps to:
 ,,  command continuation                   inherits prior command taint
 ?   read + web question                    web / read / web-tainted / provisional
 ??  question continuation                  inherits prior question taint / provisional
-@.  read-only session summary              local_file / read / no mutation
 ```
 
 This matters because Sigil crosses the shell boundary by inserting text into the
@@ -173,7 +171,7 @@ Events and session JSONL entries include these trust fields:
 Legacy state that predates those fields is treated as low-trust:
 `integrity=unknown`, `capability=none`, and `taint=["legacy"]`.
 
-The event log is the durable substrate for future `@.`, `@@`, and `!!`
+The event log is the durable substrate for future `@@` and `!!`
 behavior. Shell globals are intentionally not used for session continuity.
 
 ## zsh

@@ -28,7 +28,6 @@ Implemented grammar:
 ??  continue the previous question discussion
 ^   suggest fixes for the last failed command
 ^^  reopen previous fix candidates
-@.  summarize the current Sigil session without mutation
 ```
 
 Important existing foundations:
@@ -76,7 +75,6 @@ The current interactive behavior is useful and tested:
 
 - `,` and `^` insert selected commands back into the prompt for human review.
 - `?` and `??` produce read-only answers.
-- `@.` is read-only session inspection.
 
 These should remain the compatibility surface while the new runtime is added.
 
@@ -329,23 +327,7 @@ Only after the above is stable, implement higher-autonomy meanings such as:
 
 These require explicit execution policy, patch previews, provenance, and tests.
 
-## `@.` status
+## `@@` status
 
-`@.` is already implemented.
-
-It routes to `sigil summary`, which reads current session state and prints a
-summary without mutating state. Both shell bindings support it:
-
-- Bash defines `function @. { sigil_summary "$*"; }`
-- zsh defines `function '@.' { sigil_summary "$*" }`
-
-Prompt-buffer dispatch is also implemented for `@. ...` in both shells. Tests
-cover the route as read-only behavior.
-
-What is not implemented yet:
-
-- `@@` search over past Sigil memory
-- model-generated session summaries
-- promotion or mutation routes through `@`
-
-The current `@.` is deliberately local, read-only session inspection.
+`@@` search over past Sigil memory is not yet implemented. Session state can be
+inspected with `sigil session show`.

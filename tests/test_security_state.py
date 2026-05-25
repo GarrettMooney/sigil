@@ -93,7 +93,6 @@ def test_top_level_help_lists_commands() -> None:
         "install",
         "question",
         "session",
-        "summary",
     ]:
         assert command in result.output
 
@@ -216,53 +215,6 @@ def test_events_lineage_json_follows_transitive_inputs() -> None:
                 "command_generated",
             ]
             assert [node["depth"] for node in lineage["nodes"]] == [0, 1, 2]
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
-            else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
-            else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
-
-
-def test_summary_json_is_read_only_session_inspection() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp
-        os.environ["SIGIL_SESSION_ID"] = "test"
-        try:
-            append_event(
-                {
-                    "type": "question",
-                    "glyph": "?",
-                    "integrity": "web",
-                    "capability": "read",
-                    "taint": ["web"],
-                }
-            )
-            write_json(
-                "last-command.json",
-                {
-                    "prompt": "status",
-                    "commands": [
-                        {"command": "git status --short", "note": "show changes"}
-                    ],
-                    "glyph": ",",
-                    "integrity": "local_model",
-                    "capability": "propose",
-                    "taint": ["model"],
-                },
-            )
-            result = CliRunner().invoke(cli, ["summary", "--json"])
-            assert result.exit_code == 0, result.output
-            summary = json.loads(result.output)
-            assert summary["session_id"] == "test"
-            assert summary["continuity"]["has_command"]
-            assert summary["recent_events"][0]["type"] == "question"
-            assert summary["recent_events"][0]["taint"] == ["web"]
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)
