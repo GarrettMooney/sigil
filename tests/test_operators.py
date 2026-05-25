@@ -366,6 +366,43 @@ def test_op_cli_dry_run_depth_three_previews_only() -> None:
     assert result.exit_code == 0
     assert result.stdout == "git status --short\n"
     assert "dry-run" in result.stderr
+def test_verb_commands_run_piped_stream_operators() -> None:
+    calls = []
+
+    def fake_chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:
+        calls.append((system, user, max_tokens))
+        return "stream result"
+
+    with (
+        patch("sigil.operators.ensure_server", return_value=True),
+        patch("sigil.operators.chat_text", side_effect=fake_chat_text),
+        patch("sigil.operators.append_event", return_value={}),
+    ):
+        ask_result = CliRunner().invoke(
+            cli,
+            ["ask", "review"],
+            input="diff\n",
+        )
+        command_result = CliRunner().invoke(
+            cli,
+            ["command", "summarize"],
+            input="notes\n",
+        )
+        fix_result = CliRunner().invoke(
+            cli,
+            ["fix", "rename", "old", "to", "new"],
+            input="example.py\n",
+        )
+
+    assert ask_result.exit_code == 0, ask_result.output
+    assert command_result.exit_code == 0, command_result.output
+    assert fix_result.exit_code == 0, fix_result.output
+    assert ask_result.output == "stream result\n"
+    assert command_result.output == "stream result\n"
+    assert fix_result.output == "stream result\n"
+    assert "Operator: ? (inspect)" in calls[0][1]
+    assert "Operator: , (propose)" in calls[1][1]
+    assert "Operator: ^ (repair)" in calls[2][1]
 
 
 def test_op_cli_rejects_mixed_glyphs() -> None:

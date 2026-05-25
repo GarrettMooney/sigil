@@ -13,7 +13,9 @@ from typing import Literal, cast
 
 import click
 
-from .failure import record_failure
+from .ansi import MUTED, RESET
+from .commands import generate, previous as previous_command_state, select
+from .failure import record_failure, select_fix, select_previous_fix
 from .install import (
     SUPPORTED_SHELLS,
     checks_exit_code,
@@ -32,6 +34,13 @@ from .patches import (
 )
 from .policy import ExecutionPolicy
 from .pi_stream import stream_events
+from .question import ask
+from .security import (
+    inherited_label,
+    create_trust_metadata,
+    normalize_trust_record,
+    record_id,
+)
 from .session import (
     clear_current_session,
     current_session_snapshot,
@@ -39,11 +48,148 @@ from .session import (
     known_sessions,
     session_paths,
 )
+from .state import append_event, read_json
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
     pass
+
+
+def run_stream_operator(
+    glyph: str,
+    *,
+    prompt: str = "",
+    stdin_text: str,
+    json_output: bool = False,
+) -> int:
+    """Run the stream operator runtime behind a verb command."""
+    try:
+        invocation = create_invocation(
+            glyph,
+            prompt=prompt,
+            stdin=stdin_text,
+            mode="pipeline",
+        )
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="glyph") from exc
+
+    if json_output:
+        print_json_line(invocation.to_dict())
+        return 0
+
+    try:
+        result = run_invocation(invocation)
+    except RuntimeError as exc:
+        print(f"sigil {invocation.name}: {exc}", file=sys.stderr)
+        return 1
+    if result.decision.status != "preview" or invocation.depth >= 3:
+        print(f"sigil {invocation.name}: {result.decision.message}", file=sys.stderr)
+    if result.output:
+        print(result.output)
+    if result.decision.status == "blocked":
+        raise click.exceptions.Exit(2)
+    return 0
+
+
+def piped_stdin_text() -> str | None:
+    """Return piped stdin, treating empty test harness stdin as absent."""
+    if sys.stdin.isatty():
+        return None
+    text = sys.stdin.read()
+    return text if text else None
+
+
+@cli.command("command")
+@click.argument("prompt", required=False)
+@click.option("--previous", "previous_command", is_flag=True)
+@click.option("--select", "select_candidate", is_flag=True)
+@click.option("--json", "json_output", is_flag=True)
+def cmd_command(
+    prompt: str | None,
+    previous_command: bool,
+    select_candidate: bool,
+    json_output: bool,
+) -> int:
+    """Generate command candidates and optionally run the selector UI."""
+    stdin_text = piped_stdin_text()
+    if stdin_text is not None:
+        glyph = ",," if previous_command else ","
+        return run_stream_operator(
+            glyph,
+            prompt=prompt or "",
+            stdin_text=stdin_text,
+            json_output=json_output,
+        )
+
+    if previous_command:
+        prompt, candidates, security = previous_command_state()
+        continued = append_event(
+            {"type": "command_continued", "prompt": prompt, **security}
+        )
+        security = {**security, "inputs": [continued["id"]]}
+        print(
+            f"{MUTED}❯ sigil ,, · inherited: {inherited_label(security)}{RESET}",
+            file=sys.stderr,
+        )
+        if json_output:
+            print_json_line({"prompt": prompt, "commands": candidates, **security})
+            return 0
+        command = (
+            select(prompt, candidates, security)
+            if select_candidate
+            else candidates[0]["command"]
+        )
+        if command:
+            append_event({"type": "command_selected", "command": command, **security})
+            print(command)
+        return 0
+    if prompt is None:
+        raise click.UsageError("PROMPT is required unless --previous is set.")
+
+    candidates = generate(prompt)
+    source = normalize_trust_record(read_json("last-command.json") or {})
+    security = create_trust_metadata(
+        glyph=",",
+        integrity="local_model",
+        capability="propose",
+        taint=["model"],
+        inputs=[record_id(source)],
+        input_records=[source],
+        fresh_human=True,
+    )
+    if json_output:
+        print_json_line({"prompt": prompt, "commands": candidates})
+        return 0
+    if select_candidate:
+        command = select(prompt, candidates, security)
+        if command:
+            append_event({"type": "command_selected", "command": command, **security})
+            print(command)
+        return 0
+    for item in candidates:
+        print(item["command"])
+    return 0
+
+
+@cli.command("ask")
+@click.argument("question", required=False)
+@click.option("--follow-up", is_flag=True)
+@click.option("--json", "json_output", is_flag=True)
+def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
+    """Answer a shell question, optionally continuing the prior answer."""
+    stdin_text = piped_stdin_text()
+    if stdin_text is not None:
+        glyph = "??" if follow_up else "?"
+        return run_stream_operator(
+            glyph,
+            prompt=question or "",
+            stdin_text=stdin_text,
+            json_output=json_output,
+        )
+    if question is None:
+        raise click.UsageError("QUESTION is required unless stdin is piped.")
+    return ask(question, follow_up=follow_up, json_output=json_output)
 
 
 @cli.command("op", hidden=True)
@@ -123,15 +269,28 @@ def cmd_op(
     type=click.Path(path_type=Path, dir_okay=False),
     help="Shell rc file to update.",
 )
+@click.option(
+    "--glyphs/--no-glyphs",
+    "enable_glyphs",
+    default=True,
+    show_default=True,
+    help="Enable punctuation aliases in the shell rc snippet.",
+)
 @click.option("--json", "json_output", is_flag=True)
 def cmd_install_shell(
     shell: str,
     install_dir: Path | None,
     rc_path: Path | None,
+    enable_glyphs: bool,
     json_output: bool,
 ) -> int:
     """Install or update a Sigil shell binding."""
-    result = install_shell(shell, install_dir=install_dir, rc_path=rc_path)
+    result = install_shell(
+        shell,
+        install_dir=install_dir,
+        rc_path=rc_path,
+        enable_glyphs=enable_glyphs,
+    )
     if json_output:
         pretty_print_json(
             {
@@ -140,6 +299,7 @@ def cmd_install_shell(
                 "rc_path": result.rc_path,
                 "source_path": result.source_path,
                 "wrote_rc": result.wrote_rc,
+                "glyphs_enabled": result.glyphs_enabled,
             }
         )
         return 0
@@ -360,6 +520,28 @@ def cmd_record_failure(
 ) -> int:
     """Record a failed shell command for later repair."""
     record_failure(command, status, cwd, stdout_snippet, stderr_snippet)
+    return 0
+
+
+@cli.command("fix")
+@click.argument("prompt_parts", nargs=-1)
+@click.option("--previous", is_flag=True)
+def cmd_fix(prompt_parts: tuple[str, ...], previous: bool) -> int:
+    """Suggest fixes for the last recorded failed shell command."""
+    stdin_text = piped_stdin_text()
+    if stdin_text is not None:
+        glyph = "^^" if previous else "^"
+        return run_stream_operator(
+            glyph,
+            prompt=" ".join(prompt_parts),
+            stdin_text=stdin_text,
+        )
+    if prompt_parts:
+        raise click.UsageError("fix does not accept a prompt unless stdin is piped.")
+    command = select_previous_fix() if previous else select_fix()
+    if command:
+        append_event({"type": "fix_selected", "command": command})
+        print(command)
     return 0
 
 

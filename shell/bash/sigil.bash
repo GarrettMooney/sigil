@@ -33,80 +33,86 @@ __sigil_stdin_is_pipe() {
   [[ -p /dev/stdin ]]
 }
 
+__sigil_glyphs_enabled() {
+  [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
+}
+
 # ── Command wrappers ─────────────────────────────────────────────────────
 
 sigil_command() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op "," "$@"
+    "$__sigil_bin" command "$*"
     return $?
   fi
   local selected
-  selected="$("$__sigil_bin" op "," "$@")" || return $?
+  selected="$("$__sigil_bin" command --select "$*")" || return $?
   __sigil_history_insert "$selected"
 }
 
 sigil_previous_command() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op ",," "$@"
+    "$__sigil_bin" command --previous "$*"
     return $?
   fi
   local selected
-  selected="$("$__sigil_bin" op ",," "$@")" || return $?
+  selected="$("$__sigil_bin" command --previous --select)" || return $?
   __sigil_history_insert "$selected"
 }
 
 sigil_question() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op "?" "$@"
+    "$__sigil_bin" ask "$*"
     return $?
   fi
-  "$__sigil_bin" op "?" "$@"
+  "$__sigil_bin" ask "$*"
 }
 
 sigil_follow_up() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op "??" "$@"
+    "$__sigil_bin" ask --follow-up "$*"
     return $?
   fi
-  "$__sigil_bin" op "??" "$@"
+  "$__sigil_bin" ask --follow-up "$*"
 }
 
 sigil_fix() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op "^" "$@"
+    "$__sigil_bin" fix "$@"
     return $?
   fi
   local selected
-  selected="$("$__sigil_bin" op "^" "$@")" || return $?
+  selected="$("$__sigil_bin" fix)" || return $?
   __sigil_history_insert "$selected"
 }
 
 sigil_previous_fix() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op "^^" "$@"
+    "$__sigil_bin" fix --previous "$@"
     return $?
   fi
   local selected
-  selected="$("$__sigil_bin" op "^^" "$@")" || return $?
+  selected="$("$__sigil_bin" fix --previous)" || return $?
   __sigil_history_insert "$selected"
 }
 
-# ── Glyph functions ──────────────────────────────────────────────────────
+# ── Optional glyph functions ─────────────────────────────────────────────
 
-function , { sigil_command "$*"; }
-function ,, { sigil_previous_command "$*"; }
-function ? { sigil_question "$*"; }
-function ?? { sigil_follow_up "$*"; }
-function ^ { sigil_fix "$*"; }
-function ^^ { sigil_previous_fix "$*"; }
+if __sigil_glyphs_enabled; then
+  function , { sigil_command "$*"; }
+  function ,, { sigil_previous_command "$*"; }
+  function ? { sigil_question "$*"; }
+  function ?? { sigil_follow_up "$*"; }
+  function ^ { sigil_fix "$*"; }
+  function ^^ { sigil_previous_fix "$*"; }
 
-if [[ $- == *i* ]]; then
-  alias ,='sigil_command'
-  alias ,,='sigil_previous_command'
-  alias '?'='sigil_question'
-  alias '??'='sigil_follow_up'
-  alias '^'='sigil_fix'
-  alias '^^'='sigil_previous_fix'
+  if [[ $- == *i* ]]; then
+    alias ,='sigil_command'
+    alias ,,='sigil_previous_command'
+    alias '?'='sigil_question'
+    alias '??'='sigil_follow_up'
+    alias '^'='sigil_fix'
+    alias '^^'='sigil_previous_fix'
+  fi
 fi
 
 # ── Failure recording ────────────────────────────────────────────────────

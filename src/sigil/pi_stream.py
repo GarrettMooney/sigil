@@ -60,7 +60,7 @@ def summarize(tool: str, args: object) -> str:
 
 
 def env_security() -> dict[str, object]:
-    """Recover trust metadata passed from the parent operator process."""
+    """Recover trust metadata passed from the parent operator or ask process."""
     taint = [
         item for item in os.environ.get("SIGIL_SECURITY_TAINT", "").split(",") if item
     ]

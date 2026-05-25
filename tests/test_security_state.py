@@ -86,12 +86,17 @@ def test_top_level_help_lists_commands() -> None:
     assert result.exit_code == 0
     assert "Commands:" in result.output
     for command in [
+        "ask",
+        "command",
         "doctor",
         "events",
+        "fix",
         "install",
+        "patch",
         "session",
     ]:
         assert command in result.output
+    assert "\n  question" not in result.output
 
 
 def test_main_rewrites_missing_executable_errors() -> None:
@@ -99,7 +104,7 @@ def test_main_rewrites_missing_executable_errors() -> None:
     missing = FileNotFoundError(2, "No such file or directory", "pi")
     with patch("sigil.cli.cli.main", side_effect=missing):
         with redirect_stderr(stderr):
-            assert main(["op", "?", "hello"]) == 127
+            assert main(["ask", "hello"]) == 127
     assert "missing executable: pi" in stderr.getvalue()
 
 
@@ -108,7 +113,7 @@ def test_main_rewrites_permission_errors() -> None:
     denied = PermissionError(1, "Operation not permitted", "/nope/events.jsonl")
     with patch("sigil.cli.cli.main", side_effect=denied):
         with redirect_stderr(stderr):
-            assert main(["op", "?", "hello"]) == 1
+            assert main(["ask", "hello"]) == 1
     assert "permission denied: /nope/events.jsonl" in stderr.getvalue()
 
 

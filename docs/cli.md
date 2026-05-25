@@ -10,13 +10,15 @@ written to stdout.
 ## Top-level examples
 
 ```sh
-sigil op "," "find large files"
-sigil op "??" "what changed in this repo?"
-sigil op "^^" "generate a cleanup patch"
+sigil command --select "find large files"
+sigil ask --json "what changed in this repo?"
+git diff | sigil ask "review risky changes"
+printf '%s\n' src/sigil/cli.py | sigil fix "preview a cleanup"
 sigil op --dry-run ",,," "clean build outputs"
 sigil patch check
 sigil patch apply --yes
 sigil install zsh
+sigil install zsh --no-glyphs
 sigil doctor
 sigil events lineage
 sigil session show --json
@@ -52,6 +54,38 @@ Stable fields:
 Without `--json`, `sigil op` runs the operator. Piped `?` / `??` inspect stdin,
 `,` / `,,` synthesize or propose output, and `^` / `^^` generate repair
 previews. Operator output is written to stdout; status and errors go to stderr.
+
+## Verb Pipeline Commands
+
+`sigil command`, `sigil ask`, and `sigil fix` are the public verb layer. When
+stdin is piped into one of these commands, the verb uses the same stream
+operator runtime as the glyph aliases and grounds the result in stdin:
+
+```sh
+cat notes.md | sigil command "draft a release command"
+git diff | sigil ask "review risky changes"
+printf '%s\n' src/sigil/cli.py | sigil fix "preview a cleanup"
+```
+
+## `sigil ask --json`
+
+Runs the Pi question pipeline and emits one JSON object instead of rendering
+Markdown through `glow`. `sigil ask --follow-up --json` uses the same shape with
+`follow_up: true`.
+
+Stable fields:
+
+- `ok`: `true` when the stream renderer completed successfully.
+- `type`: currently always `"answer"`.
+- `question`: user-visible question text.
+- `prompt`: expanded prompt sent to Pi. For follow-ups, this includes context.
+- `follow_up`: whether this was invoked through `sigil ask --follow-up --json`.
+- `answer`: concatenated assistant text.
+- `answer_event_id`: event id for the stored answer, or `null` if no answer text
+  was emitted.
+- `tools`: ordered Pi tool trace events.
+- `malformed_events`: count of malformed Pi JSON event lines ignored.
+- `security`: trust metadata applied to the answer and tool trace.
 
 Depth-3 operators are treated as higher-autonomy requests and pass through the
 execution policy gate:
@@ -136,6 +170,21 @@ sigil session clear --json
 global event log path. `list` returns known session directories and the files
 present in each. `clear` returns the session files removed.
 
+## Optional Glyph Aliases
+
+Glyphs are a shell alias layer over the verb commands. Installed shell bindings
+enable them by default; use `sigil install <shell> --no-glyphs` for a long-form
+only setup.
+
+```text
+,   -> sigil command
+,,  -> sigil command --previous
+?   -> sigil ask
+??  -> sigil ask --follow-up
+^   -> sigil fix
+^^  -> sigil fix --previous
+```
+
 ## Hidden plumbing commands
 
 These commands are intentionally not shown in top-level help and are not stable
@@ -143,6 +192,7 @@ user-facing API:
 
 - `sigil render-pi-stream`
 - `sigil record-failure`
+- `sigil op`
 
 They exist so shell bindings can keep a small, explicit boundary with the Python
 runtime.
@@ -176,6 +226,7 @@ The JSON form reports:
 - `rc_path`: rc file inspected or updated.
 - `source_path`: bundled binding source copied from.
 - `wrote_rc`: whether Sigil appended a source block.
+- `glyphs_enabled`: whether the rc snippet enables punctuation aliases.
 
 ## `sigil doctor`
 

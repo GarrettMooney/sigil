@@ -26,6 +26,21 @@ def test_install_shell_copies_binding_and_updates_rc_idempotently() -> None:
         assert first.wrote_rc
         assert not second.wrote_rc
         assert rc_path.read_text().count("source ") == 1
+        assert "export SIGIL_ENABLE_GLYPHS=1" in rc_path.read_text()
+
+
+def test_install_shell_can_disable_glyph_aliases_in_rc_snippet() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        result = install_shell(
+            "zsh",
+            install_dir=root / "bindings",
+            rc_path=root / ".zshrc",
+            enable_glyphs=False,
+        )
+        rc_text = (root / ".zshrc").read_text(encoding="utf-8")
+        assert not result.glyphs_enabled
+        assert "export SIGIL_ENABLE_GLYPHS=0" in rc_text
 
 
 def test_install_shell_cli_json_reports_paths() -> None:
@@ -49,6 +64,7 @@ def test_install_shell_cli_json_reports_paths() -> None:
         assert Path(payload["binding_path"]).exists()
         assert Path(payload["rc_path"]).exists()
         assert payload["wrote_rc"]
+        assert payload["glyphs_enabled"]
 
 
 def test_doctor_reports_expected_checks() -> None:

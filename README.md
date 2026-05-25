@@ -1,6 +1,6 @@
 # Sigil
 
-Punctuation-native LLM interaction for the shell.
+Verb-first LLM interaction for the shell, with optional punctuation shortcuts.
 
 ![15-second Sigil terminal demo](docs/demo.gif)
 
@@ -15,18 +15,41 @@ Sigil is structured as a shell-agnostic core with thin shell bindings. The shell
 layer owns glyph dispatch and proposal history insertion; the Python CLI owns
 model calls, selection UI, Pi streaming, rendering, and persistent state.
 
-## Grammar
+## Commands
 
 ```text
-,   generate shell command candidates
-,,  reopen the previous command selector
-^   suggest fixes for the last failed command
-^^  reopen previous fix candidates
-?   answer a question with Pi using read + web search
-??  continue the previous question discussion
+sigil command "find wav files"              generate command candidates
+sigil command --previous                    reopen previous command candidates
+sigil fix                                   suggest fixes for the last failure
+sigil fix --previous                        reopen previous fix candidates
+sigil ask "what changed in this repo?"      answer a question with Pi
+sigil ask --follow-up "what should I run?"  continue the prior answer
 ```
 
-Sigil records every glyph invocation with trust metadata. This is the core trust
+Piped stdin is first-class:
+
+```sh
+git diff | sigil ask "review risky changes"
+cat notes.md | sigil command "turn this into a release command"
+printf '%s\n' src/sigil/cli.py | sigil fix "preview a small cleanup"
+```
+
+## Optional Glyphs
+
+Glyphs are a shortcut layer on top of the verbs. Installed shell bindings enable
+them by default. Use `sigil install <shell> --no-glyphs` if you only want the
+long-form verbs.
+
+```text
+,   -> sigil command
+,,  -> sigil command --previous
+^   -> sigil fix
+^^  -> sigil fix --previous
+?   -> sigil ask
+??  -> sigil ask --follow-up
+```
+
+Sigil records every invocation with trust metadata. This is the core trust
 lattice:
 
 ```text
@@ -35,7 +58,7 @@ capability: none < propose < read < write_boxed < exec_boxed
 taint:      model, web, legacy
 ```
 
-The current grammar maps to:
+The default glyph aliases map to:
 
 ```text
 ,   human prompt -> local model proposal   local_model / propose / model-tainted
@@ -70,6 +93,12 @@ Install the Python command, then install the shell binding you use:
 uv tool install git+https://github.com/rlouf/sigil
 sigil install zsh
 sigil doctor
+```
+
+To install without punctuation shortcuts:
+
+```sh
+sigil install zsh --no-glyphs
 ```
 
 For Bash:
@@ -113,9 +142,12 @@ src/sigil/             Python core runtime
 Core commands:
 
 ```sh
-sigil op "," "find wav files"
-sigil op "??" "review risky changes"
-sigil op "^^" "generate cleanup patch"
+sigil command --select "find wav files"
+sigil command --previous --select
+sigil fix
+sigil fix --previous
+sigil ask "what is tldraw?"
+sigil ask --follow-up "how would that work in practice?"
 sigil op --dry-run ",,," "clean build outputs"
 sigil patch show
 sigil patch check
@@ -198,7 +230,8 @@ Source the Bash entrypoint from `.bashrc`:
 source "$HOME/.sigil/shell/bash/sigil.bash"
 ```
 
-zsh and Bash support the same glyph functions:
+Use the `sigil command`, `sigil ask`, and `sigil fix` verbs directly in Bash.
+When glyphs are enabled, Bash also supports:
 
 ```bash
 , find wav files

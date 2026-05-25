@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "sigil-sh"
 version = "0.1.0"
-description = "Punctuation-native LLM interaction for the shell."
+description = "Verb-first LLM interaction for the shell, with optional punctuation shortcuts."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

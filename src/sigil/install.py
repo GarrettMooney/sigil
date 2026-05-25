@@ -34,6 +34,7 @@ class InstallResult:
     rc_path: str
     source_path: str
     wrote_rc: bool
+    glyphs_enabled: bool
 
 
 @dataclass(frozen=True)
@@ -99,16 +100,25 @@ def shell_reference(path: Path) -> str:
     return '"$HOME/' + relative.as_posix() + '"'
 
 
-def source_snippet(binding_path: Path) -> str:
+def source_snippet(binding_path: Path, *, enable_glyphs: bool = True) -> str:
     """Return the rc block that loads a Sigil shell binding."""
     reference = shell_reference(binding_path)
-    return f"\n# Sigil\nif [[ -r {reference} ]]; then\n  source {reference}\nfi\n"
+    lines = ["", "# Sigil", f"if [[ -r {reference} ]]; then"]
+    if not enable_glyphs:
+        lines.append("  export SIGIL_ENABLE_GLYPHS=0")
+    else:
+        lines.append("  export SIGIL_ENABLE_GLYPHS=1")
+    lines.append(f"  source {reference}")
+    lines.append("fi")
+    return "\n".join(lines) + "\n"
 
 
 def install_shell(
     shell: str,
     install_dir: Path | None = None,
     rc_path: Path | None = None,
+    *,
+    enable_glyphs: bool = True,
 ) -> InstallResult:
     """Install or update a shell binding and idempotently source it from rc."""
     if shell not in SPECS:
@@ -123,7 +133,7 @@ def install_shell(
     binding_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     binding_path.chmod(0o644)
 
-    snippet = source_snippet(binding_path)
+    snippet = source_snippet(binding_path, enable_glyphs=enable_glyphs)
     rc.parent.mkdir(parents=True, exist_ok=True)
     rc.touch(exist_ok=True)
     rc_text = rc.read_text(encoding="utf-8")
@@ -140,6 +150,7 @@ def install_shell(
         rc_path=str(rc),
         source_path=str(source),
         wrote_rc=wrote_rc,
+        glyphs_enabled=enable_glyphs,
     )
 
 

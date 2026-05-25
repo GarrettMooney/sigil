@@ -15,7 +15,7 @@ def make_stub(tmp: Path) -> Path:
     stub = tmp / "sigil-stub"
     stub.write_text(
         textwrap.dedent(
-            '                #!/usr/bin/env bash\n                printf \'%s\\n\' "$*" >> "$SIGIL_STUB_LOG"\n                case "$*" in\n                  op*) printf \'%s\\n\' "op:$*" ;;\n                  record-failure*) printf \'%s\\n\' "recorded" ;;\n                  *) printf \'%s\\n\' "unexpected:$*" >&2; exit 64 ;;\n                esac\n                '
+            '                #!/usr/bin/env bash\n                printf \'%s\\n\' "$*" >> "$SIGIL_STUB_LOG"\n                case "$*" in\n                  "command --select hello") printf \'%s\\n\' "echo generated" ;;\n                  "command --previous --select") printf \'%s\\n\' "echo previous" ;;\n                  "command draft executive summary") printf \'%s\\n\' "stream command" ;;\n                  "fix") printf \'%s\\n\' "echo fix" ;;\n                  "fix --previous") printf \'%s\\n\' "echo previous-fix" ;;\n                  "fix --previous rename symbol") printf \'%s\\n\' "stream previous-fix" ;;\n                  "ask hello") printf \'%s\\n\' "answer" ;;\n                  "ask --follow-up hello") printf \'%s\\n\' "follow-up" ;;\n                  "ask --follow-up review risky changes") printf \'%s\\n\' "stream follow-up" ;;\n                  op*) printf \'%s\\n\' "op:$*" ;;\n                  record-failure*) printf \'%s\\n\' "recorded" ;;\n                  *) printf \'%s\\n\' "unexpected:$*" >&2; exit 64 ;;\n                esac\n                '
         ),
         encoding="utf-8",
     )
@@ -66,14 +66,14 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op , hello",
-            "op ,,",
-            "op ? hello",
-            "op ?? hello",
-            "op ^",
-            "op ^^",
+            "command --select hello",
+            "command --previous --select",
+            "ask hello",
+            "ask --follow-up hello",
+            "fix",
+            "fix --previous",
         ]
-        assert "history=op:op ^^" in result.stdout
+        assert "history=echo previous-fix" in result.stdout
 
 
 def test_bash_proposals_write_history_not_stdout() -> None:
@@ -89,9 +89,9 @@ def test_bash_proposals_write_history_not_stdout() -> None:
             stub,
         )
         assert_success(result)
-        assert "history=op:op , hello" in result.stdout
+        assert "history=echo generated" in result.stdout
         # The command should NOT be printed to stdout.
-        assert result.stdout == "history=op:op , hello\n"
+        assert result.stdout == "history=echo generated\n"
 
 
 def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
@@ -108,9 +108,9 @@ def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op ?? review risky changes",
-            "op , draft executive summary",
-            "op ^^ rename symbol",
+            "ask --follow-up review risky changes",
+            "command draft executive summary",
+            "fix --previous rename symbol",
         ]
 
 
@@ -179,14 +179,14 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op , hello",
-            "op ,,",
-            "op ? hello",
-            "op ?? hello",
-            "op ^",
-            "op ^^",
+            "command --select hello",
+            "command --previous --select",
+            "ask hello",
+            "ask --follow-up hello",
+            "fix",
+            "fix --previous",
         ]
-        assert "history=op:op ^^" in result.stdout
+        assert "history=echo previous-fix" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -204,13 +204,13 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op ?? review risky changes",
-            "op , draft executive summary",
-            "op ^^ rename symbol",
+            "ask --follow-up review risky changes",
+            "command draft executive summary",
+            "fix --previous rename symbol",
         ]
-        assert "op:op ?? review risky changes" in result.stdout
-        assert "op:op , draft executive summary" in result.stdout
-        assert "op:op ^^ rename symbol" in result.stdout
+        assert "stream follow-up" in result.stdout
+        assert "stream command" in result.stdout
+        assert "stream previous-fix" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -228,8 +228,8 @@ def test_zsh_glyph_aliases_dispatch_piped_stdin_before_globbing() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op ?? review risky changes",
-            "op , draft executive summary",
+            "ask --follow-up review risky changes",
+            "command draft executive summary",
         ]
 
 
@@ -247,8 +247,8 @@ def test_zsh_proposals_write_history_not_stdout() -> None:
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == ["op ^"]
-        assert result.stdout == "history=op:op ^\n"
+        assert read_log(tmp) == ["fix"]
+        assert result.stdout == "history=echo fix\n"
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

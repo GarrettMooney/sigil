@@ -27,75 +27,81 @@ __sigil_history_insert() {
   print -s -- "$1" 2>/dev/null || true
 }
 
+__sigil_glyphs_enabled() {
+  [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
+}
+
 sigil_command() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op "," "$@"
+    "$__sigil_bin" command "$*"
     return $?
   fi
   local selected
-  selected="$("$__sigil_bin" op "," "$@")" || return $?
+  selected="$("$__sigil_bin" command --select "$*")" || return $?
   __sigil_history_insert "$selected"
 }
 
 sigil_previous_command() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op ",," "$@"
+    "$__sigil_bin" command --previous "$*"
     return $?
   fi
   local selected
-  selected="$("$__sigil_bin" op ",," "$@")" || return $?
+  selected="$("$__sigil_bin" command --previous --select)" || return $?
   __sigil_history_insert "$selected"
 }
 
 sigil_question() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op "?" "$@"
+    "$__sigil_bin" ask "$*"
     return $?
   fi
-  "$__sigil_bin" op "?" "$@"
+  "$__sigil_bin" ask "$*"
 }
 
 sigil_follow_up() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op "??" "$@"
+    "$__sigil_bin" ask --follow-up "$*"
     return $?
   fi
-  "$__sigil_bin" op "??" "$@"
+  "$__sigil_bin" ask --follow-up "$*"
 }
 
 sigil_fix() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op "^" "$@"
+    "$__sigil_bin" fix "$@"
     return $?
   fi
   local selected
-  selected="$("$__sigil_bin" op "^" "$@")" || return $?
+  selected="$("$__sigil_bin" fix)" || return $?
   __sigil_history_insert "$selected"
 }
 
 sigil_previous_fix() {
   if __sigil_stdin_is_pipe; then
-    "$__sigil_bin" op "^^" "$@"
+    "$__sigil_bin" fix --previous "$@"
     return $?
   fi
   local selected
-  selected="$("$__sigil_bin" op "^^" "$@")" || return $?
+  selected="$("$__sigil_bin" fix --previous)" || return $?
   __sigil_history_insert "$selected"
 }
 
-function ',' { sigil_command "$*" }
-function ',,' { sigil_previous_command "$*" }
-function '?' { sigil_question "$*" }
-function '??' { sigil_follow_up "$*" }
-function '^' { sigil_fix "$*" }
-function '^^' { sigil_previous_fix "$*" }
+if __sigil_glyphs_enabled; then
+  function ',' { sigil_command "$*" }
+  function ',,' { sigil_previous_command "$*" }
+  function '?' { sigil_question "$*" }
+  function '??' { sigil_follow_up "$*" }
+  function '^' { sigil_fix "$*" }
+  function '^^' { sigil_previous_fix "$*" }
 
-alias ','='noglob sigil_command'
-alias ',,'='noglob sigil_previous_command'
-alias '?'='noglob sigil_question'
-alias '??'='noglob sigil_follow_up'
-alias '^'='noglob sigil_fix'
-alias '^^'='noglob sigil_previous_fix'
+  alias ','='noglob sigil_command'
+  alias ',,'='noglob sigil_previous_command'
+  alias '?'='noglob sigil_question'
+  alias '??'='noglob sigil_follow_up'
+  alias '^'='noglob sigil_fix'
+  alias '^^'='noglob sigil_previous_fix'
+fi
 
 autoload -Uz add-zsh-hook
 typeset -g __sigil_preexec_command=""
@@ -122,11 +128,13 @@ __sigil_precmd() {
 add-zsh-hook preexec __sigil_preexec
 add-zsh-hook precmd __sigil_precmd
 
-zshaddhistory() {
-  emulate -L zsh
-  local line="${1%%$'\n'}"
-  case "$line" in
-    ,*|\\\?*|\^*) return 1 ;;
-  esac
-  return 0
-}
+if __sigil_glyphs_enabled; then
+  zshaddhistory() {
+    emulate -L zsh
+    local line="${1%%$'\n'}"
+    case "$line" in
+      ,*|\\\?*|\^*) return 1 ;;
+    esac
+    return 0
+  }
+fi
