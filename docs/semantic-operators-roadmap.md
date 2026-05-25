@@ -331,6 +331,14 @@ Only after the above is stable, implement higher-autonomy meanings such as:
 
 These require explicit execution policy, patch previews, provenance, and tests.
 
+### Milestone 6: autonomy policy and execution gates
+
+Status: implemented as preview-only gates. Operator output is classified into
+action classes, depth-3 operators are blocked unless explicitly acknowledged,
+and `--dry-run` / `--yes --policy allow` are available at the CLI boundary. No
+executor exists yet, so even acknowledged depth-3 output is still emitted as a
+preview.
+
 ## `@@` status
 
 `@@` search over past Sigil memory is not yet implemented. Session state can be

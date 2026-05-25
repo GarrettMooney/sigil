@@ -11,6 +11,7 @@ from click.testing import CliRunner
 from _patch import patch
 from sigil.cli import cli
 from sigil.operators import create_invocation, parse_operator_token
+from sigil.policy import ExecutionPolicy, classify_output, evaluate_policy
 
 
 @pytest.mark.parametrize(
@@ -165,6 +166,90 @@ def test_op_cli_runs_piped_repair_preview_with_file_context() -> None:
     assert "stdin targets:\nexample.py" in str(calls["user"])
     assert "--- example.py\nold" in str(calls["user"])
     assert calls["max_tokens"] == 1200
+
+
+def test_policy_classifies_destructive_shell_output() -> None:
+    classification = classify_output("sudo rm -rf build\ncurl https://example.com\n")
+
+    assert "execute" in classification.classes
+    assert "delete" in classification.classes
+    assert "network" in classification.classes
+    assert "privileged" in classification.classes
+
+
+def test_policy_classifies_unified_diff_as_file_write() -> None:
+    classification = classify_output("--- a/app.py\n+++ b/app.py\n@@\n-old\n+new\n")
+
+    assert "file_write" in classification.classes
+    assert "execute" not in classification.classes
+
+
+def test_depth_three_policy_blocks_without_explicit_acknowledgement() -> None:
+    decision = evaluate_policy(
+        glyph=",,,",
+        depth=3,
+        output="rm -rf build",
+        policy=ExecutionPolicy(),
+    )
+
+    assert decision.status == "blocked"
+    assert "No commands were run" in decision.message
+    assert "delete" in decision.classification.classes
+
+
+def test_depth_three_policy_allows_preview_after_acknowledgement() -> None:
+    decision = evaluate_policy(
+        glyph=",,,",
+        depth=3,
+        output="git status --short",
+        policy=ExecutionPolicy(yes=True, policy="allow"),
+    )
+
+    assert decision.status == "allowed"
+    assert "execution is not implemented" in decision.message
+
+
+def test_op_cli_blocks_depth_three_without_policy() -> None:
+    with (
+        patch("sigil.operators.ensure_server", return_value=True),
+        patch("sigil.operators.chat_text", return_value="rm -rf build"),
+        patch("sigil.operators.append_event", return_value={}),
+    ):
+        result = CliRunner().invoke(cli, ["op", ",,,", "clean", "build"])
+
+    assert result.exit_code == 2
+    assert result.stdout == "rm -rf build\n"
+    assert "requested higher autonomy" in result.stderr
+    assert "No commands were run" in result.stderr
+
+
+def test_op_cli_acknowledged_depth_three_still_previews_only() -> None:
+    with (
+        patch("sigil.operators.ensure_server", return_value=True),
+        patch("sigil.operators.chat_text", return_value="git status --short"),
+        patch("sigil.operators.append_event", return_value={}),
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["op", "--yes", "--policy", "allow", ",,,", "status"],
+        )
+
+    assert result.exit_code == 0
+    assert result.stdout == "git status --short\n"
+    assert "execution is not implemented" in result.stderr
+
+
+def test_op_cli_dry_run_depth_three_previews_only() -> None:
+    with (
+        patch("sigil.operators.ensure_server", return_value=True),
+        patch("sigil.operators.chat_text", return_value="git status --short"),
+        patch("sigil.operators.append_event", return_value={}),
+    ):
+        result = CliRunner().invoke(cli, ["op", "--dry-run", ",,,", "status"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "git status --short\n"
+    assert "dry-run" in result.stderr
 
 
 def test_op_cli_rejects_mixed_glyphs() -> None:

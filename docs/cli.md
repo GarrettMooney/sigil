@@ -13,6 +13,7 @@ written to stdout.
 sigil op "," "find large files"
 sigil op "??" "what changed in this repo?"
 sigil op "^^" "generate a cleanup patch"
+sigil op --dry-run ",,," "clean build outputs"
 sigil install zsh
 sigil doctor
 sigil events lineage
@@ -49,6 +50,25 @@ Stable fields:
 Without `--json`, `sigil op` runs the operator. Piped `?` / `??` inspect stdin,
 `,` / `,,` synthesize or propose output, and `^` / `^^` generate repair
 previews. Operator output is written to stdout; status and errors go to stderr.
+
+Depth-3 operators are treated as higher-autonomy requests and pass through the
+execution policy gate:
+
+```sh
+sigil op ",,," "find and remove generated files"
+sigil op --dry-run ",,," "find and remove generated files"
+sigil op --yes --policy allow ",,," "find and remove generated files"
+```
+
+Current policy behavior:
+
+- default depth-3 output is blocked after preview; no commands are run.
+- `--dry-run` classifies the output and exits successfully without execution.
+- `--yes --policy allow` acknowledges the gate, but execution is not implemented
+  yet; Sigil still emits a preview only.
+
+The policy classifier records broad action classes such as `execute`,
+`file_write`, `network`, `delete`, and `privileged` in the event log.
 
 ## `sigil events lineage --json`
 

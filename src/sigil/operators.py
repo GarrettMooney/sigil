@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from .policy import ExecutionPolicy, PolicyDecision, evaluate_policy
 from .qwen import chat_text, ensure_server
 from .security import create_trust_metadata
 from .state import append_event
@@ -62,6 +63,14 @@ class OperatorInvocation:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class OperatorResult:
+    """Model output plus the policy decision applied to it."""
+
+    output: str
+    decision: PolicyDecision
+
+
 def parse_operator_token(token: str) -> tuple[OperatorBase, int]:
     """Parse a repeated semantic operator token.
 
@@ -104,14 +113,26 @@ def create_invocation(
     )
 
 
-def run_invocation(invocation: OperatorInvocation) -> str:
+def run_invocation(
+    invocation: OperatorInvocation,
+    *,
+    policy: ExecutionPolicy | None = None,
+) -> OperatorResult:
     """Run a semantic operator invocation and return stdout text."""
     if not ensure_server():
         raise SystemExit(1)
 
+    execution_policy = policy or ExecutionPolicy()
     system = operator_system_prompt(invocation)
     user = operator_user_prompt(invocation)
     output = chat_text(system, user, max_tokens=max_tokens_for_depth(invocation.depth))
+    output = output.rstrip()
+    decision = evaluate_policy(
+        glyph=invocation.glyph,
+        depth=invocation.depth,
+        output=output,
+        policy=execution_policy,
+    )
     security = create_trust_metadata(
         glyph=invocation.glyph,
         integrity="local_model",
@@ -124,10 +145,12 @@ def run_invocation(invocation: OperatorInvocation) -> str:
             "type": "operator_completed",
             "operator": invocation.to_dict(),
             "output_snippet": output[:MAX_EVENT_OUTPUT_CHARS],
+            "policy": execution_policy.to_dict(),
+            "decision": decision.to_dict(),
             **security,
         }
     )
-    return output.rstrip()
+    return OperatorResult(output=output, decision=decision)
 
 
 def operator_system_prompt(invocation: OperatorInvocation) -> str:

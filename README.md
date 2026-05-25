@@ -56,6 +56,7 @@ no ?! parser route
 no auto-run from web-tainted state
 no promotion mutation
 no bang unless sandbox exists
+,,, and ^^^ require --yes --policy allow and still preview only
 ```
 
 The full trust model is documented in
@@ -115,6 +116,7 @@ Core commands:
 sigil op "," "find wav files"
 sigil op "??" "review risky changes"
 sigil op "^^" "generate cleanup patch"
+sigil op --dry-run ",,," "clean build outputs"
 sigil install zsh
 sigil doctor
 sigil events lineage

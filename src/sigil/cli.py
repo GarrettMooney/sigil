@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Literal, cast
 
 import click
 
@@ -22,6 +23,7 @@ from .install import (
     install_shell,
 )
 from .operators import create_invocation, run_invocation
+from .policy import ExecutionPolicy
 from .pi_stream import stream_events
 from .session import (
     clear_current_session,
@@ -41,7 +43,26 @@ def cli() -> None:
 @click.argument("glyph")
 @click.argument("prompt_parts", nargs=-1)
 @click.option("--json", "json_output", is_flag=True)
-def cmd_op(glyph: str, prompt_parts: tuple[str, ...], json_output: bool) -> int:
+@click.option("--dry-run", is_flag=True, help="Classify output and skip execution.")
+@click.option(
+    "--yes", is_flag=True, help="Acknowledge higher-autonomy execution gates."
+)
+@click.option(
+    "--policy",
+    "policy_name",
+    type=click.Choice(["preview", "allow"]),
+    default="preview",
+    show_default=True,
+    help="Execution policy for depth-3 operators.",
+)
+def cmd_op(
+    glyph: str,
+    prompt_parts: tuple[str, ...],
+    json_output: bool,
+    dry_run: bool,
+    yes: bool,
+    policy_name: str,
+) -> int:
     """Parse a semantic operator invocation."""
     stdin_is_tty = sys.stdin.isatty()
     stdin_text = "" if stdin_is_tty else sys.stdin.read()
@@ -62,12 +83,23 @@ def cmd_op(glyph: str, prompt_parts: tuple[str, ...], json_output: bool) -> int:
         return 0
 
     try:
-        output = run_invocation(invocation)
+        result = run_invocation(
+            invocation,
+            policy=ExecutionPolicy(
+                yes=yes,
+                dry_run=dry_run,
+                policy=cast(Literal["preview", "allow"], policy_name),
+            ),
+        )
     except RuntimeError as exc:
         print(f"sigil op: {exc}", file=sys.stderr)
         return 1
-    if output:
-        print(output)
+    if result.decision.status != "preview" or invocation.depth >= 3:
+        print(f"sigil op: {result.decision.message}", file=sys.stderr)
+    if result.output:
+        print(result.output)
+    if result.decision.status == "blocked":
+        raise click.exceptions.Exit(2)
     return 0
 
 
@@ -277,6 +309,8 @@ def main(argv: list[str] | None = None) -> int:
     except click.Abort:
         click.echo("Aborted!", err=True)
         return 1
+    except click.exceptions.Exit as error:
+        return int(error.exit_code)
     except FileNotFoundError as error:
         program = error.filename or "required executable"
         click.echo(f"sigil: missing executable: {program}", err=True)
