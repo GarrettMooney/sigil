@@ -106,6 +106,14 @@ function '^' { sigil_fix "$*" }
 function '^^' { sigil_previous_fix "$*" }
 function '@.' { sigil_summary "$*" }
 
+alias ','='noglob sigil_command'
+alias ',,'='noglob sigil_previous_command'
+alias '?'='noglob sigil_question'
+alias '??'='noglob sigil_follow_up'
+alias '^'='noglob sigil_fix'
+alias '^^'='noglob sigil_previous_fix'
+alias '@.'='noglob sigil_summary'
+
 autoload -Uz add-zsh-hook
 typeset -g __sigil_preexec_command=""
 
