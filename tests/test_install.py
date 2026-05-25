@@ -51,27 +51,6 @@ def test_install_shell_cli_json_reports_paths() -> None:
         assert payload["wrote_rc"]
 
 
-def test_install_shell_alias_still_works() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        result = CliRunner().invoke(
-            cli,
-            [
-                "install-shell",
-                "bash",
-                "--install-dir",
-                str(root / "bash"),
-                "--rc",
-                str(root / ".bashrc"),
-                "--json",
-            ],
-        )
-        assert result.exit_code == 0, result.output
-        payload = json.loads(result.output)
-        assert payload["shell"] == "bash"
-        assert Path(payload["binding_path"]).exists()
-
-
 def test_doctor_reports_expected_checks() -> None:
     fake_env = {
         "SHELL": "/bin/bash",

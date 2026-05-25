@@ -148,7 +148,21 @@ def cmd_op(glyph: str, prompt_parts: tuple[str, ...], json_output: bool) -> int:
     return 0
 
 
-def run_install_shell(
+@cli.command("install")
+@click.argument("shell", type=click.Choice(SUPPORTED_SHELLS))
+@click.option(
+    "--install-dir",
+    type=click.Path(path_type=Path, file_okay=False, dir_okay=True),
+    help="Directory where the shell binding should be installed.",
+)
+@click.option(
+    "--rc",
+    "rc_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Shell rc file to update.",
+)
+@click.option("--json", "json_output", is_flag=True)
+def cmd_install_shell(
     shell: str,
     install_dir: Path | None,
     rc_path: Path | None,
@@ -175,54 +189,6 @@ def run_install_shell(
         print(f"{result.rc_path} already sources Sigil")
     print(f"restart your shell or run: source {result.rc_path}")
     return 0
-
-
-@cli.command("install")
-@click.argument("shell", type=click.Choice(SUPPORTED_SHELLS))
-@click.option(
-    "--install-dir",
-    type=click.Path(path_type=Path, file_okay=False, dir_okay=True),
-    help="Directory where the shell binding should be installed.",
-)
-@click.option(
-    "--rc",
-    "rc_path",
-    type=click.Path(path_type=Path, dir_okay=False),
-    help="Shell rc file to update.",
-)
-@click.option("--json", "json_output", is_flag=True)
-def cmd_install_shell(
-    shell: str,
-    install_dir: Path | None,
-    rc_path: Path | None,
-    json_output: bool,
-) -> int:
-    """Install or update a Sigil shell binding."""
-    return run_install_shell(shell, install_dir, rc_path, json_output)
-
-
-@cli.command("install-shell", hidden=True)
-@click.argument("shell", type=click.Choice(SUPPORTED_SHELLS))
-@click.option(
-    "--install-dir",
-    type=click.Path(path_type=Path, file_okay=False, dir_okay=True),
-    help="Directory where the shell binding should be installed.",
-)
-@click.option(
-    "--rc",
-    "rc_path",
-    type=click.Path(path_type=Path, dir_okay=False),
-    help="Shell rc file to update.",
-)
-@click.option("--json", "json_output", is_flag=True)
-def cmd_install_shell_alias(
-    shell: str,
-    install_dir: Path | None,
-    rc_path: Path | None,
-    json_output: bool,
-) -> int:
-    """Compatibility alias for `sigil install`."""
-    return run_install_shell(shell, install_dir, rc_path, json_output)
 
 
 @cli.command("doctor")
