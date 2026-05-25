@@ -81,19 +81,21 @@ def test_reject_promotion_mutation_without_fresh_human() -> None:
         reject_promotion({"integrity": "web"}, {"integrity": "local_model"})
 
 
-def test_top_level_help_leads_with_examples_and_support_path() -> None:
+def test_top_level_help_lists_commands() -> None:
     result = CliRunner().invoke(cli, ["--help"])
     assert result.exit_code == 0
-    assert 'sigil command --select "find large files"' in result.output
-    assert "sigil command --previous --select" in result.output
-    assert 'sigil question --json "what changed in this repo?"' in result.output
-    assert 'sigil question --follow-up "summarize that as a command"' in result.output
-    assert "sigil install zsh" in result.output
-    assert "sigil doctor" in result.output
-    assert "sigil summary" in result.output
-    assert "sigil events lineage" in result.output
-    assert "sigil session show --json" in result.output
-    assert "https://github.com/rlouf/sigil" in result.output
+    assert "Commands:" in result.output
+    for command in [
+        "command",
+        "doctor",
+        "events",
+        "fix",
+        "install",
+        "question",
+        "session",
+        "summary",
+    ]:
+        assert command in result.output
 
 
 def test_main_rewrites_missing_executable_errors() -> None:
