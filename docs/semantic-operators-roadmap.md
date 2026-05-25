@@ -289,6 +289,8 @@ No mutation. No command execution. Record events with trust metadata.
 
 ### Milestone 3: piped repair previews
 
+Status: implemented as model-generated preview output for piped `^` / `^^`.
+
 Support:
 
 ```sh

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -126,6 +129,42 @@ def test_op_cli_runs_piped_propose_operator() -> None:
     assert result.output == "executive summary\n"
     assert "Synthesize or propose" in str(calls["system"])
     assert "Prompt: draft an executive summary" in str(calls["user"])
+
+
+def test_op_cli_runs_piped_repair_preview_with_file_context() -> None:
+    calls = {}
+
+    def fake_chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:
+        calls["system"] = system
+        calls["user"] = user
+        calls["max_tokens"] = max_tokens
+        return "--- a/example.py\n+++ b/example.py\n@@\n-old\n+new"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        old_cwd = os.getcwd()
+        os.chdir(tmp_dir)
+        try:
+            Path("example.py").write_text("old\n", encoding="utf-8")
+            with (
+                patch("sigil.operators.ensure_server", return_value=True),
+                patch("sigil.operators.chat_text", side_effect=fake_chat_text),
+                patch("sigil.operators.append_event", return_value={}),
+            ):
+                result = CliRunner().invoke(
+                    cli,
+                    ["op", "^^", "rename", "old", "to", "new"],
+                    input="example.py\n",
+                )
+        finally:
+            os.chdir(old_cwd)
+
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith("--- a/example.py\n+++ b/example.py\n")
+    assert "repair operator" in str(calls["system"])
+    assert "Prompt: rename old to new" in str(calls["user"])
+    assert "stdin targets:\nexample.py" in str(calls["user"])
+    assert "--- example.py\nold" in str(calls["user"])
+    assert calls["max_tokens"] == 1200
 
 
 def test_op_cli_rejects_mixed_glyphs() -> None:

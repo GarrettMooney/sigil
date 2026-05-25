@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Literal, cast
 
 from .qwen import chat_text, ensure_server
@@ -20,6 +21,8 @@ OPERATOR_NAMES: dict[OperatorBase, str] = {
 SUPPORTED_OPERATORS = frozenset(OPERATOR_NAMES)
 MAX_STDIN_CHARS = 120_000
 MAX_EVENT_OUTPUT_CHARS = 4000
+MAX_REPAIR_FILES = 16
+MAX_REPAIR_FILE_CHARS = 20_000
 
 INSPECT_SYSTEM = (
     "You are a semantic shell operator. Inspect the input stream and answer the "
@@ -31,6 +34,14 @@ PROPOSE_SYSTEM = (
     "You are a semantic shell operator. Synthesize or propose the requested "
     "output from the input stream. Write only the useful result for stdout. "
     "Avoid chatty framing unless the prompt asks for explanation."
+)
+
+REPAIR_SYSTEM = (
+    "You are a semantic shell repair operator. Generate a visible repair "
+    "preview only. Prefer a unified diff when file contents are provided. "
+    "If a diff is not possible, output a concrete command or patch plan. "
+    "Never claim that you applied changes, and do not include destructive "
+    "commands without a safer dry-run or review step."
 )
 
 
@@ -95,22 +106,6 @@ def create_invocation(
 
 def run_invocation(invocation: OperatorInvocation) -> str:
     """Run a semantic operator invocation and return stdout text."""
-    if invocation.base == "^":
-        append_event(
-            {
-                "type": "operator_parsed",
-                "operator": invocation.to_dict(),
-                **create_trust_metadata(
-                    glyph=invocation.glyph,
-                    integrity="local_model",
-                    capability="propose",
-                    taint=["model"],
-                    fresh_human=True,
-                ),
-            }
-        )
-        return f"{invocation.glyph} {invocation.name} depth={invocation.depth}"
-
     if not ensure_server():
         raise SystemExit(1)
 
@@ -120,7 +115,7 @@ def run_invocation(invocation: OperatorInvocation) -> str:
     security = create_trust_metadata(
         glyph=invocation.glyph,
         integrity="local_model",
-        capability="read" if invocation.base == "?" else "propose",
+        capability=capability_for_operator(invocation),
         taint=["model"],
         fresh_human=True,
     )
@@ -142,12 +137,19 @@ def operator_system_prompt(invocation: OperatorInvocation) -> str:
         2: "Use a deeper pass and call out important caveats.",
         3: "Use a thorough pass and organize the result for follow-up work.",
     }.get(invocation.depth, "Use a thorough pass and be explicit about uncertainty.")
-    base = INSPECT_SYSTEM if invocation.base == "?" else PROPOSE_SYSTEM
+    if invocation.base == "?":
+        base = INSPECT_SYSTEM
+    elif invocation.base == "^":
+        base = REPAIR_SYSTEM
+    else:
+        base = PROPOSE_SYSTEM
     return f"{base}\n\nDepth: {invocation.depth}. {depth_guidance}"
 
 
 def operator_user_prompt(invocation: OperatorInvocation) -> str:
     """Return the user prompt sent to the model."""
+    if invocation.base == "^":
+        return repair_user_prompt(invocation)
     stdin_text = invocation.stdin
     if len(stdin_text) > MAX_STDIN_CHARS:
         stdin_text = stdin_text[-MAX_STDIN_CHARS:]
@@ -171,6 +173,54 @@ def default_prompt(invocation: OperatorInvocation) -> str:
     if invocation.base == ",":
         return "Propose a useful result from the input."
     return "Repair the input."
+
+
+def capability_for_operator(
+    invocation: OperatorInvocation,
+) -> Literal["read", "propose"]:
+    """Return the trust capability for an operator invocation."""
+    if invocation.base == "?":
+        return "read"
+    return "propose"
+
+
+def repair_user_prompt(invocation: OperatorInvocation) -> str:
+    """Return a repair prompt with path-aware context when stdin names files."""
+    prompt = invocation.prompt or default_prompt(invocation)
+    lines = [line.strip() for line in invocation.stdin.splitlines() if line.strip()]
+    files = repair_files(lines)
+    sections = [
+        f"Operator: {invocation.glyph} ({invocation.name})",
+        f"Prompt: {prompt}",
+        "Return a preview only. Do not apply changes.",
+        "stdin targets:\n" + (invocation.stdin if invocation.stdin else "<empty>"),
+    ]
+    if files:
+        sections.append("Readable target file snapshots:")
+        for path, content in files:
+            label = str(path)
+            if len(content) > MAX_REPAIR_FILE_CHARS:
+                content = content[:MAX_REPAIR_FILE_CHARS]
+                label = f"{label} (first {MAX_REPAIR_FILE_CHARS} chars)"
+            sections.append(f"--- {label}\n{content}")
+    else:
+        sections.append("No readable file snapshots were found from stdin.")
+    return "\n\n".join(sections)
+
+
+def repair_files(lines: list[str]) -> list[tuple[Path, str]]:
+    """Read a bounded set of file paths from stdin target lines."""
+    files: list[tuple[Path, str]] = []
+    for line in lines[:MAX_REPAIR_FILES]:
+        path = Path(line)
+        try:
+            if not path.is_file():
+                continue
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        files.append((path, content))
+    return files
 
 
 def max_tokens_for_depth(depth: int) -> int:
