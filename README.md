@@ -182,7 +182,7 @@ Current files:
 events.jsonl                                 append-only global event log
 sessions/<session-id>/last-failure.json      latest failed shell command
 sessions/<session-id>/last-patch.json        latest repair patch preview
-sessions/<session-id>/last-question.jsonl    question transcript; reset by `?`
+sessions/<session-id>/last-question.jsonl    same-terminal question transcript
 sessions/<session-id>/last-tools.jsonl       latest Pi tool trace
 ```
 

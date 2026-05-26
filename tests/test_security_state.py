@@ -125,9 +125,20 @@ def test_events_default_lists_recent_events() -> None:
         os.environ["SIGIL_SESSION_ID"] = "test"
         try:
             first = append_event({"type": "first"})
-            second = append_event({"type": "second", "glyph": ","})
+            second = append_event(
+                {
+                    "type": "operator_command_executed",
+                    "glyph": ",,",
+                    "command": "git status --short",
+                    "status": 0,
+                    "integrity": "local_model",
+                    "capability": "exec_boxed",
+                    "taint": ["model"],
+                }
+            )
             text = CliRunner().invoke(cli, ["events", "--limit", "1"])
             listed = CliRunner().invoke(cli, ["events", "list", "--json"])
+            raw = CliRunner().invoke(cli, ["events", "list", "--json", "--raw"])
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)
@@ -139,11 +150,31 @@ def test_events_default_lists_recent_events() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
     assert text.exit_code == 0, text.output
-    assert second["id"] in text.output
-    assert "second" in text.output
+    assert text.output.splitlines()[0].split() == [
+        "time",
+        "id",
+        "action",
+        "trust",
+        "session",
+        "summary",
+    ]
+    assert str(second["id"])[:8] in text.output
+    assert ",, executed" in text.output
+    assert "local_model/exec_boxed" in text.output
+    assert "git status --short -> 0" in text.output
     assert first["id"] not in text.output
     assert listed.exit_code == 0, listed.output
-    assert [event["type"] for event in json.loads(listed.output)] == ["first", "second"]
+    summaries = json.loads(listed.output)
+    assert [event["type"] for event in summaries] == [
+        "first",
+        "operator_command_executed",
+    ]
+    assert summaries[-1]["short_id"] == str(second["id"])[:8]
+    assert summaries[-1]["action"] == ",, executed"
+    assert summaries[-1]["summary"] == "git status --short -> 0"
+    assert summaries[-1]["lineage"] == f"sigil events lineage {second['id']}"
+    assert raw.exit_code == 0, raw.output
+    assert "short_id" not in json.loads(raw.output)[0]
 
 
 def test_events_lineage_json_follows_transitive_inputs() -> None:

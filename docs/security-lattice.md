@@ -156,8 +156,9 @@ legacy before the user recalls it for review.
 
 Continuations inherit maximum taint and minimum integrity from their inputs.
 
-For `??`, `last-question.jsonl` stores the user and assistant transcript turns
-with their originating event IDs. A follow-up consumes those transcript records,
+For question routes, `last-question.jsonl` stores user and assistant transcript
+turns with their originating event IDs. Local `?` reads that transcript for
+same-terminal continuity. Web-authorized `??` consumes those transcript records,
 inherits their taint and integrity, and records the consumed IDs in the new
 question event.
 

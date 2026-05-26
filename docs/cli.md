@@ -152,17 +152,21 @@ Shows recent records from the read-only global event log.
 sigil events
 sigil events --limit 50
 sigil events --json
+sigil events --json --raw
 sigil events list --json
 ```
 
-Without `--json`, each event is printed as a tab-separated line:
+Without `--json`, each event is printed as a width-aligned activity feed:
 
 ```text
-id  type  glyph  integrity/capability  session  cwd
+time  id  action  trust  session  summary
 ```
 
-The explicit `list` subcommand is an alias for the default `sigil events`
-view.
+`action` combines the route glyph and lifecycle event, for example `? inspect`,
+`,, executed`, or `^^ patch check`. The JSON form returns the same summary
+fields plus the full event id, cwd, raw type, raw glyph, and a ready-to-run
+`lineage` command. Use `--raw --json` when you need exact stored event payloads.
+The explicit `list` subcommand is an alias for the default `sigil events` view.
 
 ## `sigil events lineage --json`
 

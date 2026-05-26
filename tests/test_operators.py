@@ -13,7 +13,7 @@ from _patch import patch
 from sigil.cli import cli
 from sigil.operators import create_invocation, parse_operator_token
 from sigil.policy import ExecutionPolicy, classify_output, evaluate_policy
-from sigil.state import read_json, write_json
+from sigil.state import read_json, read_jsonl, write_json
 
 PATCH_TEXT = """diff --git a/example.txt b/example.txt
 --- a/example.txt
@@ -125,6 +125,52 @@ def test_op_cli_runs_piped_inspect_operator() -> None:
     assert "Prompt: review risky changes" in str(calls["user"])
     assert "diff --git a/file b/file" in str(calls["user"])
     assert calls["max_tokens"] == 1200
+
+
+def test_inspect_operator_continues_question_transcript() -> None:
+    calls = []
+
+    def fake_chat_text(system: str, user: str, *, max_tokens: int = 1200) -> str:
+        del system, max_tokens
+        calls.append(user)
+        return "first answer" if len(calls) == 1 else "second answer"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        os.environ["SIGIL_STATE_DIR"] = tmp_dir
+        os.environ["SIGIL_SESSION_ID"] = "question-session"
+        try:
+            with (
+                patch("sigil.operators.ensure_server", return_value=True),
+                patch("sigil.operators.chat_text", side_effect=fake_chat_text),
+            ):
+                first = CliRunner().invoke(cli, ["op", "?", "first", "question"])
+                second = CliRunner().invoke(cli, ["op", "?", "second", "question"])
+            turns = read_jsonl("last-question.jsonl")
+        finally:
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    assert "Previous question transcript" not in calls[0]
+    assert "Previous question transcript" in calls[1]
+    assert "user:\nfirst question" in calls[1]
+    assert "assistant:\nfirst answer" in calls[1]
+    assert [turn["role"] for turn in turns] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert turns[-1]["content"] == "second answer"
 
 
 def test_op_cli_runs_piped_recommend_operator() -> None:

@@ -13,7 +13,7 @@ from .patches import apply_patch, last_patch, record_patch_apply, store_patch_pr
 from .policy import ExecutionPolicy, PolicyDecision, evaluate_policy
 from .qwen import chat_json, chat_text, ensure_server
 from .security import create_trust_metadata
-from .state import append_event
+from .state import append_event, append_jsonl, read_jsonl
 
 OperatorBase = Literal["?", ",", "^"]
 
@@ -28,6 +28,7 @@ MAX_STDIN_CHARS = 120_000
 MAX_EVENT_OUTPUT_CHARS = 4000
 MAX_REPAIR_FILES = 16
 MAX_REPAIR_FILE_CHARS = 20_000
+QUESTION_TRANSCRIPT = "last-question.jsonl"
 
 INSPECT_SYSTEM = (
     "You are a semantic shell operator. Inspect the input stream and answer the "
@@ -225,6 +226,8 @@ def run_invocation(
             **security,
         }
     )
+    if invocation.base == "?":
+        append_inspect_turns(invocation, output, event, security)
     if invocation.base == "," and invocation.depth >= 2:
         command = executable_command(output)
         if execution_policy.dry_run:
@@ -413,6 +416,8 @@ def depth_guidance(invocation: OperatorInvocation) -> str:
 
 def operator_user_prompt(invocation: OperatorInvocation) -> str:
     """Return the user prompt sent to the model."""
+    if invocation.base == "?":
+        return inspect_user_prompt(invocation)
     if invocation.base == "^":
         return repair_user_prompt(invocation)
     stdin_text = invocation.stdin
@@ -429,6 +434,69 @@ def operator_user_prompt(invocation: OperatorInvocation) -> str:
             f"{stdin_label}:\n{stdin_text}",
         ]
     )
+
+
+def inspect_user_prompt(invocation: OperatorInvocation) -> str:
+    """Return an inspect prompt with same-terminal transcript context."""
+    sections = [
+        f"Operator: {invocation.glyph} ({invocation.name})",
+        f"Prompt: {invocation.prompt or default_prompt(invocation)}",
+    ]
+    turns = inspect_turns()
+    if turns:
+        transcript = "\n\n".join(
+            f"{turn['role']}:\n{turn['content']}" for turn in turns
+        )
+        sections.append(f"Previous question transcript:\n{transcript}")
+    stdin_text = invocation.stdin
+    if len(stdin_text) > MAX_STDIN_CHARS:
+        stdin_text = stdin_text[-MAX_STDIN_CHARS:]
+        stdin_label = f"stdin (last {MAX_STDIN_CHARS} chars)"
+    else:
+        stdin_label = "stdin"
+    sections.append(f"{stdin_label}:\n{stdin_text}")
+    return "\n\n".join(sections)
+
+
+def inspect_turns() -> list[dict[str, object]]:
+    """Load same-session question turns visible to local inspect."""
+    return [
+        turn
+        for turn in read_jsonl(QUESTION_TRANSCRIPT)
+        if turn.get("role") in {"user", "assistant"} and turn.get("content")
+    ]
+
+
+def append_inspect_turns(
+    invocation: OperatorInvocation,
+    output: str,
+    event: dict[str, object],
+    security: dict[str, object],
+) -> None:
+    """Record local inspect turns for same-terminal continuity."""
+    event_id = str(event.get("id") or "")
+    prompt = invocation.prompt or default_prompt(invocation)
+    if invocation.stdin:
+        prompt = f"{prompt}\n\nstdin:\n{invocation.stdin}"
+    append_jsonl(
+        QUESTION_TRANSCRIPT,
+        {
+            "role": "user",
+            "content": prompt,
+            "event_id": event_id,
+            **security,
+        },
+    )
+    if output:
+        append_jsonl(
+            QUESTION_TRANSCRIPT,
+            {
+                "role": "assistant",
+                "content": output,
+                "event_id": event_id,
+                **security,
+            },
+        )
 
 
 def default_prompt(invocation: OperatorInvocation) -> str:
