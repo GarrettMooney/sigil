@@ -120,6 +120,12 @@ def evaluate_policy(
             message=f"{glyph} dry-run: classified output and skipped execution",
             classification=classification,
         )
+    if glyph.startswith(",") and depth == 3:
+        return PolicyDecision(
+            status="preview",
+            message=f"{glyph} is handled by the durable plan stepper",
+            classification=classification,
+        )
     if depth == 3:
         return PolicyDecision(
             status="preview",

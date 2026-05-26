@@ -32,6 +32,7 @@ from .patches import (
     record_patch_apply,
     record_patch_check,
 )
+from .plans import abort_active_plan, last_plan, print_plan, run_plan_stepper
 from .policy import ExecutionPolicy
 from .pi_stream import stream_events
 from .question import ask
@@ -217,6 +218,23 @@ def cmd_op(
         print_json_line(invocation.to_dict())
         return 0
 
+    if should_run_plan_operator(invocation):
+        if dry_run:
+            return run_plan_stepper(
+                objective=prompt,
+                stdin_text=stdin_text,
+                dry_run=True,
+            )
+        if should_confirm_piped_input(invocation):
+            if not confirm_piped_input(stdin_text):
+                print("sigil op: piped input declined", file=sys.stderr)
+                raise click.exceptions.Exit(2)
+        try:
+            return run_plan_stepper(objective=prompt, stdin_text=stdin_text)
+        except RuntimeError as exc:
+            print(f"sigil op: {exc}", file=sys.stderr)
+            return 1
+
     if should_handle_autonomy_loop(invocation):
         handle_autonomy_loop(invocation, dry_run=dry_run)
 
@@ -288,6 +306,14 @@ def should_handle_autonomy_loop(invocation: object) -> bool:
     return getattr(invocation, "depth", 0) == 3
 
 
+def should_run_plan_operator(invocation: object) -> bool:
+    """Return whether this invocation targets the implemented plan stepper."""
+    return (
+        getattr(invocation, "base", None) == ","
+        and getattr(invocation, "depth", 0) == 3
+    )
+
+
 def handle_autonomy_loop(invocation: object, *, dry_run: bool) -> None:
     """Fail closed for the reserved bounded-autonomy tier."""
     glyph = str(getattr(invocation, "glyph", ""))
@@ -334,6 +360,38 @@ def stdin_preview(text: str) -> str:
     if truncated:
         preview += "\n..."
     return preview
+
+
+@cli.command("plan")
+@click.argument(
+    "plan_command",
+    required=False,
+    default="show",
+    type=click.Choice(["show", "resume", "abort"]),
+)
+@click.option("--json", "json_output", is_flag=True)
+def cmd_plan(plan_command: str, json_output: bool) -> int:
+    """Inspect, resume, or abort the current durable plan."""
+    if plan_command == "resume":
+        return run_plan_stepper(objective="")
+    if plan_command == "abort":
+        plan = abort_active_plan()
+        if json_output:
+            pretty_print_json({"aborted": bool(plan), "plan": plan})
+        elif plan is None:
+            print("no active plan")
+        else:
+            print(f"aborted plan {plan.get('plan_id')}")
+        return 0
+
+    plan = last_plan()
+    if json_output:
+        pretty_print_json(plan)
+    elif plan is None:
+        print("no plan recorded")
+    else:
+        print_plan(plan)
+    return 0
 
 
 @cli.command("install")
@@ -640,6 +698,11 @@ def event_action(event: dict[str, object], glyph: str, event_type: str) -> str:
         "patch_checked": "patch check",
         "patch_applied": "patch applied",
         "patch_apply_failed": "patch failed",
+        "plan_created": "plan created",
+        "plan_step_decision": "plan decision",
+        "plan_step_executed": "plan executed",
+        "plan_completed": "plan complete",
+        "plan_aborted": "plan aborted",
         "command_selected": "selected",
         "fix_selected": "selected",
     }
@@ -670,6 +733,12 @@ def event_detail(event: dict[str, object], event_type: str) -> str:
         return command_status_summary(event)
     if event_type in {"patch_checked", "patch_applied", "patch_apply_failed"}:
         return command_status_summary(event)
+    if event_type.startswith("plan_"):
+        if event_type == "plan_step_executed":
+            return command_status_summary(event)
+        return clean_summary_text(event.get("objective")) or clean_summary_text(
+            event.get("command")
+        )
     if event_type == "answer_done":
         return f"{event.get('bytes') or 0} bytes"
     for key in ("command", "output_snippet", "stdout_snippet", "stderr_snippet"):

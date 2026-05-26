@@ -80,7 +80,7 @@ The implemented grammar is:
 ```text
 ,   recommend a concrete next action
 ,,  generate and execute a shell command
-,,, reserved bounded autonomy loop, rejected for now
+,,, durable plan stepper, one confirmed boxed step at a time
 ?   web-authorized question
 ??  web-authorized question continuation
 ??? reserved bounded research loop, rejected for now
@@ -103,8 +103,10 @@ It maps to the lattice as follows:
     capability=exec_boxed
     taint=["model"]
 
-,,, reserved bounded autonomy loop
-    rejected before model call or execution
+,,, durable plan stepper
+    integrity=local_model for plan proposals
+    capability=propose, then exec_boxed per confirmed step
+    taint=["model"]
 
 ^   failed command/files -> repair proposal
     integrity=local_model

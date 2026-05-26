@@ -24,7 +24,7 @@ Implemented grammar:
 ```text
 ,   recommend a concrete next action
 ,,  generate and execute a shell command
-,,, reserved bounded autonomy loop, rejected for now
+,,, durable plan stepper, one confirmed boxed step at a time
 ?   web-authorized question
 ??  web-authorized question continuation
 ??? reserved bounded research loop, rejected for now
@@ -157,7 +157,7 @@ Current semantics:
 ```text
 comma depth 1: recommend one concrete next action
 comma depth 2: generate and execute one shell command
-comma depth 3: reserved bounded autonomy loop; reject for now
+comma depth 3: create/resume a durable plan and execute at most one confirmed step
 other depth 1: quick, low-context, no mutation
 repair depth 2: preview a generated repair, then apply only after confirmation
 repair depth 3: reserved bounded repair loop; reject for now

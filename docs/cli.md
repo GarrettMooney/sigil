@@ -88,6 +88,12 @@ Stable fields:
   was emitted.
 - `tools`: ordered Pi tool trace events.
 - `malformed_events`: count of malformed Pi JSON event lines ignored.
+
+## `sigil plan`
+
+`sigil plan show`, `sigil plan resume`, and `sigil plan abort` inspect and
+control the durable plan used by `,,,`. A plan resume executes at most one
+confirmed boxed step, then returns to the shell.
 - `security`: trust metadata applied to the answer and tool trace.
 
 Double comma is the comma execution route:
@@ -219,7 +225,7 @@ only setup.
 ```text
 ,   -> sigil op ","
 ,,  -> sigil op ",,"
-,,, -> sigil op ",,,"
+,,, -> sigil op ",,,"   durable plan stepper
 ?   -> sigil op "?"
 ??  -> sigil op "??"
 ??? -> sigil op "???"

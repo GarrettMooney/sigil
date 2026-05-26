@@ -13,7 +13,7 @@ from _patch import patch
 from sigil.cli import cli
 from sigil.operators import create_invocation, parse_operator_token
 from sigil.policy import ExecutionPolicy, classify_output, evaluate_policy
-from sigil.state import read_json, write_json
+from sigil.state import append_jsonl, read_json, read_jsonl, write_json
 
 PATCH_TEXT = """diff --git a/example.txt b/example.txt
 --- a/example.txt
@@ -442,7 +442,7 @@ def test_double_comma_policy_allows_execution_classification() -> None:
     assert "delete" in decision.classification.classes
 
 
-def test_triple_comma_policy_is_reserved_not_execution() -> None:
+def test_triple_comma_policy_defers_to_plan_stepper() -> None:
     decision = evaluate_policy(
         glyph=",,,",
         depth=3,
@@ -451,7 +451,7 @@ def test_triple_comma_policy_is_reserved_not_execution() -> None:
     )
 
     assert decision.status == "preview"
-    assert "reserved" in decision.message
+    assert "plan stepper" in decision.message
 
 
 def test_dry_run_policy_previews_without_execution() -> None:
@@ -545,24 +545,223 @@ def test_op_cli_dry_run_question_does_not_call_web_route() -> None:
     assert "read+web question route" in result.output
 
 
-def test_op_cli_rejects_triple_before_model_or_confirmation() -> None:
+def test_op_cli_rejects_triple_repair_before_model_or_confirmation() -> None:
     with (
         patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
         patch("sigil.operators.chat_json", side_effect=AssertionError("no model")),
         patch("sigil.operators.subprocess.run", side_effect=AssertionError("no exec")),
     ):
-        result = CliRunner().invoke(cli, ["op", ",,,", "status"], input="notes\n")
+        result = CliRunner().invoke(cli, ["op", "^^^", "status"], input="notes\n")
 
     assert result.exit_code == 2
     assert "bounded autonomy loop is reserved but not implemented" in result.stderr
 
 
-def test_op_cli_dry_run_triple_reports_reserved_loop() -> None:
+def test_op_cli_dry_run_triple_repair_reports_reserved_loop() -> None:
     with patch("sigil.operators.chat_json", side_effect=AssertionError("no model")):
-        result = CliRunner().invoke(cli, ["op", "--dry-run", ",,,", "status"])
+        result = CliRunner().invoke(cli, ["op", "--dry-run", "^^^", "status"])
 
     assert result.exit_code == 0
     assert "bounded autonomy loop is reserved but not implemented" in result.output
+
+
+def test_triple_comma_creates_plan_and_executes_one_confirmed_step() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        os.environ["SIGIL_STATE_DIR"] = tmp_dir
+        os.environ["SIGIL_SESSION_ID"] = "plan-session"
+        events = []
+
+        def fake_append_event(event: dict[str, object]) -> dict[str, object]:
+            stored = {"id": f"event-{len(events)}", **event}
+            events.append(stored)
+            return stored
+
+        try:
+            with (
+                patch("sigil.plans.ensure_server", return_value=True),
+                patch(
+                    "sigil.plans.chat_json",
+                    return_value={
+                        "steps": [
+                            {
+                                "title": "Say done",
+                                "command": "printf 'done\\n'",
+                                "explanation": "Proves one boxed step runs.",
+                            },
+                            {
+                                "title": "Say next",
+                                "command": "printf 'next\\n'",
+                                "explanation": "Remains pending.",
+                            },
+                        ]
+                    },
+                ),
+                patch("sigil.plans.prompt_on_tty", return_value="y\n"),
+                patch(
+                    "sigil.plans.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        ["zsh", "-lc", "printf 'done\\n'"],
+                        0,
+                        stdout="done\n",
+                        stderr="",
+                    ),
+                ),
+                patch("sigil.plans.append_event", side_effect=fake_append_event),
+            ):
+                result = CliRunner().invoke(cli, ["op", ",,,", "ship", "it"])
+            plan_events = read_jsonl("last-plan.jsonl")
+        finally:
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    assert result.exit_code == 0, result.output
+    assert "plan (2 steps):" in result.output
+    assert "printf 'done\\n'" in result.output
+    assert "done\n" in result.output
+    assert [event["type"] for event in events] == [
+        "plan_created",
+        "plan_step_decision",
+        "plan_step_executed",
+    ]
+    assert [event["type"] for event in plan_events] == [
+        "plan_created",
+        "plan_step_decision",
+        "plan_step_executed",
+    ]
+    latest_plan = plan_events[-1]["plan"]
+    assert latest_plan["steps"][0]["status"] == "done"
+    assert latest_plan["steps"][1]["status"] == "pending"
+
+
+def test_piped_triple_comma_denies_input_before_plan_generation() -> None:
+    with (
+        patch("sigil.cli.confirm_piped_input", return_value=False),
+        patch("sigil.plans.chat_json", side_effect=AssertionError("no model")),
+    ):
+        result = CliRunner().invoke(cli, ["op", ",,,", "ship"], input="notes\n")
+
+    assert result.exit_code == 2
+    assert "piped input declined" in result.stderr
+
+
+def test_plan_resume_executes_next_step_without_regenerating() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        os.environ["SIGIL_STATE_DIR"] = tmp_dir
+        os.environ["SIGIL_SESSION_ID"] = "plan-session"
+        try:
+            append_jsonl(
+                "last-plan.jsonl",
+                {
+                    "type": "plan_created",
+                    "plan": {
+                        "plan_id": "plan",
+                        "objective": "ship it",
+                        "status": "active",
+                        "steps": [
+                            {
+                                "id": "1",
+                                "title": "Done",
+                                "command": "printf 'done\\n'",
+                                "explanation": "",
+                                "status": "done",
+                            },
+                            {
+                                "id": "2",
+                                "title": "Next",
+                                "command": "printf 'next\\n'",
+                                "explanation": "Run the next step.",
+                                "status": "pending",
+                            },
+                        ],
+                    },
+                },
+            )
+            with (
+                patch("sigil.plans.chat_json", side_effect=AssertionError("no model")),
+                patch("sigil.plans.prompt_on_tty", return_value="y\n"),
+                patch(
+                    "sigil.plans.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        ["zsh", "-lc", "printf 'next\\n'"],
+                        0,
+                        stdout="next\n",
+                        stderr="",
+                    ),
+                ),
+            ):
+                result = CliRunner().invoke(cli, ["plan", "resume"])
+            plan_events = read_jsonl("last-plan.jsonl")
+        finally:
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    assert result.exit_code == 0, result.output
+    assert "printf 'next\\n'" in result.output
+    assert "next\n" in result.output
+    assert plan_events[-1]["plan"]["status"] == "completed"
+
+
+def test_plan_show_and_abort_use_last_plan_state() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        os.environ["SIGIL_STATE_DIR"] = tmp_dir
+        os.environ["SIGIL_SESSION_ID"] = "plan-session"
+        try:
+            append_jsonl(
+                "last-plan.jsonl",
+                {
+                    "type": "plan_created",
+                    "plan": {
+                        "plan_id": "plan",
+                        "objective": "ship it",
+                        "status": "active",
+                        "steps": [
+                            {
+                                "id": "1",
+                                "title": "Inspect",
+                                "command": "git status --short",
+                                "explanation": "",
+                                "status": "pending",
+                            }
+                        ],
+                    },
+                },
+            )
+            shown = CliRunner().invoke(cli, ["plan", "show"])
+            aborted = CliRunner().invoke(cli, ["plan", "abort", "--json"])
+            plan_events = read_jsonl("last-plan.jsonl")
+        finally:
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    assert shown.exit_code == 0, shown.output
+    assert "[pending] Inspect" in shown.output
+    assert aborted.exit_code == 0, aborted.output
+    assert json.loads(aborted.output)["aborted"]
+    assert plan_events[-1]["plan"]["status"] == "aborted"
 
 
 def test_op_cli_denies_piped_comma_before_model_call() -> None:

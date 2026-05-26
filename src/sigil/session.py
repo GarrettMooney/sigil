@@ -19,6 +19,7 @@ SESSION_FILES = (
     "last-tools.jsonl",
     "last-failure.json",
     "last-patch.json",
+    "last-plan.jsonl",
 )
 
 

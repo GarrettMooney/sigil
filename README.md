@@ -24,6 +24,9 @@ sigil op "^"                                recommend a repair
 sigil op "^^"                               preview and confirm repair apply
 sigil ask "what changed in this repo?"      answer a question with Pi
 sigil ask --follow-up "what should I run?"  continue the prior answer
+sigil plan show                             inspect the current durable plan
+sigil plan resume                           run the next confirmed plan step
+sigil plan abort                            abort the active plan
 ```
 
 Piped stdin is first-class:
@@ -43,7 +46,7 @@ the long-form verbs.
 ```text
 ,   -> sigil op ","
 ,,  -> sigil op ",,"
-,,, -> sigil op ",,,"
+,,, -> sigil op ",,,"   durable plan stepper
 ^   -> sigil op "^"
 ^^  -> sigil op "^^"
 ^^^ -> sigil op "^^^"
@@ -66,7 +69,7 @@ The default glyph aliases map to:
 ```text
 ,   human prompt -> model recommendation   local_model / propose / model-tainted
 ,,  human prompt -> generated command run  local_model / exec_boxed / model-tainted
-,,, reserved bounded autonomy loop         rejected for now
+,,, durable plan stepper                 per-step confirmed exec_boxed events
 ^   failed command/files -> repair proposal local_model / propose / model-tainted
 ^^  generated repair apply after confirm    local_model -> write/exec boxed
 ^^^ reserved bounded repair loop           rejected for now
@@ -260,9 +263,10 @@ history. Non-piped `,,` executes the generated command immediately. Piped comma
 routes ask before using the input, and piped `,,` asks again before execution.
 `?` answers through the web-authorized read route; `??` continues the same
 question transcript through that route. Piped question routes ask before using
-the input. `^` prints a repair proposal. `^^` previews a generated patch or
-command and asks before applying or executing it. Triple glyphs are reserved for
-bounded autonomy loops and are rejected until that loop runtime is implemented.
+the input. `,,,` creates or resumes a durable plan and offers one confirmed
+boxed step at a time. `^` prints a repair proposal. `^^` previews a generated
+patch or command and asks before applying or executing it. `???` and `^^^`
+remain reserved until their loop runtimes are implemented.
 
 ## Requirements
 

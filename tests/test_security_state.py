@@ -94,6 +94,7 @@ def test_top_level_help_lists_commands() -> None:
         "fix",
         "install",
         "patch",
+        "plan",
         "session",
     ]:
         assert command in result.output
@@ -294,6 +295,11 @@ def test_session_show_and_clear_include_patch_preview() -> None:
             json.dumps({"patch": "diff --git a/a b/a\n", "glyph": "^^"}),
             encoding="utf-8",
         )
+        plan_path = session_root / "last-plan.jsonl"
+        plan_path.write_text(
+            json.dumps({"plan": {"plan_id": "plan", "status": "active"}}) + "\n",
+            encoding="utf-8",
+        )
         try:
             shown = CliRunner().invoke(cli, ["session", "show", "--json"])
             cleared = CliRunner().invoke(cli, ["session", "clear", "--json"])
@@ -311,9 +317,12 @@ def test_session_show_and_clear_include_patch_preview() -> None:
     assert shown.exit_code == 0, shown.output
     snapshot = json.loads(shown.output)
     assert snapshot["files"]["last-patch.json"]["glyph"] == "^^"
+    assert snapshot["files"]["last-plan.jsonl"][0]["plan"]["plan_id"] == "plan"
     assert cleared.exit_code == 0, cleared.output
     assert str(patch_path) in removed["removed"]
+    assert str(plan_path) in removed["removed"]
     assert not patch_path.exists()
+    assert not plan_path.exists()
 
 
 def test_session_list_includes_last_event_context() -> None:
