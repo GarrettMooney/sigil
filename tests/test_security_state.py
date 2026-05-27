@@ -40,6 +40,11 @@ def test_legacy_record_is_low_trust() -> None:
     assert record["capability"] == "none"
 
 
+def test_question_system_prompt_points_pi_at_events_log_for_older_history() -> None:
+    assert "events.jsonl" in QUESTION_SYSTEM_PROMPT
+    assert "at most one tool call" in QUESTION_SYSTEM_PROMPT
+
+
 def test_continuation_descends_to_lowest_integrity_and_keeps_inputs() -> None:
     inherited = inherit_security(
         glyph="??",

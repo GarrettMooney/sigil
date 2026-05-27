@@ -28,7 +28,9 @@ QUESTION_SYSTEM_PROMPT = (
     "Answer concisely. You are responding to a quick question typed at a shell "
     "prompt. Use at most one tool call total. If one tool call is not enough, "
     "answer with the best available uncertainty and say what single follow-up "
-    "would help."
+    "would help. If a 'Recent shell activity' block appears in the user "
+    "message, it already shows the last few commands. For older sessions or "
+    "full provenance, the read tool can access ~/.sigil/events.jsonl."
 )
 DEFAULT_GLOW_STYLE = "notty"
 DEFAULT_GLOW_WIDTH = "88"
