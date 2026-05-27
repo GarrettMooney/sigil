@@ -428,9 +428,9 @@ sigil doctor --json
 Doctor checks:
 
 - `sigil`, `glow`, and `pi` are on `PATH`.
-- The local model endpoint is reachable from `QWEN_URL`, or from the default
-  local endpoint.
-- `QWEN_MODEL` is set when the endpoint needs an explicit model name.
+- The model endpoint is reachable from `SIGIL_MODEL_URL`, or from the default
+  local OpenAI-compatible endpoint.
+- `SIGIL_MODEL_NAME` is set when the endpoint needs an explicit model name.
 - Sigil's state directory is writable.
 - The selected shell is supported.
 - The selected shell binding is installed.
@@ -476,7 +476,10 @@ SIGIL_ENABLE_GLYPHS=0
 SIGIL_BIN=/path/to/sigil
 SIGIL_GLOW_STYLE=notty
 SIGIL_GLOW_WIDTH=88
-QWEN_URL=http://127.0.0.1:8080/v1/chat/completions
-QWEN_MODEL=qwen3.6-27b-q8-local
-QWEN_MODEL_PATH=/path/to/model.gguf
+SIGIL_MODEL_URL=http://127.0.0.1:8080/v1/chat/completions
+SIGIL_MODEL_NAME=qwen3.6-27b-q8-local
+SIGIL_MODEL_PATH=/path/to/model.gguf
 ```
+
+`QWEN_URL`, `QWEN_MODEL`, and `QWEN_MODEL_PATH` remain supported as legacy
+aliases.

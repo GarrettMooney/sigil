@@ -9,16 +9,17 @@ import shlex
 import shutil
 import socket
 import tempfile
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .openai_compat import DEFAULT_MODEL_URL, model_url
 from .state import state_dir
 
 
 SUPPORTED_SHELLS = ("zsh", "bash")
-DEFAULT_QWEN_URL = "http://127.0.0.1:8080/v1/chat/completions"
 
 
 @dataclass(frozen=True)
@@ -196,43 +197,52 @@ def check_state_writable() -> DoctorCheck:
 
 def check_endpoint(env: dict[str, str] | None = None) -> DoctorCheck:
     """Check whether the configured local model endpoint accepts TCP."""
-    values = env if env is not None else os.environ
-    qwen_url = values.get("QWEN_URL") or DEFAULT_QWEN_URL
-    parsed = urlparse(qwen_url)
+    model_endpoint = model_url() if env is None else model_url_from_env(env)
+    parsed = urlparse(model_endpoint)
     host = parsed.hostname
     if host is None:
         return DoctorCheck(
             "model:endpoint",
             "fail",
-            f"invalid QWEN_URL: {qwen_url}",
-            "Set QWEN_URL to an OpenAI-compatible chat completions endpoint.",
+            f"invalid SIGIL_MODEL_URL: {model_endpoint}",
+            "Set SIGIL_MODEL_URL to an OpenAI-compatible chat completions endpoint.",
         )
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
         with socket.create_connection((host, port), timeout=0.5):
             pass
-        return DoctorCheck("model:endpoint", "ok", qwen_url)
+        return DoctorCheck("model:endpoint", "ok", model_endpoint)
     except OSError:
         return DoctorCheck(
             "model:endpoint",
             "warn",
-            f"not reachable at {qwen_url}",
-            "Start the local model server or set QWEN_URL.",
+            f"not reachable at {model_endpoint}",
+            "Start the local model server or set SIGIL_MODEL_URL.",
         )
 
 
 def check_model_config(env: dict[str, str] | None = None) -> DoctorCheck:
     """Check whether model identity is configured."""
     values = env if env is not None else os.environ
-    model = values.get("QWEN_MODEL")
+    model = model_name_from_env(values)
     if model:
         return DoctorCheck("model:name", "ok", model)
     return DoctorCheck(
         "model:name",
         "warn",
-        "QWEN_MODEL is not set",
-        "Set QWEN_MODEL if the endpoint requires an explicit model name.",
+        "SIGIL_MODEL_NAME is not set",
+        "Set SIGIL_MODEL_NAME if the endpoint requires an explicit model name.",
     )
+
+
+def model_url_from_env(env: Mapping[str, str]) -> str:
+    """Return model URL from explicit env values, accepting legacy aliases."""
+    return env.get("SIGIL_MODEL_URL") or env.get("QWEN_URL") or DEFAULT_MODEL_URL
+
+
+def model_name_from_env(env: Mapping[str, str]) -> str:
+    """Return model name from explicit env values, accepting legacy aliases."""
+    return env.get("SIGIL_MODEL_NAME") or env.get("QWEN_MODEL") or ""
 
 
 def check_shell_support(shell: str | None) -> DoctorCheck:

@@ -59,9 +59,9 @@ sigil install zsh --no-glyphs
 Useful environment variables:
 
 ```sh
-QWEN_URL=http://127.0.0.1:8080/v1/chat/completions
-QWEN_MODEL=qwen3.6-27b-q8-local
-QWEN_MODEL_PATH=/path/to/model.gguf
+SIGIL_MODEL_URL=http://127.0.0.1:8080/v1/chat/completions
+SIGIL_MODEL_NAME=qwen3.6-27b-q8-local
+SIGIL_MODEL_PATH=/path/to/model.gguf
 SIGIL_STATE_DIR=$HOME/.sigil
 SIGIL_GLOW_STYLE=notty
 SIGIL_GLOW_WIDTH=88
@@ -71,6 +71,8 @@ By default, command generation expects a local endpoint at
 `http://127.0.0.1:8080/v1/chat/completions`. The question route uses `pi` with
 `read,web_search` tools and may start the helper script at
 `~/.config/pi/run-qwen36-q8.sh` if the local server is not already listening.
+The older `QWEN_URL`, `QWEN_MODEL`, and `QWEN_MODEL_PATH` variables are still
+accepted as aliases.
 
 ## Quick Start
 

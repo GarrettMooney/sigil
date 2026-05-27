@@ -8,7 +8,7 @@ import sys
 import uuid
 from typing import Any
 
-from .qwen import chat_json, ensure_server
+from .openai_compat import chat_json, ensure_server
 from .security import create_trust_metadata
 from .state import append_event, append_jsonl, read_jsonl
 from .tty import prompt_on_tty

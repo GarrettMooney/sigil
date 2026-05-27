@@ -11,7 +11,7 @@ from typing import Literal, cast
 
 from .patches import apply_patch, last_patch, record_patch_apply, store_patch_preview
 from .policy import ExecutionPolicy, PolicyDecision, evaluate_policy
-from .qwen import chat_json, chat_text, ensure_server
+from .openai_compat import chat_json, chat_text, ensure_server
 from .security import create_trust_metadata
 from .state import append_event, append_jsonl, read_jsonl
 from .tty import confirm_on_tty

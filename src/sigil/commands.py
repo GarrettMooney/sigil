@@ -11,7 +11,7 @@ import sys
 from typing import Any, TextIO
 
 from .ansi import LOVE, MUTED, RESET
-from .qwen import chat_json, ensure_server
+from .openai_compat import chat_json, ensure_server
 from .security import (
     candidate_prefix,
     create_trust_metadata,
@@ -61,7 +61,7 @@ def generate(prompt: str) -> tuple[list[dict[str, str]], dict[str, Any]]:
         data = chat_json(COMMAND_SYSTEM, prompt, COMMAND_SCHEMA)
     except RuntimeError as exc:
         print("\r\033[K", end="", file=sys.stderr)
-        print(f"{LOVE}✗ qwen request failed{RESET}", file=sys.stderr)
+        print(f"{LOVE}✗ model request failed{RESET}", file=sys.stderr)
         print(f"  {exc}", file=sys.stderr)
         print("  Check that the local model server is still running.", file=sys.stderr)
         raise SystemExit(1) from exc

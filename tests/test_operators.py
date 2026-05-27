@@ -853,6 +853,7 @@ def test_ask_follow_up_sends_confirmed_piped_input_to_web_route() -> None:
 def test_op_cli_confirms_piped_comma_before_model_call() -> None:
     with (
         patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.operators.ensure_server", return_value=True),
         patch(
             "sigil.operators.chat_json",
             return_value={
@@ -872,6 +873,7 @@ def test_op_cli_confirms_piped_comma_before_model_call() -> None:
 def test_op_cli_confirms_piped_double_comma_command_before_execution() -> None:
     with (
         patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.operators.ensure_server", return_value=True),
         patch("sigil.operators.confirm_execution", return_value=False),
         patch(
             "sigil.operators.chat_json",
