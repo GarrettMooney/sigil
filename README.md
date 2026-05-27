@@ -13,7 +13,7 @@ distribution name. The installed command is still `sigil`.
 
 Sigil has two user-facing surfaces:
 
-- CLI verbs such as `sigil command`, `sigil ask`, `sigil plan`, and
+- CLI verbs such as `sigil command`, `sigil ask`, `sigil act`, and
   `sigil patch`.
 - Optional shell glyphs such as `,`, `,,`, `?`, and `??`, installed by
   `sigil install`.
@@ -112,7 +112,7 @@ Installed zsh and Bash bindings expose these optional shortcuts:
 ```text
 ,    recommend one command or patch action
 ,,   generate and run one command, or preview and confirm one patch
-,,,  create or resume a durable plan, one confirmed step at a time
+,,,  run one confirmed Pi edit action
 ?    ask a fresh read/web question
 ??   follow up on the previous question in the same shell session
 ???  ask for a more exhaustive read-only answer
@@ -123,7 +123,7 @@ Examples:
 ```sh
 , find wav files
 ,, run the relevant tests
-,,, clean up this branch and verify it
+,,, fix the failing parser test
 ? why did this git command fail?
 ?? what should I try first?
 ??? explain the tradeoffs in detail
@@ -132,15 +132,16 @@ Examples:
 `,` prints a proposal and, when the proposal is a command, the shell binding
 adds that command to shell history for review and editing. `,,` executes command
 proposals through your shell. Patch proposals are shown first and applied only
-after confirmation. `,,,` stores a plan and asks for confirmation before each
-step; each invocation runs at most one accepted step.
+after confirmation. `,,,` asks before handing the objective to Pi, gives Pi
+read/search/edit/write tools, and returns control to the shell after one
+bounded edit pass.
 
 ## CLI Commands
 
 ```text
 sigil command [--select] [--json] [PROMPT]
 sigil ask [--follow-up] [--json] [QUESTION]
-sigil plan [show|resume|abort] [--json]
+sigil act [show|resume|abort] [--json]
 sigil patch [show|check|apply] [--json] [--yes]
 sigil events [--limit N] [--json] [--raw]
 sigil events lineage [EVENT_ID] [--json]
@@ -163,20 +164,20 @@ git diff --name-only | sigil command "run the relevant tests"
 See [docs/cli.md](docs/cli.md) for the user-facing CLI contract and JSON
 examples.
 
-## Plans and Patches
+## Acts and Patches
 
-Create a durable plan with the triple-comma glyph:
+Run one confirmed Pi edit action with the triple-comma glyph:
 
 ```sh
 ,,, migrate this package to the new API and run the tests
 ```
 
-Inspect or continue it later:
+Inspect or control the action state:
 
 ```sh
-sigil plan show
-sigil plan resume
-sigil plan abort
+sigil act show
+sigil act resume
+sigil act abort
 ```
 
 When `,,` produces a unified diff, Sigil stores it as the latest patch preview
@@ -202,7 +203,7 @@ Current user-visible state:
 events.jsonl                              global event log
 sessions/<session-id>/last-failure.json   latest failed shell command
 sessions/<session-id>/last-patch.json     latest patch preview
-sessions/<session-id>/last-plan.jsonl     durable plan snapshots
+sessions/<session-id>/last-act.jsonl      confirmed Pi edit action snapshots
 sessions/<session-id>/last-question.jsonl same-session question transcript
 sessions/<session-id>/last-tools.jsonl    latest Pi tool trace
 sessions/<session-id>/recent-turns.jsonl  recent shell turns recorded by bindings
@@ -225,13 +226,13 @@ sigil events lineage
 
 ## Trust Model
 
-Sigil records command suggestions, question answers, patch previews, and plan
+Sigil records command suggestions, question answers, patch previews, and act
 steps with trust metadata. The important user model is:
 
 ```text
 , and ,, are model-authored command/patch routes.
 ? and ?? are read/web question routes with no execute path.
-,,, executes only one confirmed plan step at a time.
+,,, runs only one confirmed Pi edit action at a time.
 ```
 
 For details, see [docs/security-lattice.md](docs/security-lattice.md).

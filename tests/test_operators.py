@@ -472,7 +472,7 @@ def test_double_comma_policy_allows_execution_classification() -> None:
     assert "delete" in decision.classification.classes
 
 
-def test_triple_comma_policy_defers_to_plan_stepper() -> None:
+def test_triple_comma_policy_defers_to_act_runner() -> None:
     decision = evaluate_policy(
         glyph=",,,",
         depth=3,
@@ -481,7 +481,7 @@ def test_triple_comma_policy_defers_to_plan_stepper() -> None:
     )
 
     assert decision.status == "preview"
-    assert "plan stepper" in decision.message
+    assert "act runner" in decision.message
 
 
 def test_dry_run_policy_previews_without_execution() -> None:
@@ -591,53 +591,32 @@ def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
     assert "unsupported operator: ^" in result.output
 
 
-def test_triple_comma_creates_plan_and_executes_one_confirmed_step() -> None:
+def test_triple_comma_creates_act_and_executes_one_confirmed_step() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
         os.environ["SIGIL_STATE_DIR"] = tmp_dir
-        os.environ["SIGIL_SESSION_ID"] = "plan-session"
+        os.environ["SIGIL_SESSION_ID"] = "act-session"
         events = []
+        pi_calls = []
 
         def fake_append_event(event: dict[str, object]) -> dict[str, object]:
             stored = {"id": f"event-{len(events)}", **event}
             events.append(stored)
             return stored
 
+        def fake_run_pi(*args: object, **kwargs: object) -> int:
+            pi_calls.append((args, kwargs))
+            return 0
+
         try:
             with (
-                patch("sigil.plans.ensure_server", return_value=True),
-                patch(
-                    "sigil.plans.chat_json",
-                    return_value={
-                        "steps": [
-                            {
-                                "title": "Say done",
-                                "command": "printf 'done\\n'",
-                                "explanation": "Proves one boxed step runs.",
-                            },
-                            {
-                                "title": "Say next",
-                                "command": "printf 'next\\n'",
-                                "explanation": "Remains pending.",
-                            },
-                        ]
-                    },
-                ),
-                patch("sigil.plans.prompt_on_tty", return_value="y\n"),
-                patch(
-                    "sigil.plans.subprocess.run",
-                    return_value=subprocess.CompletedProcess(
-                        ["zsh", "-lc", "printf 'done\\n'"],
-                        0,
-                        stdout="done\n",
-                        stderr="",
-                    ),
-                ),
-                patch("sigil.plans.append_event", side_effect=fake_append_event),
+                patch("sigil.acts.prompt_on_tty", return_value="y\n"),
+                patch("sigil.acts.run_pi_agent_step", side_effect=fake_run_pi),
+                patch("sigil.acts.append_event", side_effect=fake_append_event),
             ):
                 result = CliRunner().invoke(cli, ["op", ",,,", "ship", "it"])
-            plan_events = read_jsonl("last-plan.jsonl")
+            act_events = read_jsonl("last-act.jsonl")
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)
@@ -649,28 +628,30 @@ def test_triple_comma_creates_plan_and_executes_one_confirmed_step() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
     assert result.exit_code == 0, result.output
-    assert "plan (2 steps):" in result.output
-    assert "printf 'done\\n'" in result.output
-    assert "done\n" in result.output
+    assert "sigil act (active):" in result.output
+    assert "pi --tools read,grep,find,ls,bash,edit,write" in result.output
+    assert len(pi_calls) == 1
     assert [event["type"] for event in events] == [
-        "plan_created",
-        "plan_step_decision",
-        "plan_step_executed",
+        "act_created",
+        "act_step_decision",
+        "act_step_executed",
+        "act_completed",
     ]
-    assert [event["type"] for event in plan_events] == [
-        "plan_created",
-        "plan_step_decision",
-        "plan_step_executed",
+    assert [event["type"] for event in act_events] == [
+        "act_created",
+        "act_step_decision",
+        "act_step_executed",
+        "act_completed",
     ]
-    latest_plan = plan_events[-1]["plan"]
-    assert latest_plan["steps"][0]["status"] == "done"
-    assert latest_plan["steps"][1]["status"] == "pending"
+    latest_act = act_events[-1]["act"]
+    assert latest_act["status"] == "completed"
+    assert latest_act["steps"][0]["status"] == "done"
 
 
-def test_piped_triple_comma_denies_input_before_plan_generation() -> None:
+def test_piped_triple_comma_denies_input_before_act_generation() -> None:
     with (
         patch("sigil.cli.confirm_piped_input", return_value=False),
-        patch("sigil.plans.chat_json", side_effect=AssertionError("no model")),
+        patch("sigil.acts.run_pi_agent_step", side_effect=AssertionError("no pi")),
     ):
         result = CliRunner().invoke(cli, ["op", ",,,", "ship"], input="notes\n")
 
@@ -678,34 +659,33 @@ def test_piped_triple_comma_denies_input_before_plan_generation() -> None:
     assert "piped input declined" in result.stderr
 
 
-def test_plan_resume_executes_next_step_without_regenerating() -> None:
+def test_act_resume_executes_pending_step_without_regenerating() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
         os.environ["SIGIL_STATE_DIR"] = tmp_dir
-        os.environ["SIGIL_SESSION_ID"] = "plan-session"
+        os.environ["SIGIL_SESSION_ID"] = "act-session"
+        pi_calls = []
+
+        def fake_run_pi(*args: object, **kwargs: object) -> int:
+            pi_calls.append((args, kwargs))
+            return 0
+
         try:
             append_jsonl(
-                "last-plan.jsonl",
+                "last-act.jsonl",
                 {
-                    "type": "plan_created",
-                    "plan": {
-                        "plan_id": "plan",
+                    "type": "act_created",
+                    "act": {
+                        "act_id": "act",
                         "objective": "ship it",
                         "status": "active",
                         "steps": [
                             {
                                 "id": "1",
-                                "title": "Done",
-                                "command": "printf 'done\\n'",
-                                "explanation": "",
-                                "status": "done",
-                            },
-                            {
-                                "id": "2",
-                                "title": "Next",
-                                "command": "printf 'next\\n'",
-                                "explanation": "Run the next step.",
+                                "title": "Run one Pi edit step",
+                                "command": "pi --tools read,grep,find,ls,bash,edit,write",
+                                "explanation": "Run the pending edit.",
                                 "status": "pending",
                             },
                         ],
@@ -713,20 +693,12 @@ def test_plan_resume_executes_next_step_without_regenerating() -> None:
                 },
             )
             with (
-                patch("sigil.plans.chat_json", side_effect=AssertionError("no model")),
-                patch("sigil.plans.prompt_on_tty", return_value="y\n"),
-                patch(
-                    "sigil.plans.subprocess.run",
-                    return_value=subprocess.CompletedProcess(
-                        ["zsh", "-lc", "printf 'next\\n'"],
-                        0,
-                        stdout="next\n",
-                        stderr="",
-                    ),
-                ),
+                patch("sigil.acts.create_act", side_effect=AssertionError("no create")),
+                patch("sigil.acts.prompt_on_tty", return_value="y\n"),
+                patch("sigil.acts.run_pi_agent_step", side_effect=fake_run_pi),
             ):
-                result = CliRunner().invoke(cli, ["plan", "resume"])
-            plan_events = read_jsonl("last-plan.jsonl")
+                result = CliRunner().invoke(cli, ["act", "resume"])
+            act_events = read_jsonl("last-act.jsonl")
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)
@@ -738,24 +710,24 @@ def test_plan_resume_executes_next_step_without_regenerating() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
     assert result.exit_code == 0, result.output
-    assert "printf 'next\\n'" in result.output
-    assert "next\n" in result.output
-    assert plan_events[-1]["plan"]["status"] == "completed"
+    assert "Run the pending edit." in result.output
+    assert len(pi_calls) == 1
+    assert act_events[-1]["act"]["status"] == "completed"
 
 
-def test_plan_show_and_abort_use_last_plan_state() -> None:
+def test_act_show_and_abort_use_last_act_state() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
         os.environ["SIGIL_STATE_DIR"] = tmp_dir
-        os.environ["SIGIL_SESSION_ID"] = "plan-session"
+        os.environ["SIGIL_SESSION_ID"] = "act-session"
         try:
             append_jsonl(
-                "last-plan.jsonl",
+                "last-act.jsonl",
                 {
-                    "type": "plan_created",
-                    "plan": {
-                        "plan_id": "plan",
+                    "type": "act_created",
+                    "act": {
+                        "act_id": "act",
                         "objective": "ship it",
                         "status": "active",
                         "steps": [
@@ -770,9 +742,9 @@ def test_plan_show_and_abort_use_last_plan_state() -> None:
                     },
                 },
             )
-            shown = CliRunner().invoke(cli, ["plan", "show"])
-            aborted = CliRunner().invoke(cli, ["plan", "abort", "--json"])
-            plan_events = read_jsonl("last-plan.jsonl")
+            shown = CliRunner().invoke(cli, ["act", "show"])
+            aborted = CliRunner().invoke(cli, ["act", "abort", "--json"])
+            act_events = read_jsonl("last-act.jsonl")
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)
@@ -787,7 +759,7 @@ def test_plan_show_and_abort_use_last_plan_state() -> None:
     assert "[pending] Inspect" in shown.output
     assert aborted.exit_code == 0, aborted.output
     assert json.loads(aborted.output)["aborted"]
-    assert plan_events[-1]["plan"]["status"] == "aborted"
+    assert act_events[-1]["act"]["status"] == "aborted"
 
 
 def test_op_cli_denies_piped_comma_before_model_call() -> None:

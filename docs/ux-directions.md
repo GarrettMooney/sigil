@@ -37,12 +37,11 @@ Run one generated action:
 ,, run the formatter for files I changed
 ```
 
-Manage a longer task one step at a time:
+Let Pi take one bounded edit action:
 
 ```sh
-,,, clean up this branch and verify it
-sigil plan show
-sigil plan resume
+,,, fix the failing parser test
+sigil act show
 ```
 
 ## Review Points
@@ -51,14 +50,14 @@ The shell remains the review boundary:
 
 - `,` proposes and does not execute.
 - `,,` executes one command proposal or previews and confirms one patch.
-- `,,,` asks before each plan step and runs at most one step per invocation.
+- `,,,` asks before one Pi edit action and then returns control to the shell.
 - `?`, `??`, and `???` answer questions and have no execute path.
 
 ## Session Continuity
 
 Installed shell bindings set `SIGIL_SESSION_ID` once when the shell starts.
-That keeps question transcripts, patch previews, failure context, and durable
-plans scoped to one terminal window by default.
+That keeps question transcripts, patch previews, failure context, and act state
+scoped to one terminal window by default.
 
 Useful inspection commands:
 

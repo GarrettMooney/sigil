@@ -6,7 +6,7 @@ Sigil's shell glyphs are optional shortcuts installed by `sigil install zsh` or
 ```text
 ,    recommend one command or patch action
 ,,   generate and run one command, or preview and confirm one patch
-,,,  create or resume a durable plan, one confirmed step at a time
+,,,  run one confirmed Pi edit action
 
 ?    ask a fresh read/web question
 ??   follow up on the previous question in the same shell session
@@ -36,17 +36,16 @@ Use `,,` when you want Sigil to take one action:
 Command proposals run through your shell. Patch proposals are stored, shown as a
 preview, and applied only after confirmation.
 
-Use `,,,` for bounded multi-step work:
+Use `,,,` for one bounded Pi edit action:
 
 ```sh
-,,, clean up this branch and verify it
-sigil plan show
-sigil plan resume
-sigil plan abort
+,,, fix the failing parser test
+sigil act show
+sigil act abort
 ```
 
-The plan is durable in the current shell session. Each invocation runs at most
-one accepted step.
+The act state is durable in the current shell session. Each invocation runs at
+most one accepted Pi edit pass.
 
 ## Question Routes
 

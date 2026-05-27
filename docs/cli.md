@@ -12,7 +12,7 @@ written to stdout.
 ```text
 sigil command [--select] [--json] [PROMPT]
 sigil ask [--follow-up] [--json] [QUESTION]
-sigil plan [show|resume|abort] [--json]
+sigil act [show|resume|abort] [--json]
 sigil patch [show|check|apply] [--json] [--yes]
 sigil events [--limit N] [--json] [--raw]
 sigil events list [--limit N] [--json] [--raw]
@@ -31,7 +31,7 @@ sigil ask "what changed in this repo?"
 sigil ask --follow-up "what should I test?"
 git diff | sigil ask "review risky changes"
 git diff --name-only | sigil command "run the relevant tests"
-sigil plan show --json
+sigil act show --json
 sigil patch check
 sigil events --limit 50
 sigil session show --json
@@ -176,7 +176,7 @@ Glyphs are installed shell functions over the CLI runtime. Install them with
 ```text
 ,    recommend one command or patch action
 ,,   generate and run one command, or preview and confirm one patch
-,,,  create or resume a durable plan, one confirmed step at a time
+,,,  run one confirmed Pi edit action
 ?    ask a fresh read/web question
 ??   follow up on the previous question in the same shell session
 ???  ask for a more exhaustive read-only answer
@@ -187,7 +187,7 @@ Examples:
 ```sh
 , find files larger than 10 MB
 ,, run the relevant tests
-,,, clean up this branch and verify it
+,,, fix the failing parser test
 ? why does git say this branch diverged?
 ?? what is the safest next command?
 ??? explain the options in detail
@@ -195,8 +195,9 @@ Examples:
 
 `,` prints a proposal. If the proposal is a command, the shell binding adds the
 command to shell history. `,,` runs command proposals through your shell. Patch
-proposals are previewed and require confirmation before apply. `,,,` persists a
-plan and executes at most one accepted step per invocation.
+proposals are previewed and require confirmation before apply. `,,,` asks for
+confirmation, invokes Pi with read/search/edit/write tools, and then returns
+control to the shell.
 
 To install bindings without glyphs:
 
@@ -204,34 +205,34 @@ To install bindings without glyphs:
 sigil install zsh --no-glyphs
 ```
 
-## `sigil plan`
+## `sigil act`
 
-Inspects or controls the durable plan used by `,,,`.
+Inspects or controls the Pi edit action used by `,,,`.
 
 ```sh
-sigil plan
-sigil plan show
-sigil plan resume
-sigil plan abort
-sigil plan show --json
+sigil act
+sigil act show
+sigil act resume
+sigil act abort
+sigil act show --json
 ```
 
-`resume` runs the next pending step only after confirmation. If there is no
-active plan, it exits with status `2`.
+`resume` runs the pending action only after confirmation. If there is no active
+action, it exits with status `2`.
 
-JSON output for `show` is the stored plan object, or `null`:
+JSON output for `show` is the stored act object, or `null`:
 
 ```json
 {
-  "plan_id": "1a4e...",
-  "objective": "clean up this branch and verify it",
+  "act_id": "1a4e...",
+  "objective": "fix the failing parser test",
   "status": "active",
   "steps": [
     {
       "id": "1",
-      "title": "Inspect changes",
-      "command": "git status --short",
-      "explanation": "Check the worktree before editing.",
+      "title": "Run one Pi edit step",
+      "command": "pi --tools read,grep,find,ls,bash,edit,write",
+      "explanation": "One confirmed read/edit/write pass, then control returns to the shell.",
       "status": "pending"
     }
   ]
@@ -241,7 +242,7 @@ JSON output for `show` is the stored plan object, or `null`:
 `abort --json` returns:
 
 ```json
-{"aborted":true,"plan":{ "...": "..." }}
+{"aborted":true,"act":{ "...": "..." }}
 ```
 
 ## `sigil patch`
@@ -368,7 +369,7 @@ continuity files:
     "last-tools.jsonl": [],
     "last-failure.json": null,
     "last-patch.json": null,
-    "last-plan.jsonl": [],
+    "last-act.jsonl": [],
     "recent-turns.jsonl": []
   }
 }
@@ -460,7 +461,7 @@ By default, Sigil writes state under `~/.sigil/`.
 events.jsonl                              global event log
 sessions/<session-id>/last-failure.json   latest failed shell command
 sessions/<session-id>/last-patch.json     latest patch preview
-sessions/<session-id>/last-plan.jsonl     durable plan snapshots
+sessions/<session-id>/last-act.jsonl      confirmed Pi edit action snapshots
 sessions/<session-id>/last-question.jsonl same-session question transcript
 sessions/<session-id>/last-tools.jsonl    latest Pi tool trace
 sessions/<session-id>/recent-turns.jsonl  recent shell turns recorded by bindings

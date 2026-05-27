@@ -50,6 +50,18 @@ def summarize(tool: str, args: object) -> str:
     tool_args = cast(dict[str, object], args)
     if tool == "read":
         return str(tool_args.get("path") or tool_args.get("file_path") or "")
+    if tool in {"edit", "write"}:
+        return str(tool_args.get("path") or tool_args.get("file_path") or "")
+    if tool == "bash":
+        return str(tool_args.get("command") or tool_args.get("cmd") or "")
+    if tool in {"grep", "find", "ls"}:
+        return str(
+            tool_args.get("pattern")
+            or tool_args.get("query")
+            or tool_args.get("path")
+            or tool_args.get("glob")
+            or ""
+        )
     if tool == "web_search":
         return str(tool_args.get("query") or tool_args.get("q") or "")
     return " ".join(

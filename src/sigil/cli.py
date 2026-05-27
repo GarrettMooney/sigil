@@ -32,7 +32,7 @@ from .patches import (
     record_patch_apply,
     record_patch_check,
 )
-from .plans import abort_active_plan, last_plan, print_plan, run_plan_stepper
+from .acts import abort_active_act, last_act, print_act, run_act_stepper
 from .policy import ExecutionPolicy
 from .pi_stream import stream_events
 from .question import ask
@@ -218,9 +218,9 @@ def cmd_op(
         print_json_line(invocation.to_dict())
         return 0
 
-    if should_run_plan_operator(invocation):
+    if should_run_act_operator(invocation):
         if dry_run:
-            return run_plan_stepper(
+            return run_act_stepper(
                 objective=prompt,
                 stdin_text=stdin_text,
                 dry_run=True,
@@ -230,7 +230,7 @@ def cmd_op(
                 print("sigil op: piped input declined", file=sys.stderr)
                 raise click.exceptions.Exit(2)
         try:
-            return run_plan_stepper(objective=prompt, stdin_text=stdin_text)
+            return run_act_stepper(objective=prompt, stdin_text=stdin_text)
         except RuntimeError as exc:
             print(f"sigil op: {exc}", file=sys.stderr)
             return 1
@@ -289,8 +289,8 @@ def should_confirm_execution(invocation: object) -> bool:
     )
 
 
-def should_run_plan_operator(invocation: object) -> bool:
-    """Return whether this invocation targets the implemented plan stepper."""
+def should_run_act_operator(invocation: object) -> bool:
+    """Return whether this invocation targets the implemented act runner."""
     return (
         getattr(invocation, "base", None) == ","
         and getattr(invocation, "depth", 0) == 3
@@ -337,35 +337,53 @@ def stdin_preview(text: str) -> str:
     return preview
 
 
-@cli.command("plan")
+@cli.command("act")
 @click.argument(
-    "plan_command",
+    "act_command",
     required=False,
     default="show",
     type=click.Choice(["show", "resume", "abort"]),
 )
 @click.option("--json", "json_output", is_flag=True)
-def cmd_plan(plan_command: str, json_output: bool) -> int:
-    """Inspect, resume, or abort the current durable plan."""
-    if plan_command == "resume":
-        return run_plan_stepper(objective="")
-    if plan_command == "abort":
-        plan = abort_active_plan()
+def cmd_act(act_command: str, json_output: bool) -> int:
+    """Inspect, resume, or abort the current Pi edit action."""
+    return run_act_command(act_command, json_output)
+
+
+@cli.command("plan", hidden=True)
+@click.argument(
+    "act_command",
+    required=False,
+    default="show",
+    type=click.Choice(["show", "resume", "abort"]),
+)
+@click.option("--json", "json_output", is_flag=True)
+def cmd_plan(act_command: str, json_output: bool) -> int:
+    """Compatibility alias for `sigil act`."""
+    return run_act_command(act_command, json_output)
+
+
+def run_act_command(act_command: str, json_output: bool) -> int:
+    """Run the act control subcommands."""
+    if act_command == "resume":
+        return run_act_stepper(objective="")
+    if act_command == "abort":
+        act = abort_active_act()
         if json_output:
-            pretty_print_json({"aborted": bool(plan), "plan": plan})
-        elif plan is None:
-            print("no active plan")
+            pretty_print_json({"aborted": bool(act), "act": act})
+        elif act is None:
+            print("no active act")
         else:
-            print(f"aborted plan {plan.get('plan_id')}")
+            print(f"aborted act {act.get('act_id')}")
         return 0
 
-    plan = last_plan()
+    act = last_act()
     if json_output:
-        pretty_print_json(plan)
-    elif plan is None:
-        print("no plan recorded")
+        pretty_print_json(act)
+    elif act is None:
+        print("no act recorded")
     else:
-        print_plan(plan)
+        print_act(act)
     return 0
 
 
@@ -673,6 +691,11 @@ def event_action(event: dict[str, object], glyph: str, event_type: str) -> str:
         "patch_checked": "patch check",
         "patch_applied": "patch applied",
         "patch_apply_failed": "patch failed",
+        "act_created": "act created",
+        "act_step_decision": "act decision",
+        "act_step_executed": "act executed",
+        "act_completed": "act complete",
+        "act_aborted": "act aborted",
         "plan_created": "plan created",
         "plan_step_decision": "plan decision",
         "plan_step_executed": "plan executed",
@@ -707,6 +730,12 @@ def event_detail(event: dict[str, object], event_type: str) -> str:
         return command_status_summary(event)
     if event_type in {"patch_checked", "patch_applied", "patch_apply_failed"}:
         return command_status_summary(event)
+    if event_type.startswith("act_"):
+        if event_type == "act_step_executed":
+            return command_status_summary(event)
+        return clean_summary_text(event.get("objective")) or clean_summary_text(
+            event.get("command")
+        )
     if event_type.startswith("plan_"):
         if event_type == "plan_step_executed":
             return command_status_summary(event)

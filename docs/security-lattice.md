@@ -47,9 +47,9 @@ Fields:
      patch application event: capability=write_boxed
      taint=["model"]
 
-,,,  durable plan
-     plan proposal events: capability=propose
-     confirmed step execution events: capability=exec_boxed
+,,,  confirmed Pi edit action
+     act creation events: capability=propose
+     confirmed Pi execution events: capability=exec_boxed
      taint=["model"]
 
 ?    read/web question
@@ -141,7 +141,7 @@ current context.
 - `,` recommends; it does not execute.
 - `,,` can execute a generated command, or preview and confirm a generated
   patch.
-- `,,,` executes at most one confirmed plan step per invocation.
+- `,,,` executes at most one confirmed Pi edit action per invocation.
 - `?`, `??`, and `???` are read-only question routes.
 - `??` continues the same-session question transcript; it does not switch to a
   command route.

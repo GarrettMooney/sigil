@@ -385,7 +385,7 @@ def depth_guidance(invocation: OperatorInvocation) -> str:
             return "Comma means recommend one concrete next action."
         if invocation.depth == 2:
             return "Comma depth two means generate exactly one command or patch that Sigil will execute or apply."
-        return "Comma depth three is handled by the durable plan stepper."
+        return "Comma depth three is handled by the confirmed Pi act runner."
     return {
         1: "Use a quick pass.",
         2: "Use a deeper pass and call out important caveats.",
