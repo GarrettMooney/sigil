@@ -79,18 +79,6 @@ sigil_question_loop() {
   "$__sigil_bin" op "???" "$@"
 }
 
-sigil_fix() {
-  "$__sigil_bin" op "^" "$@"
-}
-
-sigil_deep_fix() {
-  "$__sigil_bin" op "^^" "$@"
-}
-
-sigil_fix_loop() {
-  "$__sigil_bin" op "^^^" "$@"
-}
-
 # ── Optional glyph functions ─────────────────────────────────────────────
 
 if __sigil_glyphs_enabled; then
@@ -100,9 +88,6 @@ if __sigil_glyphs_enabled; then
   function ? { sigil_question "$*"; }
   function ?? { sigil_follow_up "$*"; }
   function ??? { sigil_question_loop "$*"; }
-  function ^ { sigil_fix "$*"; }
-  function ^^ { sigil_deep_fix "$*"; }
-  function ^^^ { sigil_fix_loop "$*"; }
 
   if [[ $- == *i* ]]; then
     alias ,='sigil_command'
@@ -111,9 +96,6 @@ if __sigil_glyphs_enabled; then
     alias '?'='sigil_question'
     alias '??'='sigil_follow_up'
     alias '???'='sigil_question_loop'
-    alias '^'='sigil_fix'
-    alias '^^'='sigil_deep_fix'
-    alias '^^^'='sigil_fix_loop'
   fi
 fi
 
@@ -137,7 +119,7 @@ __sigil_precmd() {
   command="$(__sigil_history_line)" || return "$exit_status"
   if [[ $exit_status -ne 0 && -n "$command" && "$command" != "$__sigil_last_failed_history" ]]; then
     case "$command" in
-      ,*|\?*|\^*|sigil\ *|__sigil_*) ;;
+      ,*|\?*|sigil\ *|__sigil_*) ;;
       *)
         record_args=(record-failure --status "$exit_status" --cwd "$PWD")
         [[ -n "${SIGIL_FAILURE_STDOUT:-}" ]] && record_args+=(--stdout-snippet "$SIGIL_FAILURE_STDOUT")

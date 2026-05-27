@@ -66,7 +66,6 @@ class ExecutionPolicy:
 
     dry_run: bool = False
     confirm_execution: bool = False
-    confirm_repair: bool = False
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-serializable representation."""
@@ -129,19 +128,13 @@ def evaluate_policy(
     if depth == 3:
         return PolicyDecision(
             status="preview",
-            message=f"{glyph} bounded autonomy loop is reserved but not implemented",
+            message=f"{glyph} is handled by its depth-three route",
             classification=classification,
         )
     if glyph.startswith(",") and depth == 2:
         return PolicyDecision(
             status="allowed",
-            message=f"{glyph} executes the generated command",
-            classification=classification,
-        )
-    if glyph.startswith("^") and depth == 2 and policy.confirm_repair:
-        return PolicyDecision(
-            status="allowed",
-            message=f"{glyph} applies the generated repair after confirmation",
+            message=f"{glyph} executes or applies the generated proposal",
             classification=classification,
         )
     return PolicyDecision(

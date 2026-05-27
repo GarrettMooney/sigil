@@ -46,8 +46,8 @@ higher-integrity boundary.
 none < propose < read < write_boxed < exec_boxed
 ```
 
-Capability is capped by the invocation route. Today the implemented routes are
-only `propose` and `read`.
+Capability is capped by the invocation route. The implemented routes include
+`propose`, `read`, and boxed write/exec after explicit comma depth.
 
 `taint` is the accumulated source set. It is intentionally simple and visible:
 `model`, `web`, and `legacy` are the important current labels. Continuations
@@ -79,14 +79,11 @@ The implemented grammar is:
 
 ```text
 ,   recommend a concrete next action
-,,  generate and execute a shell command
+,,  generate and execute/apply one typed command or patch proposal
 ,,, durable plan stepper, one confirmed boxed step at a time
 ?   web-authorized question
 ??  web-authorized question continuation
-??? reserved bounded research loop, rejected for now
-^   recommend a repair for the last failure or stdin targets
-^^  preview and confirm generated repair application
-^^^ reserved bounded repair loop, rejected for now
+??? exhaustive web-authorized question
 ```
 
 It maps to the lattice as follows:
@@ -98,28 +95,15 @@ It maps to the lattice as follows:
     taint=["model"]
     provisional=false
 
-,,  human prompt -> generated command execution
+,,  human prompt -> generated command execution or patch application
     integrity=local_model
-    capability=exec_boxed
+    capability=exec_boxed or write_boxed
     taint=["model"]
 
 ,,, durable plan stepper
     integrity=local_model for plan proposals
     capability=propose, then exec_boxed per confirmed step
     taint=["model"]
-
-^   failed command/files -> repair proposal
-    integrity=local_model
-    capability=propose
-    taint=["model"]
-
-^^  failed command/files -> confirmed repair application
-    integrity=local_model
-    capability=propose, then write_boxed or exec_boxed after confirmation
-    taint=["model"]
-
-^^^ reserved bounded repair loop
-    rejected before model call or mutation
 
 ?   question
     integrity=web
@@ -133,13 +117,16 @@ It maps to the lattice as follows:
     taint includes "web"
     provisional=true
 
-??? reserved bounded research loop
-    rejected before web call
+??? exhaustive question
+    integrity=web
+    capability=read
+    taint includes "web"
+    provisional=true
 ```
 
-The `?` and `??` routes both enter through `sigil op` and then invoke Pi with
-`read,web_search`, so they are web-tainted by construction. Both routes are
-read-only and have no execute path.
+The `?`, `??`, and `???` routes all enter through `sigil op` and then invoke Pi
+with `read,web_search`, so they are web-tainted by construction. All question
+routes are read-only and have no execute path.
 
 ## Visible Descent
 
@@ -186,15 +173,15 @@ This does not call a model, append events, or create executable shell text. A
 session is one terminal shell by default; `SIGIL_SESSION_ID` or
 `SIGIL_SESSION_DIR` can intentionally override that boundary.
 
-Failure repair records may include bounded stdout/stderr snippets and safe local
-cwd/git context. These are inputs to model-authored repair proposals, so `^`
-remains `local_model / propose / model-tainted`. `^^` starts with the same
-model-authored proposal, then requires confirmation before crossing into
-`write_boxed` for patch application or `exec_boxed` for a repair command.
+Failure records may include bounded stdout/stderr snippets and safe local
+cwd/git context. These are inputs to model-authored comma proposals, so `,`
+remains `local_model / propose / model-tainted`. `,,` starts with the same
+model-authored proposal, then crosses into `exec_boxed` for command execution or
+`write_boxed` for patch application.
 
-When double repair output is a unified diff, Sigil stores it as a patch preview
-before confirmation. The preview can also be checked later with `sigil patch
-check`; applying it later requires `sigil patch apply --yes` and records a
+When a double-comma proposal is a unified diff, Sigil stores it as a patch
+preview before confirmation. The preview can also be checked later with `sigil
+patch check`; applying it later requires `sigil patch apply --yes` and records a
 `write_boxed` event linked to the patch preview.
 
 ## Enforcement Before New Glyphs
@@ -221,10 +208,11 @@ Current grammar must preserve these constraints:
 
 The short version:
 
-- `,` means "ask the local model to recommend one concrete next action."
-- `,,` means "ask the local model for one shell command and execute it."
+- `,` means "ask the local model to recommend one concrete command or patch action."
+- `,,` means "ask the local model for one command or patch and do it."
 - `?` means "answer using read and web search; do not execute."
 - `??` means "continue that read/web discussion; still do not execute."
+- `???` means "answer exhaustively through the same read/web route."
 
 Read/web routes produce answers, not commands. Execution routes must be boxed,
 explicit, and lower or preserve integrity unless the user provides fresh input.

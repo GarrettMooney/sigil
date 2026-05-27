@@ -40,7 +40,7 @@ def store_patch_preview(
     decision: PolicyDecision,
     security: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Store a repair operator's unified diff for explicit later application."""
+    """Store a comma proposal's unified diff for explicit later application."""
     if not looks_like_patch(patch_text):
         return None
     source_id = str(operator_event.get("id") or "")
@@ -155,7 +155,7 @@ def record_patch_apply(
     source = normalize_trust_record(record)
     patch_event_id = str(record.get("event_id") or "")
     security = create_trust_metadata(
-        glyph=str(record.get("glyph") or "^"),
+        glyph=str(record.get("glyph") or ",,"),
         integrity="local_model",
         capability="write_boxed",
         taint=source["taint"],

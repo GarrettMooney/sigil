@@ -74,18 +74,6 @@ sigil_question_loop() {
   "$__sigil_bin" op "???" "$@"
 }
 
-sigil_fix() {
-  "$__sigil_bin" op "^" "$@"
-}
-
-sigil_deep_fix() {
-  "$__sigil_bin" op "^^" "$@"
-}
-
-sigil_fix_loop() {
-  "$__sigil_bin" op "^^^" "$@"
-}
-
 if __sigil_glyphs_enabled; then
   function ',' { sigil_command "$*" }
   function ',,' { sigil_execute_command "$*" }
@@ -93,9 +81,6 @@ if __sigil_glyphs_enabled; then
   function '?' { sigil_question "$*" }
   function '??' { sigil_follow_up "$*" }
   function '???' { sigil_question_loop "$*" }
-  function '^' { sigil_fix "$*" }
-  function '^^' { sigil_deep_fix "$*" }
-  function '^^^' { sigil_fix_loop "$*" }
 
   alias ','='noglob sigil_command'
   alias ',,'='noglob sigil_execute_command'
@@ -103,9 +88,6 @@ if __sigil_glyphs_enabled; then
   alias '?'='noglob sigil_question'
   alias '??'='noglob sigil_follow_up'
   alias '???'='noglob sigil_question_loop'
-  alias '^'='noglob sigil_fix'
-  alias '^^'='noglob sigil_deep_fix'
-  alias '^^^'='noglob sigil_fix_loop'
 fi
 
 autoload -Uz add-zsh-hook
@@ -119,7 +101,7 @@ __sigil_precmd() {
   local exit_status=$?
   if (( exit_status != 0 )) && [[ -n "$__sigil_preexec_command" ]]; then
     case "$__sigil_preexec_command" in
-      ,*|\?*|\^*|sigil\ *|__sigil_*) __sigil_preexec_command=""; return ;;
+      ,*|\?*|sigil\ *|__sigil_*) __sigil_preexec_command=""; return ;;
     esac
     local record_args=(record-failure --status "$exit_status" --cwd "$PWD")
     [[ -n "${SIGIL_FAILURE_STDOUT:-}" ]] && record_args+=(--stdout-snippet "$SIGIL_FAILURE_STDOUT")
@@ -138,7 +120,7 @@ if __sigil_glyphs_enabled; then
     emulate -L zsh
     local line="${1%%$'\n'}"
     case "$line" in
-      ,*|\\\?*|\^*) return 1 ;;
+      ,*|\\\?*) return 1 ;;
     esac
     return 0
   }

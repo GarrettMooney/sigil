@@ -39,9 +39,9 @@ def read_global_events(root: Path) -> list[dict[str, object]]:
         ("?", "?", 1),
         ("??", "?", 2),
         ("???", "?", 3),
-        (",,,", ",", 3),
-        ("^^^", "^", 3),
+        (",", ",", 1),
         (",,", ",", 2),
+        (",,,", ",", 3),
     ],
 )
 def test_parse_operator_token_repetition(
@@ -52,7 +52,10 @@ def test_parse_operator_token_repetition(
     assert parse_operator_token(token) == (base, depth)
 
 
-@pytest.mark.parametrize("token", ["", "?^", "?:", "abc", ":", "????", ",,,,", "^^^^"])
+@pytest.mark.parametrize(
+    "token",
+    ["", "?^", "?:", "abc", ":", "^", "^^", "^^^", "????", ",,,,", "^^^^"],
+)
 def test_parse_operator_token_rejects_invalid_tokens(token: str) -> None:
     with pytest.raises(ValueError):
         parse_operator_token(token)
@@ -146,6 +149,25 @@ def test_question_operators_share_web_route_for_fresh_and_follow_up() -> None:
     ]
 
 
+def test_triple_question_uses_exhaustive_web_route() -> None:
+    calls = []
+
+    def fake_ask(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
+    with patch("sigil.cli.ask", side_effect=fake_ask):
+        result = CliRunner().invoke(cli, ["op", "???", "explain", "this"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        (
+            ("Give an exhaustive read-only answer.\n\nexplain this",),
+            {"follow_up": True},
+        )
+    ]
+
+
 def test_op_cli_runs_piped_recommend_operator() -> None:
     calls = {}
 
@@ -156,7 +178,8 @@ def test_op_cli_runs_piped_recommend_operator() -> None:
         calls["user"] = user
         calls["schema"] = schema
         return {
-            "command": "uv run pytest",
+            "kind": "command",
+            "body": "uv run pytest",
             "explanation": "Tests validate the current code path before cleanup.",
         }
 
@@ -175,13 +198,14 @@ def test_op_cli_runs_piped_recommend_operator() -> None:
     assert result.output == (
         "uv run pytest\nTests validate the current code path before cleanup.\n"
     )
-    assert "Recommend one concrete next action" in str(calls["system"])
+    assert "Produce one typed proposal" in str(calls["system"])
     assert "Prompt: draft an executive summary" in str(calls["user"])
-    assert "command" in str(calls["schema"])
+    assert "kind" in str(calls["schema"])
+    assert "body" in str(calls["schema"])
     assert "explanation" in str(calls["schema"])
 
 
-def test_op_cli_runs_piped_repair_preview_with_file_context() -> None:
+def test_op_cli_runs_piped_comma_patch_preview_with_file_context() -> None:
     calls = {}
 
     def fake_chat_json(
@@ -191,7 +215,8 @@ def test_op_cli_runs_piped_repair_preview_with_file_context() -> None:
         calls["user"] = user
         calls["schema"] = schema
         return {
-            "repair": "Update example.py so old becomes new.",
+            "kind": "patch",
+            "body": "Update example.py so old becomes new.",
             "explanation": "The target file contains the old symbol.",
         }
 
@@ -208,7 +233,7 @@ def test_op_cli_runs_piped_repair_preview_with_file_context() -> None:
             ):
                 result = CliRunner().invoke(
                     cli,
-                    ["op", "^", "rename", "old", "to", "new"],
+                    ["op", ",", "rename", "old", "to", "new"],
                     input="example.py\n",
                 )
         finally:
@@ -219,15 +244,16 @@ def test_op_cli_runs_piped_repair_preview_with_file_context() -> None:
         "Update example.py so old becomes new.\n"
         "The target file contains the old symbol.\n"
     )
-    assert "repair operator" in str(calls["system"])
+    assert "Produce one typed proposal" in str(calls["system"])
     assert "Prompt: rename old to new" in str(calls["user"])
-    assert "stdin targets:\nexample.py" in str(calls["user"])
+    assert "stdin:\nexample.py" in str(calls["user"])
     assert "--- example.py\nold" in str(calls["user"])
-    assert "repair" in str(calls["schema"])
+    assert "kind" in str(calls["schema"])
+    assert "body" in str(calls["schema"])
     assert "explanation" in str(calls["schema"])
 
 
-def test_repair_operator_stores_unified_diff_patch_preview() -> None:
+def test_double_comma_patch_proposal_stores_unified_diff_preview() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
@@ -242,14 +268,14 @@ def test_repair_operator_stores_unified_diff_patch_preview() -> None:
                 patch("sigil.operators.ensure_server", return_value=True),
                 patch(
                     "sigil.operators.chat_json",
-                    return_value={"kind": "patch", "repair": PATCH_TEXT},
+                    return_value={"kind": "patch", "body": PATCH_TEXT},
                 ),
                 patch("sigil.cli.confirm_piped_input", return_value=True),
-                patch("sigil.operators.confirm_repair_application", return_value=False),
+                patch("sigil.operators.confirm_patch_application", return_value=False),
             ):
                 result = CliRunner().invoke(
                     cli,
-                    ["op", "^^", "update", "example"],
+                    ["op", ",,", "update", "example"],
                     input="example.txt\n",
                 )
             stored = read_json("last-patch.json")
@@ -267,10 +293,10 @@ def test_repair_operator_stores_unified_diff_patch_preview() -> None:
 
     assert result.exit_code == 2, result.output
     assert result.stdout == PATCH_TEXT
-    assert "repair application declined" in result.stderr
+    assert "patch application declined" in result.stderr
     assert isinstance(stored, dict)
     assert stored["patch"] == PATCH_TEXT
-    assert stored["operator"]["glyph"] == "^^"
+    assert stored["operator"]["glyph"] == ",,"
     assert stored["taint"] == ["model"]
     assert [event["type"] for event in events] == [
         "operator_completed",
@@ -278,7 +304,7 @@ def test_repair_operator_stores_unified_diff_patch_preview() -> None:
     ]
 
 
-def test_double_repair_applies_confirmed_patch() -> None:
+def test_double_comma_applies_confirmed_patch() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
@@ -294,13 +320,13 @@ def test_double_repair_applies_confirmed_patch() -> None:
                 patch("sigil.operators.ensure_server", return_value=True),
                 patch(
                     "sigil.operators.chat_json",
-                    return_value={"kind": "patch", "repair": PATCH_TEXT},
+                    return_value={"kind": "patch", "body": PATCH_TEXT},
                 ),
-                patch("sigil.operators.confirm_repair_application", return_value=True),
+                patch("sigil.operators.confirm_patch_application", return_value=True),
             ):
                 result = CliRunner().invoke(
                     cli,
-                    ["op", "^^", "update", "example"],
+                    ["op", ",,", "update", "example"],
                 )
             applied_text = target.read_text(encoding="utf-8")
             events = read_global_events(state_root)
@@ -327,7 +353,7 @@ def test_double_repair_applies_confirmed_patch() -> None:
     assert events[-1]["capability"] == "write_boxed"
 
 
-def test_double_repair_executes_confirmed_command() -> None:
+def test_double_comma_executes_command_proposal() -> None:
     events = []
 
     def fake_append_event(event: dict[str, object]) -> dict[str, object]:
@@ -339,9 +365,8 @@ def test_double_repair_executes_confirmed_command() -> None:
         patch("sigil.operators.ensure_server", return_value=True),
         patch(
             "sigil.operators.chat_json",
-            return_value={"kind": "command", "repair": "touch fixed.txt"},
+            return_value={"kind": "command", "body": "touch fixed.txt"},
         ),
-        patch("sigil.operators.confirm_repair_application", return_value=True),
         patch(
             "sigil.operators.subprocess.run",
             return_value=subprocess.CompletedProcess(
@@ -350,12 +375,12 @@ def test_double_repair_executes_confirmed_command() -> None:
         ),
         patch("sigil.operators.append_event", side_effect=fake_append_event),
     ):
-        result = CliRunner().invoke(cli, ["op", "^^", "fix", "it"])
+        result = CliRunner().invoke(cli, ["op", ",,", "fix", "it"])
 
     assert result.exit_code == 0, result.output
-    assert result.stdout == "touch fixed.txt\n"
+    assert result.stdout == ""
     assert result.stderr == ""
-    assert events[-1]["type"] == "operator_repair_command_executed"
+    assert events[-1]["type"] == "operator_command_executed"
     assert events[-1]["command"] == "touch fixed.txt"
     assert events[-1]["capability"] == "exec_boxed"
 
@@ -379,7 +404,7 @@ def test_patch_apply_requires_yes_and_records_application() -> None:
                     "patch": PATCH_TEXT,
                     "cwd": str(work),
                     "event_id": "patch-event",
-                    "glyph": "^^",
+                    "glyph": ",,",
                     "integrity": "local_model",
                     "capability": "propose",
                     "taint": ["model"],
@@ -483,7 +508,8 @@ def test_op_cli_executes_double_comma_command() -> None:
     with (
         patch("sigil.operators.ensure_server", return_value=True),
         patch(
-            "sigil.operators.chat_json", return_value={"command": "printf 'done\\n'"}
+            "sigil.operators.chat_json",
+            return_value={"kind": "command", "body": "printf 'done\\n'"},
         ),
         patch("sigil.operators.subprocess.run", side_effect=fake_run),
         patch("sigil.operators.append_event", side_effect=fake_append_event),
@@ -504,7 +530,10 @@ def test_op_cli_executes_double_comma_command() -> None:
 def test_op_cli_returns_executed_command_status_and_stderr() -> None:
     with (
         patch("sigil.operators.ensure_server", return_value=True),
-        patch("sigil.operators.chat_json", return_value={"command": "false"}),
+        patch(
+            "sigil.operators.chat_json",
+            return_value={"kind": "command", "body": "false"},
+        ),
         patch(
             "sigil.operators.subprocess.run",
             return_value=subprocess.CompletedProcess(
@@ -525,7 +554,7 @@ def test_op_cli_dry_run_double_comma_does_not_execute() -> None:
         patch("sigil.operators.ensure_server", return_value=True),
         patch(
             "sigil.operators.chat_json",
-            return_value={"command": "git status --short"},
+            return_value={"kind": "command", "body": "git status --short"},
         ),
         patch("sigil.operators.subprocess.run", side_effect=AssertionError("no exec")),
         patch("sigil.operators.append_event", return_value={}),
@@ -545,24 +574,16 @@ def test_op_cli_dry_run_question_does_not_call_web_route() -> None:
     assert "read+web question route" in result.output
 
 
-def test_op_cli_rejects_triple_repair_before_model_or_confirmation() -> None:
+def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
     with (
         patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
         patch("sigil.operators.chat_json", side_effect=AssertionError("no model")),
         patch("sigil.operators.subprocess.run", side_effect=AssertionError("no exec")),
     ):
-        result = CliRunner().invoke(cli, ["op", "^^^", "status"], input="notes\n")
+        result = CliRunner().invoke(cli, ["op", "^", "status"], input="notes\n")
 
     assert result.exit_code == 2
-    assert "bounded autonomy loop is reserved but not implemented" in result.stderr
-
-
-def test_op_cli_dry_run_triple_repair_reports_reserved_loop() -> None:
-    with patch("sigil.operators.chat_json", side_effect=AssertionError("no model")):
-        result = CliRunner().invoke(cli, ["op", "--dry-run", "^^^", "status"])
-
-    assert result.exit_code == 0
-    assert "bounded autonomy loop is reserved but not implemented" in result.output
+    assert "unsupported operator: ^" in result.output
 
 
 def test_triple_comma_creates_plan_and_executes_one_confirmed_step() -> None:
@@ -829,7 +850,11 @@ def test_op_cli_confirms_piped_comma_before_model_call() -> None:
         patch("sigil.cli.confirm_piped_input", return_value=True),
         patch(
             "sigil.operators.chat_json",
-            return_value={"command": "cat notes", "explanation": "uses stdin"},
+            return_value={
+                "kind": "command",
+                "body": "cat notes",
+                "explanation": "uses stdin",
+            },
         ),
         patch("sigil.operators.append_event", return_value={}),
     ):
@@ -843,7 +868,10 @@ def test_op_cli_confirms_piped_double_comma_command_before_execution() -> None:
     with (
         patch("sigil.cli.confirm_piped_input", return_value=True),
         patch("sigil.operators.confirm_execution", return_value=False),
-        patch("sigil.operators.chat_json", return_value={"command": "cat notes"}),
+        patch(
+            "sigil.operators.chat_json",
+            return_value={"kind": "command", "body": "cat notes"},
+        ),
         patch("sigil.operators.subprocess.run", side_effect=AssertionError("no exec")),
         patch("sigil.operators.append_event", return_value={"id": "operator-event"}),
     ):
@@ -859,7 +887,10 @@ def test_op_cli_accepts_piped_double_comma_execution() -> None:
         patch("sigil.operators.ensure_server", return_value=True),
         patch("sigil.cli.confirm_piped_input", return_value=True),
         patch("sigil.operators.confirm_execution", return_value=True),
-        patch("sigil.operators.chat_json", return_value={"command": "cat notes"}),
+        patch(
+            "sigil.operators.chat_json",
+            return_value={"kind": "command", "body": "cat notes"},
+        ),
         patch(
             "sigil.operators.subprocess.run",
             return_value=subprocess.CompletedProcess(
@@ -886,9 +917,11 @@ def test_verb_commands_run_piped_stream_operators() -> None:
         system: str, user: str, schema: dict[str, object]
     ) -> dict[str, str]:
         json_calls.append((system, user, schema))
-        if "Operator: ^ (repair)" in user:
-            return {"repair": "repair summary", "explanation": "because stdin"}
-        return {"command": "stream result", "explanation": "because stdin"}
+        return {
+            "kind": "command",
+            "body": "stream result",
+            "explanation": "because stdin",
+        }
 
     with (
         patch("sigil.operators.ensure_server", return_value=True),
@@ -907,21 +940,13 @@ def test_verb_commands_run_piped_stream_operators() -> None:
             ["command", "summarize"],
             input="notes\n",
         )
-        fix_result = CliRunner().invoke(
-            cli,
-            ["fix", "rename", "old", "to", "new"],
-            input="example.py\n",
-        )
 
     assert ask_result.exit_code == 0, ask_result.output
     assert command_result.exit_code == 0, command_result.output
-    assert fix_result.exit_code == 0, fix_result.output
     assert ask_result.output == ""
     assert command_result.output == "stream result\nbecause stdin\n"
-    assert fix_result.output == "repair summary\nbecause stdin\n"
     assert ask_calls == [(("review\n\nPiped input:\ndiff\n",), {"follow_up": False})]
     assert "Operator: , (recommend)" in json_calls[0][1]
-    assert "Operator: ^ (repair)" in json_calls[1][1]
 
 
 def test_op_cli_rejects_mixed_glyphs() -> None:

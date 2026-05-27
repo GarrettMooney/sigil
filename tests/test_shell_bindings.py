@@ -21,7 +21,6 @@ def make_stub(tmp: Path) -> Path:
             case "$*" in
               "command --select hello") printf '%s\n' "echo generated" ;;
               "command draft executive summary") printf '%s\n' "stream command" ;;
-              "fix") printf '%s\n' "echo fix" ;;
               "ask hello") printf '%s\n' "answer" ;;
               "op , hello") printf '%s\n%s\n' "echo recommended" "because it is safe" ;;
               "op , draft executive summary") printf '%s\n%s\n' "echo stream recommended" "because stdin matters" ;;
@@ -73,7 +72,7 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    sigil_fix\n                    sigil_deep_fix\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
@@ -84,15 +83,11 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
             "op ,, hello",
             "op ? hello",
             "op ?? hello",
-            "op ^",
-            "op ^^",
         ]
         assert "echo recommended" in result.stdout
         assert "because it is safe" in result.stdout
         assert "op:op ,, hello" in result.stdout
         assert "op:op ?? hello" in result.stdout
-        assert "op:op ^" in result.stdout
-        assert "op:op ^^" in result.stdout
         assert "history=echo recommended" in result.stdout
 
 
@@ -103,7 +98,7 @@ def test_bash_triple_wrappers_call_reserved_loop_contract() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    sigil_command_loop hello\n                    sigil_question_loop hello\n                    sigil_fix_loop hello\n                    "
+                "                    source shell/bash/sigil.bash\n                    sigil_command_loop hello\n                    sigil_question_loop hello\n                    "
             ),
             tmp,
             stub,
@@ -112,7 +107,6 @@ def test_bash_triple_wrappers_call_reserved_loop_contract() -> None:
         assert read_log(tmp) == [
             "op ,,, hello",
             "op ??? hello",
-            "op ^^^ hello",
         ]
 
 
@@ -174,7 +168,7 @@ def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    printf 'files\\n' | sigil_deep_fix rename symbol\n                    "
+                "                    source shell/bash/sigil.bash\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    "
             ),
             tmp,
             stub,
@@ -184,7 +178,6 @@ def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
             "op ?? review risky changes",
             "op , draft executive summary",
             "op ,, run it",
-            "op ^^ rename symbol",
         ]
         assert "echo stream recommended" in result.stdout
         assert "because stdin matters" in result.stdout
@@ -213,7 +206,7 @@ def test_bash_does_not_record_failed_sigil_commands() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf '%s\\n' \"sigil bad\"; }\n                    false\n                    __sigil_precmd\n                    __sigil_history_line() { printf '%s\\n' \"^\"; }\n                    false\n                    __sigil_precmd\n                    :\n                    "
+                "                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf '%s\\n' \"sigil bad\"; }\n                    false\n                    __sigil_precmd\n                    :\n                    "
             ),
             tmp,
             stub,
@@ -248,7 +241,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    sigil_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    sigil_fix\n                    sigil_deep_fix\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source shell/zsh/sigil.zsh\n                    sigil_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -259,15 +252,11 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
             "op ,, hello",
             "op ? hello",
             "op ?? hello",
-            "op ^",
-            "op ^^",
         ]
         assert "echo recommended" in result.stdout
         assert "because it is safe" in result.stdout
         assert "op:op ,, hello" in result.stdout
         assert "op:op ?? hello" in result.stdout
-        assert "op:op ^" in result.stdout
-        assert "op:op ^^" in result.stdout
         assert "history=echo recommended" in result.stdout
 
 
@@ -279,7 +268,7 @@ def test_zsh_triple_wrappers_call_reserved_loop_contract() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source shell/zsh/sigil.zsh\n                    sigil_command_loop hello\n                    sigil_question_loop hello\n                    sigil_fix_loop hello\n                    "
+                "                    source shell/zsh/sigil.zsh\n                    sigil_command_loop hello\n                    sigil_question_loop hello\n                    "
             ),
             tmp,
             stub,
@@ -288,7 +277,6 @@ def test_zsh_triple_wrappers_call_reserved_loop_contract() -> None:
         assert read_log(tmp) == [
             "op ,,, hello",
             "op ??? hello",
-            "op ^^^ hello",
         ]
 
 
@@ -300,7 +288,7 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source shell/zsh/sigil.zsh\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    printf 'files\\n' | sigil_deep_fix rename symbol\n                    "
+                "                    source shell/zsh/sigil.zsh\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    "
             ),
             tmp,
             stub,
@@ -310,13 +298,11 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
             "op ?? review risky changes",
             "op , draft executive summary",
             "op ,, run it",
-            "op ^^ rename symbol",
         ]
         assert "op:op ?? review risky changes" in result.stdout
         assert "echo stream recommended" in result.stdout
         assert "because stdin matters" in result.stdout
         assert "op:op ,, run it" in result.stdout
-        assert "op:op ^^ rename symbol" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -341,24 +327,6 @@ def test_zsh_glyph_aliases_dispatch_piped_stdin_before_globbing() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_repairs_print_stdout_not_history() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "zsh",
-            textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    sigil_fix\n                    print -- "history=${history[$HISTCMD]}"\n                    '
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert read_log(tmp) == ["op ^"]
-        assert "op:op ^" in result.stdout
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_does_not_record_failed_sigil_commands() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -366,7 +334,7 @@ def test_zsh_does_not_record_failed_sigil_commands() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    __sigil_preexec "sigil bad"\n                    false\n                    __sigil_precmd\n                    __sigil_preexec "^"\n                    false\n                    __sigil_precmd\n                    :\n                    '
+                '                    source shell/zsh/sigil.zsh\n                    __sigil_preexec "sigil bad"\n                    false\n                    __sigil_precmd\n                    :\n                    '
             ),
             tmp,
             stub,

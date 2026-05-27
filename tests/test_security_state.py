@@ -91,7 +91,6 @@ def test_top_level_help_lists_commands() -> None:
         "command",
         "doctor",
         "events",
-        "fix",
         "install",
         "patch",
         "plan",
@@ -292,7 +291,7 @@ def test_session_show_and_clear_include_patch_preview() -> None:
         session_root.mkdir(parents=True)
         patch_path = session_root / "last-patch.json"
         patch_path.write_text(
-            json.dumps({"patch": "diff --git a/a b/a\n", "glyph": "^^"}),
+            json.dumps({"patch": "diff --git a/a b/a\n", "glyph": ",,"}),
             encoding="utf-8",
         )
         plan_path = session_root / "last-plan.jsonl"
@@ -316,7 +315,7 @@ def test_session_show_and_clear_include_patch_preview() -> None:
 
     assert shown.exit_code == 0, shown.output
     snapshot = json.loads(shown.output)
-    assert snapshot["files"]["last-patch.json"]["glyph"] == "^^"
+    assert snapshot["files"]["last-patch.json"]["glyph"] == ",,"
     assert snapshot["files"]["last-plan.jsonl"][0]["plan"]["plan_id"] == "plan"
     assert cleared.exit_code == 0, cleared.output
     assert str(patch_path) in removed["removed"]

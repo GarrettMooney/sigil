@@ -19,9 +19,6 @@ streaming, rendering, and persistent state.
 
 ```text
 sigil command "find wav files"              generate command candidates
-sigil fix                                   suggest fixes for the last failure
-sigil op "^"                                recommend a repair
-sigil op "^^"                               preview and confirm repair apply
 sigil ask "what changed in this repo?"      answer a question with Pi
 sigil ask --follow-up "what should I run?"  continue the prior answer
 sigil plan show                             inspect the current durable plan
@@ -34,7 +31,7 @@ Piped stdin is first-class:
 ```sh
 git diff | sigil ask "review risky changes"
 cat notes.md | sigil command "turn this into a release command"
-printf '%s\n' src/sigil/cli.py | sigil fix "preview a small cleanup"
+printf '%s\n' src/sigil/cli.py | sigil op "," "preview a small cleanup"
 ```
 
 ## Optional Glyphs
@@ -47,9 +44,6 @@ the long-form verbs.
 ,   -> sigil op ","
 ,,  -> sigil op ",,"
 ,,, -> sigil op ",,,"   durable plan stepper
-^   -> sigil op "^"
-^^  -> sigil op "^^"
-^^^ -> sigil op "^^^"
 ?   -> sigil op "?"
 ??  -> sigil op "??"
 ??? -> sigil op "???"
@@ -68,18 +62,15 @@ The default glyph aliases map to:
 
 ```text
 ,   human prompt -> model recommendation   local_model / propose / model-tainted
-,,  human prompt -> generated command run  local_model / exec_boxed / model-tainted
+,,  human prompt -> generated command or patch apply  exec/write boxed
 ,,, durable plan stepper                 per-step confirmed exec_boxed events
-^   failed command/files -> repair proposal local_model / propose / model-tainted
-^^  generated repair apply after confirm    local_model -> write/exec boxed
-^^^ reserved bounded repair loop           rejected for now
 ?   web-authorized question                web / read / provisional
 ??  web-authorized follow-up               inherits prior question taint / provisional
-??? reserved bounded research loop         rejected for now
+??? exhaustive web-authorized question     web / read / provisional
 ```
 
-This matters because only the explicit comma execution route crosses into
-`exec_boxed`. Web-tainted question answers are read-only and provisional, and
+This matters because only the explicit comma route crosses into `exec_boxed` or
+`write_boxed`. Web-tainted question answers are read-only and provisional, and
 cannot become an executable proposal path through `??`.
 
 Current no-execute guarantees:
@@ -151,8 +142,6 @@ Core commands:
 sigil command --select "find wav files"
 sigil op "," "recommend next cleanup"
 sigil op ",," "run the relevant tests"
-sigil op "^"
-sigil op "^^"
 sigil ask "what is tldraw?"
 sigil ask --follow-up "how would that work in practice?"
 sigil op --dry-run ",," "clean build outputs"
@@ -170,12 +159,12 @@ sigil session clear
 ```
 
 The shell bindings call `sigil op` for glyph behavior. `,` prints one
-recommended command with an explanation and adds the command to shell history;
-`,,` asks for one shell command and executes it. `^` prints one repair action
-with an explanation. `^^` generates a patch or repair command, shows the preview,
-and asks before applying or executing it. When comma or repair routes receive
-piped input, Sigil previews that input and asks for confirmation before using it;
-piped `,,` also asks before executing the generated command.
+recommended command or patch action with an explanation. When the proposal is a
+command, the shell binding adds that command to shell history. `,,` asks for one
+typed proposal: command proposals execute through the user's shell, while patch
+proposals are shown as a preview and applied only after confirmation. When comma
+routes receive piped input, Sigil previews that input and asks for confirmation
+before using it; piped `,,` also asks before executing a generated command.
 
 ## State
 
@@ -190,7 +179,7 @@ Current files:
 ```text
 events.jsonl                                 append-only global event log
 sessions/<session-id>/last-failure.json      latest failed shell command
-sessions/<session-id>/last-patch.json        latest repair patch preview
+sessions/<session-id>/last-patch.json        latest patch preview
 sessions/<session-id>/last-question.jsonl    same-terminal question transcript
 sessions/<session-id>/last-tools.jsonl       latest Pi tool trace
 ```
@@ -202,11 +191,10 @@ across all sessions. Advanced callers can override the boundary with
 `SIGIL_SESSION_ID` or `SIGIL_SESSION_DIR`.
 
 Failure records include command, status, cwd, safe cwd/git context, and optional
-bounded stdout/stderr snippets when a wrapper provides them. Fix suggestions
-show their rationale on stderr or in the selector, while stdout remains only the
-selected command.
+bounded stdout/stderr snippets when a wrapper provides them. Comma proposals use
+the last failure as context when available.
 
-Double repair operators that emit a unified diff store it as the current patch
+Double comma proposals that emit a unified diff store it as the current patch
 preview before confirmation. `sigil patch show` prints that preview,
 `sigil patch check` validates it with `git apply --check`, and `sigil patch
 apply --yes` applies it explicitly with `git apply`.
@@ -246,7 +234,7 @@ Source the Bash entrypoint from `.bashrc`:
 source "$HOME/.sigil/shell/bash/sigil.bash"
 ```
 
-Use the `sigil command`, `sigil ask`, and `sigil fix` verbs directly in Bash.
+Use the `sigil command` and `sigil ask` verbs directly in Bash.
 When glyphs are enabled, Bash also supports:
 
 ```bash
@@ -254,19 +242,17 @@ When glyphs are enabled, Bash also supports:
 ,, run the relevant tests
 ? what is tldraw?
 ?? how would that work in practice?
-^
-^^
 ```
 
-`,` prints a recommended command plus explanation and adds the command to shell
-history. Non-piped `,,` executes the generated command immediately. Piped comma
-routes ask before using the input, and piped `,,` asks again before execution.
-`?` answers through the web-authorized read route; `??` continues the same
-question transcript through that route. Piped question routes ask before using
-the input. `,,,` creates or resumes a durable plan and offers one confirmed
-boxed step at a time. `^` prints a repair proposal. `^^` previews a generated
-patch or command and asks before applying or executing it. `???` and `^^^`
-remain reserved until their loop runtimes are implemented.
+`,` prints a recommended command or patch action plus explanation. Command
+proposals are added to shell history. Non-piped `,,` executes a generated command
+immediately, while patch proposals are previewed and require confirmation before
+apply. Piped comma routes ask before using the input, and piped `,,` asks again
+before executing a command. `?` answers through the web-authorized read route;
+`??` continues the same question transcript through that route; `???` asks for
+an exhaustive read-only answer. Piped question routes ask before using the input.
+`,,,` creates or resumes a durable plan and offers one confirmed boxed step at a
+time.
 
 ## Requirements
 
@@ -277,7 +263,7 @@ remain reserved until their loop runtimes are implemented.
 - `glow` for Markdown rendering
 - `pi` for question answering
 
-`pi` is the .txt agent CLI used by the `?` and `??` routes. It is not installed
+`pi` is the .txt agent CLI used by the `?`, `??`, and `???` routes. It is not installed
 by Sigil. Install and configure it separately, then verify `pi --help` works.
 Sigil invokes it as `pi --json --tools read,web_search ...` with a prompt-level
 limit of at most one tool call, then renders the event stream through

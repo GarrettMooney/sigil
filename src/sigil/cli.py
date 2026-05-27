@@ -15,7 +15,7 @@ from typing import cast
 import click
 
 from .commands import generate, select
-from .failure import record_failure, select_fix
+from .failure import record_failure
 from .install import (
     SUPPORTED_SHELLS,
     checks_exit_code,
@@ -92,7 +92,6 @@ def run_stream_operator(
             invocation,
             policy=ExecutionPolicy(
                 confirm_execution=should_confirm_execution(invocation),
-                confirm_repair=should_confirm_repair(invocation),
             ),
         )
     except RuntimeError as exc:
@@ -235,9 +234,6 @@ def cmd_op(
             print(f"sigil op: {exc}", file=sys.stderr)
             return 1
 
-    if should_handle_autonomy_loop(invocation):
-        handle_autonomy_loop(invocation, dry_run=dry_run)
-
     if should_confirm_piped_input(invocation):
         if not confirm_piped_input(stdin_text):
             print("sigil op: piped input declined", file=sys.stderr)
@@ -258,7 +254,6 @@ def cmd_op(
             policy=ExecutionPolicy(
                 dry_run=dry_run,
                 confirm_execution=should_confirm_execution(invocation),
-                confirm_repair=should_confirm_repair(invocation),
             ),
         )
     except RuntimeError as exc:
@@ -278,7 +273,7 @@ def cmd_op(
 def should_confirm_piped_input(invocation: object) -> bool:
     """Return whether an operator needs piped-input confirmation."""
     return (
-        getattr(invocation, "base", None) in {"?", ",", "^"}
+        getattr(invocation, "base", None) in {"?", ","}
         and getattr(invocation, "mode", None) == "pipeline"
         and bool(getattr(invocation, "stdin", ""))
     )
@@ -293,36 +288,12 @@ def should_confirm_execution(invocation: object) -> bool:
     )
 
 
-def should_confirm_repair(invocation: object) -> bool:
-    """Return whether generated repair application needs confirmation."""
-    return (
-        getattr(invocation, "base", None) == "^"
-        and getattr(invocation, "depth", 0) == 2
-    )
-
-
-def should_handle_autonomy_loop(invocation: object) -> bool:
-    """Return whether this invocation targets the reserved loop tier."""
-    return getattr(invocation, "depth", 0) == 3
-
-
 def should_run_plan_operator(invocation: object) -> bool:
     """Return whether this invocation targets the implemented plan stepper."""
     return (
         getattr(invocation, "base", None) == ","
         and getattr(invocation, "depth", 0) == 3
     )
-
-
-def handle_autonomy_loop(invocation: object, *, dry_run: bool) -> None:
-    """Fail closed for the reserved bounded-autonomy tier."""
-    glyph = str(getattr(invocation, "glyph", ""))
-    message = f"sigil op: {glyph} bounded autonomy loop is reserved but not implemented"
-    if dry_run:
-        print(message)
-        raise click.exceptions.Exit(0)
-    print(message, file=sys.stderr)
-    raise click.exceptions.Exit(2)
 
 
 def confirm_piped_input(stdin_text: str) -> bool:
@@ -338,13 +309,16 @@ def run_question_operator(invocation: object) -> int:
     """Run question glyphs through the web-authorized ask route."""
     question = str(getattr(invocation, "prompt", "") or "")
     stdin_text = str(getattr(invocation, "stdin", "") or "")
+    depth = int(getattr(invocation, "depth", 0) or 0)
     if stdin_text:
         question = question_with_stdin(question, stdin_text)
     if not question:
         question = "Answer the current shell question."
+    if depth == 3:
+        question = "Give an exhaustive read-only answer.\n\n" + question
     return ask(
         question,
-        follow_up=getattr(invocation, "depth", 0) == 2,
+        follow_up=depth >= 2,
     )
 
 
@@ -880,26 +854,6 @@ def cmd_record_failure(
 ) -> int:
     """Record a failed shell command for later repair."""
     record_failure(command, status, cwd, stdout_snippet, stderr_snippet)
-    return 0
-
-
-@cli.command("fix")
-@click.argument("prompt_parts", nargs=-1)
-def cmd_fix(prompt_parts: tuple[str, ...]) -> int:
-    """Suggest fixes for the last recorded failed shell command."""
-    stdin_text = piped_stdin_text()
-    if stdin_text is not None:
-        return run_stream_operator(
-            "^",
-            prompt=" ".join(prompt_parts),
-            stdin_text=stdin_text,
-        )
-    if prompt_parts:
-        raise click.UsageError("fix does not accept a prompt unless stdin is piped.")
-    command = select_fix()
-    if command:
-        append_event({"type": "fix_selected", "command": command})
-        print(command)
     return 0
 
 

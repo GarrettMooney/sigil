@@ -13,7 +13,7 @@ written to stdout.
 sigil command --select "find large files"
 sigil ask --json "what changed in this repo?"
 git diff | sigil ask "review risky changes"
-printf '%s\n' src/sigil/cli.py | sigil fix "preview a cleanup"
+printf '%s\n' src/sigil/cli.py | sigil op "," "preview a cleanup"
 sigil op --dry-run ",," "clean build outputs"
 sigil patch check
 sigil patch apply --yes
@@ -44,7 +44,7 @@ machine-readable introspection path for shell bindings and tests.
 Stable fields:
 
 - `glyph`
-- `base`: the operator family, currently `?`, `,`, or `^`.
+- `base`: the operator family, currently `?` or `,`.
 - `depth`: repeated-glyph count.
 - `name`: semantic operator name.
 - `prompt`: user prompt text after the glyph.
@@ -52,22 +52,21 @@ Stable fields:
 - `mode`: `pipeline` or `interactive`.
 
 Without `--json`, `sigil op` runs the operator. `?` answers through the
-web-authorized read route, `??` continues that route, `,` recommends a concrete
-next action, `,,` executes a generated shell command, `^` recommends a repair
-action, and `^^` previews a patch or command before asking to apply or execute
-it. Operator output is written to stdout; status and errors go to stderr.
+web-authorized read route, `??` continues that route, `???` asks for an
+exhaustive read-only answer, `,` recommends one typed command or patch proposal,
+`,,` executes a generated command or previews and confirms a generated patch, and
+`,,,` runs the durable plan stepper. Operator output is written to stdout; status
+and errors go to stderr.
 
 ## Verb Pipeline Commands
 
-`sigil command`, `sigil ask`, and `sigil fix` are the public verb layer. When
-stdin is piped into `command`, `ask`, or `fix`, the verb uses the stream
-operator runtime and grounds the result in stdin. Piped question routes ask
-before sending stdin to Pi:
+`sigil command` and `sigil ask` are the public verb layer. When stdin is piped
+into `command` or `ask`, the verb uses the stream operator runtime and grounds
+the result in stdin. Piped question routes ask before sending stdin to Pi:
 
 ```sh
 cat notes.md | sigil command "draft a release command"
 git diff | sigil ask "review risky changes"
-printf '%s\n' src/sigil/cli.py | sigil fix "preview a cleanup"
 ```
 
 ## `sigil ask --json`
@@ -104,29 +103,27 @@ git diff | sigil op ",," "run the relevant formatter"
 sigil op --dry-run ",," "find all Python files"
 ```
 
-Current command and repair behavior:
+Current comma behavior:
 
-- `,` asks for structured JSON with `command` and `explanation`, prints the
-  command followed by the explanation, and the shell binding adds the command to
-  shell history.
-- non-piped `,,` asks the model for one shell command, executes it through the
-  user's shell, emits command stdout, and forwards command stderr/status.
-- `^` asks for structured JSON with `repair` and `explanation`, then prints the
-  repair followed by the explanation.
-- `^^` asks for a concrete patch or repair command, prints it as a preview, and
-  asks before applying the patch or executing the command.
-- piped comma and repair routes preview stdin and ask before using it; piped
-  `,,` also shows the generated command and asks before execution.
-- `--dry-run` prints the generated command without executing it.
+- `,` asks for structured JSON with `kind`, `body`, and `explanation`, prints
+  the body followed by the explanation, and the shell binding adds command
+  proposals to shell history.
+- non-piped `,,` asks the model for one typed proposal. Command proposals execute
+  through the user's shell, emit command stdout, and forward command
+  stderr/status. Patch proposals are stored, previewed, and applied only after
+  confirmation.
+- piped comma routes preview stdin and ask before using it; piped `,,` also
+  shows generated commands and asks before execution.
+- `--dry-run` prints the generated command or patch without executing/applying it.
 
 The policy classifier records broad action classes such as `execute`,
 `file_write`, `network`, `delete`, and `privileged` in the event log.
 
 ## `sigil patch`
 
-Double repair operators store unified diffs as the current session's patch
-preview before asking to apply them. The explicit patch commands remain
-available for reviewing or applying the latest stored preview later.
+Double comma patch proposals store unified diffs as the current session's patch
+preview before asking to apply them. The explicit patch commands remain available
+for reviewing or applying the latest stored preview later.
 
 ```sh
 sigil patch show
@@ -169,7 +166,7 @@ time  id  action  trust  session  summary
 ```
 
 `action` combines the route glyph and lifecycle event, for example `? inspect`,
-`,, executed`, or `^^ patch check`. The JSON form returns the same summary
+`,, executed`, or `,, patch check`. The JSON form returns the same summary
 fields plus the full event id, cwd, raw type, raw glyph, and a ready-to-run
 `lineage` command. Use `--raw --json` when you need exact stored event payloads.
 The explicit `list` subcommand is an alias for the default `sigil events` view.
@@ -229,9 +226,6 @@ only setup.
 ?   -> sigil op "?"
 ??  -> sigil op "??"
 ??? -> sigil op "???"
-^   -> sigil op "^"
-^^  -> sigil op "^^"
-^^^ -> sigil op "^^^"
 ```
 
 ## Hidden plumbing commands
