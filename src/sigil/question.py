@@ -19,7 +19,7 @@ from .security import (
     create_trust_metadata,
     normalize_trust_record,
 )
-from .server import start_qwen_for_pi
+from .server import ensure_model_for_pi
 from .session import recent_turns_context
 from .state import append_event, append_jsonl, read_jsonl, write_jsonl
 
@@ -76,6 +76,29 @@ def prepend_recent_turns(question: str) -> str:
     return f"{context}\n\nQuestion:\n{question}"
 
 
+RECENT_QUESTION_TURNS_LIMIT = 4
+RECENT_QUESTION_TURN_CHARS = 500
+
+
+def recent_question_context(
+    limit: int = RECENT_QUESTION_TURNS_LIMIT,
+    per_turn_chars: int = RECENT_QUESTION_TURN_CHARS,
+) -> str:
+    """Return a compact summary of the most recent ? / ?? exchange, if any."""
+    turns = discussion_turns()
+    if not turns:
+        return ""
+    tail = turns[-limit:]
+    lines = ["Recent question transcript:"]
+    for turn in tail:
+        role = str(turn.get("role", "?"))
+        content = str(turn.get("content", "")).strip()
+        if len(content) > per_turn_chars:
+            content = content[:per_turn_chars] + "…"
+        lines.append(f"  {role}: {content}")
+    return "\n".join(lines)
+
+
 def ask(
     question: str,
     stream_filter: str | None = None,
@@ -84,7 +107,7 @@ def ask(
     json_output: bool = False,
 ) -> int:
     """Run Pi for a question while recording transcript and tool trace state."""
-    if not start_qwen_for_pi():
+    if not ensure_model_for_pi():
         return 1
 
     previous_turns = discussion_turns() if follow_up else []

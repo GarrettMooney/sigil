@@ -425,6 +425,9 @@ def proposal_user_prompt(invocation: OperatorInvocation) -> str:
         turns_section = recent_turns_context()
         if turns_section:
             sections.append(turns_section)
+        question_section = recent_question_context()
+        if question_section:
+            sections.append(question_section)
         sections.append(interactive_failure_context())
     return "\n\n".join(section for section in sections if section)
 
@@ -557,6 +560,13 @@ def interactive_failure_context() -> str:
     if failure is None:
         return "No failed command is recorded for interactive proposal."
     return "Last failed command context:\n" + failure_context_prompt(failure)
+
+
+def recent_question_context() -> str:
+    """Return a compact summary of the recent question transcript, if any."""
+    from .question import recent_question_context as _recent_question_context
+
+    return _recent_question_context()
 
 
 def recent_turns_context(limit: int | None = None) -> str:

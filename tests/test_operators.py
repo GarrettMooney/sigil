@@ -1045,3 +1045,72 @@ def test_proposal_user_prompt_omits_recent_turns_in_pipeline_mode() -> None:
             prompt = proposal_user_prompt(invocation)
 
     assert "Recent shell activity" not in prompt
+
+
+def test_proposal_user_prompt_includes_recent_question_transcript() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            append_jsonl(
+                "last-question.jsonl",
+                {"role": "user", "content": "find the biggest files"},
+            )
+            append_jsonl(
+                "last-question.jsonl",
+                {"role": "assistant", "content": "du -ah . | sort -rh | head -n 10"},
+            )
+            invocation = create_invocation(
+                ",,",
+                prompt="do that",
+                stdin="",
+                mode="interactive",
+            )
+            prompt = proposal_user_prompt(invocation)
+
+    assert "Recent question transcript:" in prompt
+    assert "find the biggest files" in prompt
+    assert "du -ah . | sort -rh | head -n 10" in prompt
+
+
+def test_proposal_user_prompt_omits_question_transcript_when_empty() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            invocation = create_invocation(
+                ",",
+                prompt="anything",
+                stdin="",
+                mode="interactive",
+            )
+            prompt = proposal_user_prompt(invocation)
+
+    assert "Recent question transcript" not in prompt
+
+
+def test_proposal_user_prompt_omits_question_transcript_in_pipeline_mode() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            append_jsonl(
+                "last-question.jsonl",
+                {"role": "user", "content": "find the biggest files"},
+            )
+            append_jsonl(
+                "last-question.jsonl",
+                {"role": "assistant", "content": "du -ah . | sort -rh | head -n 10"},
+            )
+            invocation = create_invocation(
+                ",",
+                prompt="summarize",
+                stdin="some piped input\n",
+                mode="pipeline",
+            )
+            prompt = proposal_user_prompt(invocation)
+
+    assert "Recent question transcript" not in prompt

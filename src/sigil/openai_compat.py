@@ -1,8 +1,8 @@
 """Minimal OpenAI-compatible chat completions client.
 
 Sigil keeps this small to avoid taking a runtime dependency on an SDK for the
-few model calls it needs. The default configuration targets the existing local
-llama.cpp/Qwen setup, while the public environment names are model-neutral.
+few model calls it needs. The default configuration targets a local
+OpenAI-compatible endpoint.
 """
 
 from __future__ import annotations
@@ -19,34 +19,22 @@ from urllib.parse import urlparse
 from .ansi import LOVE, MUTED, RESET
 
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
-DEFAULT_MODEL_NAME = "qwen3.6-27b-q8-local"
+DEFAULT_MODEL_NAME = "local-model"
 
 
 def model_url() -> str:
     """Return the OpenAI-compatible chat completions endpoint."""
-    return (
-        os.environ.get("SIGIL_MODEL_URL")
-        or os.environ.get("QWEN_URL")
-        or DEFAULT_MODEL_URL
-    )
+    return os.environ.get("SIGIL_MODEL_URL") or DEFAULT_MODEL_URL
 
 
 def model_name() -> str:
     """Return the model name sent to the configured endpoint."""
-    return (
-        os.environ.get("SIGIL_MODEL_NAME")
-        or os.environ.get("QWEN_MODEL")
-        or DEFAULT_MODEL_NAME
-    )
+    return os.environ.get("SIGIL_MODEL_NAME") or DEFAULT_MODEL_NAME
 
 
 def model_path() -> str:
     """Return the optional local model path shown in startup help text."""
-    return (
-        os.environ.get("SIGIL_MODEL_PATH")
-        or os.environ.get("QWEN_MODEL_PATH")
-        or "<path-to-model.gguf>"
-    )
+    return os.environ.get("SIGIL_MODEL_PATH") or "<path-to-model.gguf>"
 
 
 def endpoint_reachable(url: str) -> bool:
@@ -74,10 +62,7 @@ def ensure_server() -> bool:
         file=sys.stderr,
     )
     print("", file=sys.stderr)
-    print(f"{MUTED}  Start your local helper script:", file=sys.stderr)
-    print("      ~/.config/pi/run-qwen36-q8.sh &", file=sys.stderr)
-    print("", file=sys.stderr)
-    print("  ...or launch llama-server yourself:", file=sys.stderr)
+    print(f"{MUTED}  Start a local OpenAI-compatible server:", file=sys.stderr)
     print("      llama-server \\", file=sys.stderr)
     print(f"        -m {model_path()} \\", file=sys.stderr)
     print(

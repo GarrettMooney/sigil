@@ -1,59 +1,24 @@
-"""Lifecycle helpers for the local model server used by Sigil and Pi.
-
-This is intentionally local-machine oriented for now: Sigil can start the
-user's existing helper script and waits for the llama.cpp-compatible port.
-"""
+"""Lifecycle checks for the local model server used by Sigil and Pi."""
 
 from __future__ import annotations
 
-import os
-import socket
-import subprocess
 import sys
-import time
-from pathlib import Path
+
+from .openai_compat import endpoint_reachable, model_url
 
 
-def qwen_port_open() -> bool:
-    """Return whether the local OpenAI-compatible server is listening."""
-    try:
-        with socket.create_connection(("127.0.0.1", 8080), timeout=0.25):
-            return True
-    except OSError:
-        return False
+def model_endpoint_open() -> bool:
+    """Return whether the configured OpenAI-compatible server is listening."""
+    return endpoint_reachable(model_url())
 
 
-def start_qwen_for_pi() -> bool:
-    """Start the local model server before invoking Pi, if needed."""
-    if qwen_port_open():
+def ensure_model_for_pi() -> bool:
+    """Check that the local model endpoint is reachable before invoking Pi."""
+    if model_endpoint_open():
         return True
-
-    home = Path.home()
-    script = home / ".config" / "pi" / "run-qwen36-q8.sh"
-    log_dir = home / ".pi" / "agent" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / "qwen36-q8.log"
-
-    if not script.exists():
-        print(f"pi: missing local Qwen server helper at {script}", file=sys.stderr)
-        return False
-
-    print("pi: starting local Qwen3.6-27B Q8 server on 127.0.0.1:8080", file=sys.stderr)
-    with log_path.open("ab") as log:
-        subprocess.Popen(
-            [str(script)],
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-            env=os.environ.copy(),
-        )
-
-    for _ in range(180):
-        if qwen_port_open():
-            return True
-        time.sleep(1)
-
     print(
-        f"pi: local Qwen server did not become ready; see {log_path}", file=sys.stderr
+        f"pi: local model endpoint is not reachable at {model_url()}",
+        file=sys.stderr,
     )
+    print("pi: start the model server or set SIGIL_MODEL_URL", file=sys.stderr)
     return False

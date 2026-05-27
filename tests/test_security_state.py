@@ -524,7 +524,7 @@ def test_question_and_follow_up_record_web_taint() -> None:
                     return FakeProc(StringIO(""))
                 return FakeProc()
 
-            with patch("sigil.question.start_qwen_for_pi", return_value=True):
+            with patch("sigil.question.ensure_model_for_pi", return_value=True):
                 with patch("sigil.question.subprocess.Popen", side_effect=fake_popen):
                     assert ask("what is sigil?", json_output=True) == 0
             fresh_turn = read_jsonl("last-question.jsonl")[0]
@@ -558,7 +558,7 @@ def test_question_and_follow_up_record_web_taint() -> None:
                     },
                 ],
             )
-            with patch("sigil.question.start_qwen_for_pi", return_value=True):
+            with patch("sigil.question.ensure_model_for_pi", return_value=True):
                 with patch("sigil.question.subprocess.Popen", side_effect=fake_popen):
                     assert ask("continue", follow_up=True, json_output=True) == 0
             follow_up_turn = read_jsonl("last-question.jsonl")[-1]
@@ -867,7 +867,7 @@ def test_fresh_ask_prepends_recent_turns_context_to_pi_prompt() -> None:
                 return FakeProc()
 
             with (
-                patch("sigil.question.start_qwen_for_pi", return_value=True),
+                patch("sigil.question.ensure_model_for_pi", return_value=True),
                 patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
             ):
                 assert ask("what should I do next?", json_output=True) == 0
@@ -911,7 +911,7 @@ def test_follow_up_ask_does_not_include_recent_turns_context() -> None:
                 return FakeProc()
 
             with (
-                patch("sigil.question.start_qwen_for_pi", return_value=True),
+                patch("sigil.question.ensure_model_for_pi", return_value=True),
                 patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
             ):
                 assert ask("follow up", follow_up=True, json_output=True) == 0
@@ -944,7 +944,7 @@ def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
                 return FakeProc()
 
             with (
-                patch("sigil.question.start_qwen_for_pi", return_value=True),
+                patch("sigil.question.ensure_model_for_pi", return_value=True),
                 patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
             ):
                 assert ask("hello", json_output=True) == 0

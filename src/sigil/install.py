@@ -236,13 +236,13 @@ def check_model_config(env: dict[str, str] | None = None) -> DoctorCheck:
 
 
 def model_url_from_env(env: Mapping[str, str]) -> str:
-    """Return model URL from explicit env values, accepting legacy aliases."""
-    return env.get("SIGIL_MODEL_URL") or env.get("QWEN_URL") or DEFAULT_MODEL_URL
+    """Return model URL from explicit env values."""
+    return env.get("SIGIL_MODEL_URL") or DEFAULT_MODEL_URL
 
 
 def model_name_from_env(env: Mapping[str, str]) -> str:
-    """Return model name from explicit env values, accepting legacy aliases."""
-    return env.get("SIGIL_MODEL_NAME") or env.get("QWEN_MODEL") or ""
+    """Return model name from explicit env values."""
+    return env.get("SIGIL_MODEL_NAME") or ""
 
 
 def check_shell_support(shell: str | None) -> DoctorCheck:

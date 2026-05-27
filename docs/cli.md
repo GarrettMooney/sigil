@@ -477,9 +477,6 @@ SIGIL_BIN=/path/to/sigil
 SIGIL_GLOW_STYLE=notty
 SIGIL_GLOW_WIDTH=88
 SIGIL_MODEL_URL=http://127.0.0.1:8080/v1/chat/completions
-SIGIL_MODEL_NAME=qwen3.6-27b-q8-local
+SIGIL_MODEL_NAME=local-model
 SIGIL_MODEL_PATH=/path/to/model.gguf
 ```
-
-`QWEN_URL`, `QWEN_MODEL`, and `QWEN_MODEL_PATH` remain supported as legacy
-aliases.
