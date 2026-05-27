@@ -151,6 +151,23 @@ def test_bash_question_handoff_adds_command_to_history() -> None:
         assert "history=git diff --stat" in result.stdout
 
 
+def test_bash_act_handoff_adds_command_to_history() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    export SIGIL_STUB_HANDOFF='uv run pytest'\n                    sigil_command_loop repair\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "op:op ,,, repair" in result.stdout
+        assert "history=uv run pytest" in result.stdout
+
+
 def test_bash_exports_tty_for_pipeline_confirmations() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -339,6 +356,24 @@ def test_zsh_question_handoff_adds_command_to_history() -> None:
         assert_success(result)
         assert "op:op ? review" in result.stdout
         assert "history=git diff --stat" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_act_handoff_adds_command_to_history() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    source shell/zsh/sigil.zsh\n                    export SIGIL_STUB_HANDOFF="uv run pytest"\n                    sigil_command_loop repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "op:op ,,, repair" in result.stdout
+        assert "history=uv run pytest" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

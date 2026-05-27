@@ -166,9 +166,6 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
     stdin_text = piped_stdin_text()
     if stdin_text is not None:
         if follow_up:
-            if not confirm_piped_input(stdin_text):
-                print("sigil ask: piped input declined", file=sys.stderr)
-                raise click.exceptions.Exit(2)
             prompt = question_with_stdin(question or "", stdin_text)
             return ask(prompt, follow_up=True, json_output=json_output)
         return run_stream_operator(
@@ -183,7 +180,7 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
 
 
 def question_with_stdin(question: str, stdin_text: str) -> str:
-    """Attach confirmed piped input to a web-authorized follow-up prompt."""
+    """Attach piped input to a web-authorized question prompt."""
     if question:
         return f"{question}\n\nPiped input:\n{stdin_text}"
     return f"Piped input:\n{stdin_text}"
@@ -244,7 +241,7 @@ def cmd_op(
     if invocation.base == "?":
         if dry_run:
             print(
-                "sigil op: ? dry-run: would call read+web question route",
+                "sigil op: ? dry-run: would call read+web+bash-handoff question route",
                 file=sys.stderr,
             )
             return 0
@@ -275,7 +272,7 @@ def cmd_op(
 def should_confirm_piped_input(invocation: object) -> bool:
     """Return whether an operator needs piped-input confirmation."""
     return (
-        getattr(invocation, "base", None) in {"?", ","}
+        getattr(invocation, "base", None) == ","
         and getattr(invocation, "mode", None) == "pipeline"
         and bool(getattr(invocation, "stdin", ""))
     )

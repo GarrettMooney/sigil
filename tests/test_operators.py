@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import tempfile
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -118,7 +119,7 @@ def test_op_cli_runs_piped_question_operator_through_web_route() -> None:
         return 0
 
     with (
-        patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
         patch("sigil.cli.ask", side_effect=fake_ask),
     ):
         result = CliRunner().invoke(
@@ -576,7 +577,7 @@ def test_op_cli_dry_run_question_does_not_call_web_route() -> None:
         result = CliRunner().invoke(cli, ["op", "--dry-run", "?", "status"])
 
     assert result.exit_code == 0
-    assert "read+web question route" in result.output
+    assert "read+web+bash-handoff question route" in result.output
 
 
 def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
@@ -657,6 +658,56 @@ def test_piped_triple_comma_denies_input_before_act_generation() -> None:
 
     assert result.exit_code == 2
     assert "piped input declined" in result.stderr
+
+
+def test_act_pi_step_uses_bash_handoff_extension() -> None:
+    class FakeProc:
+        def __init__(self, stdout: object | None = None) -> None:
+            self.stdout = stdout
+
+        def wait(self) -> int:
+            return 0
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "act-session"},
+        ):
+            popen_calls: list[tuple[list[str], dict[str, object]]] = []
+
+            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
+                popen_calls.append((cmd, kwargs))
+                if cmd[0] == "pi":
+                    return FakeProc(stdout=StringIO(""))
+                return FakeProc(stdout=StringIO(""))
+
+            with (
+                patch("sigil.acts.ensure_model_for_pi", return_value=True),
+                patch("sigil.acts.subprocess.Popen", side_effect=fake_popen),
+                patch("sigil.acts.renderer_command", return_value=["cat"]),
+                patch("sigil.acts.record_bash_handoffs", return_value=[]),
+            ):
+                from sigil.acts import run_pi_agent_step
+
+                result = run_pi_agent_step(
+                    {"objective": "repair"},
+                    {"id": "1"},
+                    {
+                        "id": "decision",
+                        "integrity": "human",
+                        "capability": "none",
+                        "taint": [],
+                    },
+                )
+
+    assert result == 0
+    pi_cmd, _ = next(call for call in popen_calls if call[0][0] == "pi")
+    assert pi_cmd[pi_cmd.index("--tools") + 1] == "read,grep,find,ls,bash,edit,write"
+    assert "--extension" in pi_cmd
+    _, filter_kwargs = next(call for call in popen_calls if call[0][0] != "pi")
+    filter_env = filter_kwargs["env"]
+    assert isinstance(filter_env, dict)
+    assert "SIGIL_BASH_HANDOFF_PATH" in filter_env
 
 
 def test_act_resume_executes_pending_step_without_regenerating() -> None:
@@ -773,21 +824,35 @@ def test_op_cli_denies_piped_comma_before_model_call() -> None:
     assert "piped input declined" in result.stderr
 
 
-def test_op_cli_denies_piped_question_before_web_call() -> None:
+def test_op_cli_sends_piped_question_without_confirmation() -> None:
+    calls = []
+
+    def fake_ask(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
     with (
-        patch("sigil.cli.confirm_piped_input", return_value=False),
-        patch("sigil.cli.ask", side_effect=AssertionError("no web")),
+        patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
+        patch("sigil.cli.ask", side_effect=fake_ask),
     ):
         result = CliRunner().invoke(cli, ["op", "?", "review"], input="diff\n")
 
-    assert result.exit_code == 2
-    assert "piped input declined" in result.stderr
+    assert result.exit_code == 0
+    assert calls == [
+        (("review\n\nPiped input:\ndiff\n",), {"follow_up": False}),
+    ]
 
 
-def test_ask_follow_up_denies_piped_input_before_web_call() -> None:
+def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
+    calls = []
+
+    def fake_ask(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
     with (
-        patch("sigil.cli.confirm_piped_input", return_value=False),
-        patch("sigil.cli.ask", side_effect=AssertionError("no web")),
+        patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
+        patch("sigil.cli.ask", side_effect=fake_ask),
     ):
         result = CliRunner().invoke(
             cli,
@@ -795,8 +860,10 @@ def test_ask_follow_up_denies_piped_input_before_web_call() -> None:
             input="diff\n",
         )
 
-    assert result.exit_code == 2
-    assert "piped input declined" in result.stderr
+    assert result.exit_code == 0
+    assert calls == [
+        (("review\n\nPiped input:\ndiff\n",), {"follow_up": True, "json_output": False})
+    ]
 
 
 def test_ask_follow_up_sends_confirmed_piped_input_to_web_route() -> None:
@@ -807,7 +874,7 @@ def test_ask_follow_up_sends_confirmed_piped_input_to_web_route() -> None:
         return 0
 
     with (
-        patch("sigil.cli.confirm_piped_input", return_value=True),
+        patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
         patch("sigil.cli.ask", side_effect=fake_ask),
     ):
         result = CliRunner().invoke(

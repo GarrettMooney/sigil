@@ -71,11 +71,11 @@ Fields:
      provisional=true
 ```
 
-Question routes produce answers and may hand off a proposed Bash command, but
-they do not execute it. In zsh the shell binding inserts the handed-off command
-into the editable prompt buffer; Bash stores it in history. Execution and file
-writes happen through comma routes or through the user pressing Enter on an
-edited handoff command.
+Question routes and triple-comma act steps may hand off a proposed Bash command,
+but they do not execute it through Pi. In zsh the shell binding inserts the
+handed-off command into the editable prompt buffer; Bash stores it in history.
+Execution and file writes happen through comma routes, Pi edit/write tools, or
+through the user pressing Enter on an edited handoff command.
 
 ## Practical Examples
 

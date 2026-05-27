@@ -1,8 +1,8 @@
 """State plumbing for Pi bash tool handoff.
 
-Pi can propose a bash command through a tool call. Sigil's question route blocks
-that execution in a Pi extension, records the proposed command here, and lets
-the shell binding put the command back under the user's cursor.
+Pi can propose a bash command through a tool call. Sigil blocks that execution
+in a Pi extension, records the proposed command here, and lets the shell binding
+put the command back under the user's cursor.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from .security import create_trust_metadata
+from .security import create_trust_metadata, normalize_integrity
 from .state import append_event, read_jsonl, session_dir, write_jsonl
 
 PENDING_BASH_HANDOFF_FILE = "pending-bash-handoff.jsonl"
@@ -62,15 +62,15 @@ def read_pending_bash_handoffs() -> list[dict[str, Any]]:
 
 def record_bash_handoffs(
     *,
-    question_event: dict[str, Any],
-    question_security: dict[str, Any],
+    source_event: dict[str, Any],
+    source_security: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """Promote raw handoff records into trusted Sigil session state."""
     records = []
-    question_event_id = str(question_event.get("id") or "")
-    glyph = str(question_security.get("glyph") or "?")
-    integrity = str(question_security.get("integrity") or "web")
-    taint = [str(item) for item in question_security.get("taint", [])]
+    source_event_id = str(source_event.get("id") or "")
+    glyph = str(source_security.get("glyph") or "?")
+    integrity = normalize_integrity(source_security.get("integrity"))
+    taint = [str(item) for item in source_security.get("taint", [])]
     if "model" not in taint:
         taint.append("model")
 
@@ -80,11 +80,11 @@ def record_bash_handoffs(
             continue
         security = create_trust_metadata(
             glyph=glyph,
-            integrity="web" if integrity == "web" else "unknown",
+            integrity=integrity,
             capability="propose",
             taint=taint,
-            inputs=[question_event_id] if question_event_id else [],
-            input_records=[question_event],
+            inputs=[source_event_id] if source_event_id else [],
+            input_records=[source_event],
             provisional=True,
         )
         event = append_event(

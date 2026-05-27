@@ -72,6 +72,9 @@ sigil_execute_command() {
 
 sigil_command_loop() {
   "$__sigil_bin" op ",,," "$@"
+  local exit_status=$?
+  __sigil_insert_pending_handoff
+  return "$exit_status"
 }
 
 sigil_question() {

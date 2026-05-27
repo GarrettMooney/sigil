@@ -103,8 +103,9 @@ git diff | ? review risky changes
 git diff --name-only | , run the relevant tests
 ```
 
-When stdin is piped into comma or question routes, Sigil previews the input and
-asks before using it.
+When stdin is piped into comma routes, Sigil previews the input and asks before
+using it. Question routes use piped input directly because they have no execute
+path; Bash tool calls from Pi are still blocked and handed off.
 
 ## Shell Glyphs
 
@@ -136,7 +137,7 @@ in shell history. Bash records it in history. `,,` executes command proposals
 through your shell. Patch proposals are shown first and applied only after
 confirmation. `,,,` asks before handing the objective to Pi, gives Pi
 read/search/edit/write tools, and returns control to the shell after one
-bounded edit pass.
+bounded edit pass. Bash calls inside that pass are blocked and handed off.
 
 When `?`, `??`, or `???` need a shell command, Pi may call Bash, but Sigil
 blocks execution. In zsh, the proposed command is inserted into the prompt so

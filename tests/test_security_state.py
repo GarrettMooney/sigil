@@ -613,13 +613,13 @@ def test_bash_handoff_records_and_consumes_blocked_command() -> None:
                 encoding="utf-8",
             )
             records = record_bash_handoffs(
-                question_event={
+                source_event={
                     "id": "question-event",
                     "integrity": "web",
                     "capability": "read",
                     "taint": ["web"],
                 },
-                question_security={
+                source_security={
                     "glyph": "?",
                     "integrity": "web",
                     "taint": ["web"],

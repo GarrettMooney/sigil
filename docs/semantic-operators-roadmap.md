@@ -69,11 +69,14 @@ Use `???` when you want a more exhaustive read-only answer:
 ??? explain the release options and their risks
 ```
 
-Question routes are read-only. They do not execute commands or apply patches.
+Question routes do not execute commands or apply patches. If Pi proposes a Bash
+command, Sigil blocks execution and hands the command to the shell.
 
 ## Piped Input
 
-Piped input is previewed before it can influence a comma or question route:
+Piped input is previewed before it can influence a comma route. Question routes
+attach piped input without an extra confirmation because they have no execute
+path:
 
 ```sh
 git diff | ? review this change

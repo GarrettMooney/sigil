@@ -105,9 +105,9 @@ git diff | sigil ask "review this diff"
 A fresh `sigil ask` starts a new same-session question transcript. `--follow-up`
 continues that transcript.
 
-When stdin is piped into a fresh question, Sigil previews the input and asks
-before sending it to Pi. Piped follow-ups also ask before attaching stdin to the
-follow-up prompt.
+When stdin is piped into a question, Sigil attaches it to the prompt without an
+extra confirmation. Question routes have no execute path; any Bash tool call
+from Pi is still blocked and handed off to the shell.
 
 If Pi calls Bash while answering, the command is not executed. With the zsh
 binding, Sigil inserts the command into the editable prompt buffer with
@@ -203,8 +203,8 @@ Examples:
 into the editable prompt buffer and adds it to shell history; the Bash binding
 adds it to history. `,,` runs command proposals through your shell. Patch
 proposals are previewed and require confirmation before apply. `,,,` asks for
-confirmation, invokes Pi with read/search/edit/write tools, and then returns
-control to the shell.
+confirmation, invokes Pi with read/search/edit/write tools, blocks Bash tool
+execution as a handoff, and then returns control to the shell.
 
 To install bindings without glyphs:
 

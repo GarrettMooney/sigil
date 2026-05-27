@@ -241,8 +241,8 @@ def ask(
     filter_code = filter_proc.wait()
     pi_code = pi_proc.wait()
     handoffs = record_bash_handoffs(
-        question_event=question_event,
-        question_security=security,
+        source_event=question_event,
+        source_security=security,
     )
     if handoffs and not json_output:
         latest = str(handoffs[-1].get("command") or "")
