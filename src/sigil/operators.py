@@ -27,8 +27,8 @@ SUPPORTED_OPERATORS = frozenset(OPERATOR_NAMES)
 MAX_OPERATOR_DEPTH = 3
 MAX_STDIN_CHARS = 120_000
 MAX_EVENT_OUTPUT_CHARS = 4000
-MAX_REPAIR_FILES = 16
-MAX_REPAIR_FILE_CHARS = 20_000
+MAX_TARGET_FILES = 16
+MAX_TARGET_FILE_CHARS = 20_000
 QUESTION_TRANSCRIPT = "last-question.jsonl"
 
 INSPECT_SYSTEM = (
@@ -384,7 +384,7 @@ def depth_guidance(invocation: OperatorInvocation) -> str:
         if invocation.depth == 1:
             return "Comma means recommend one concrete next action."
         if invocation.depth == 2:
-            return "Comma depth two means generate exactly one command that Sigil will execute."
+            return "Comma depth two means generate exactly one command or patch that Sigil will execute or apply."
         return "Comma depth three is handled by the durable plan stepper."
     return {
         1: "Use a quick pass.",
@@ -410,16 +410,16 @@ def proposal_user_prompt(invocation: OperatorInvocation) -> str:
         proposal_instruction(invocation),
         f"{stdin_label}:\n{stdin_text}",
     ]
-    files = repair_files(
+    files = readable_target_files(
         [line.strip() for line in invocation.stdin.splitlines() if line.strip()]
     )
     if files:
         sections.append("Readable target file snapshots:")
         for path, content in files:
             label = str(path)
-            if len(content) > MAX_REPAIR_FILE_CHARS:
-                content = content[:MAX_REPAIR_FILE_CHARS]
-                label = f"{label} (first {MAX_REPAIR_FILE_CHARS} chars)"
+            if len(content) > MAX_TARGET_FILE_CHARS:
+                content = content[:MAX_TARGET_FILE_CHARS]
+                label = f"{label} (first {MAX_TARGET_FILE_CHARS} chars)"
             sections.append(f"--- {label}\n{content}")
     if invocation.mode == "interactive":
         sections.append(interactive_failure_context())
@@ -531,10 +531,10 @@ def capability_for_operator(
     return "propose"
 
 
-def repair_files(lines: list[str]) -> list[tuple[Path, str]]:
+def readable_target_files(lines: list[str]) -> list[tuple[Path, str]]:
     """Read a bounded set of file paths from stdin target lines."""
     files: list[tuple[Path, str]] = []
-    for line in lines[:MAX_REPAIR_FILES]:
+    for line in lines[:MAX_TARGET_FILES]:
         path = Path(line)
         try:
             if not path.is_file():
@@ -549,12 +549,12 @@ def repair_files(lines: list[str]) -> list[tuple[Path, str]]:
 def interactive_failure_context() -> str:
     """Return last-failure context for interactive comma proposals."""
     try:
-        from .failure import fix_prompt, last_failure
+        from .failure import failure_context_prompt, last_failure
 
         failure = last_failure()
     except SystemExit:
-        return "No failed command is recorded for interactive repair."
-    return "Last failed command context:\n" + fix_prompt(failure)
+        return "No failed command is recorded for interactive proposal."
+    return "Last failed command context:\n" + failure_context_prompt(failure)
 
 
 def max_tokens_for_depth(depth: int) -> int:

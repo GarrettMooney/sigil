@@ -10,7 +10,7 @@ fi
 
 __sigil_muted=$'\e[38;2;110;106;134m'
 __sigil_reset=$'\e[0m'
-__sigil_last_failed_history=""
+__sigil_last_recorded_history=""
 
 if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   if command -v uuidgen >/dev/null 2>&1; then
@@ -117,19 +117,17 @@ __sigil_precmd() {
   local record_args
 
   command="$(__sigil_history_line)" || return "$exit_status"
-  if [[ $exit_status -ne 0 && -n "$command" && "$command" != "$__sigil_last_failed_history" ]]; then
-    case "$command" in
-      ,*|\?*|sigil\ *|__sigil_*) ;;
-      *)
-        record_args=(record-failure --status "$exit_status" --cwd "$PWD")
-        [[ -n "${SIGIL_FAILURE_STDOUT:-}" ]] && record_args+=(--stdout-snippet "$SIGIL_FAILURE_STDOUT")
-        [[ -n "${SIGIL_FAILURE_STDERR:-}" ]] && record_args+=(--stderr-snippet "$SIGIL_FAILURE_STDERR")
-        "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
-        __sigil_last_failed_history="$command"
-        unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
-        ;;
-    esac
-  fi
+  [[ -z "$command" ]] && return "$exit_status"
+  [[ "$command" == "$__sigil_last_recorded_history" ]] && return "$exit_status"
+  case "$command" in
+    ,*|\?*|sigil\ *|__sigil_*) return "$exit_status" ;;
+  esac
+  record_args=(record-turn --status "$exit_status" --cwd "$PWD")
+  [[ -n "${SIGIL_FAILURE_STDOUT:-}" ]] && record_args+=(--stdout-snippet "$SIGIL_FAILURE_STDOUT")
+  [[ -n "${SIGIL_FAILURE_STDERR:-}" ]] && record_args+=(--stderr-snippet "$SIGIL_FAILURE_STDERR")
+  "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
+  __sigil_last_recorded_history="$command"
+  unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
   return "$exit_status"
 }
 

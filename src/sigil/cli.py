@@ -42,6 +42,7 @@ from .session import (
     event_lineage,
     known_sessions,
     read_event_log,
+    record_turn,
     session_paths,
 )
 from .state import append_event
@@ -678,7 +679,6 @@ def event_action(event: dict[str, object], glyph: str, event_type: str) -> str:
         "plan_completed": "plan complete",
         "plan_aborted": "plan aborted",
         "command_selected": "selected",
-        "fix_selected": "selected",
     }
     label = labels.get(event_type, event_type.replace("_", " "))
     return f"{glyph} {label}"
@@ -852,8 +852,26 @@ def cmd_record_failure(
     stdout_snippet: str,
     stderr_snippet: str,
 ) -> int:
-    """Record a failed shell command for later repair."""
+    """Record a failed shell command for later comma proposal context."""
     record_failure(command, status, cwd, stdout_snippet, stderr_snippet)
+    return 0
+
+
+@cli.command("record-turn", hidden=True)
+@click.option("--status", type=int, required=True)
+@click.option("--cwd")
+@click.option("--stdout-snippet", default="")
+@click.option("--stderr-snippet", default="")
+@click.argument("command")
+def cmd_record_turn(
+    command: str,
+    status: int,
+    cwd: str | None,
+    stdout_snippet: str,
+    stderr_snippet: str,
+) -> int:
+    """Record one shell turn; fans out to failure recording on non-zero exit."""
+    record_turn(command, status, cwd, stdout_snippet, stderr_snippet)
     return 0
 
 

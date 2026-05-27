@@ -8,10 +8,12 @@ explicit `clear` command.
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 from typing import Any
 
-from .security import normalize_trust_record
+from .security import create_trust_metadata, normalize_trust_record
 from .state import session_dir, session_id, state_dir
 
 SESSION_FILES = (
@@ -20,7 +22,12 @@ SESSION_FILES = (
     "last-failure.json",
     "last-patch.json",
     "last-plan.jsonl",
+    "recent-turns.jsonl",
 )
+
+RECENT_TURNS_FILE = "recent-turns.jsonl"
+RECENT_TURNS_LIMIT = 50
+TURN_SKIP_PREFIXES = (",", "?", "sigil ", "__sigil_")
 
 
 def session_paths() -> dict[str, str]:
@@ -175,3 +182,84 @@ def clear_current_session() -> list[str]:
             path.unlink()
             removed.append(str(path))
     return removed
+
+
+def turn_is_skippable(command: str) -> bool:
+    """Return True for commands the per-turn buffer should ignore."""
+    if not command or not command.strip():
+        return True
+    if command[0].isspace():
+        return True
+    for prefix in TURN_SKIP_PREFIXES:
+        if command.startswith(prefix):
+            return True
+    return False
+
+
+def record_turn(
+    command: str,
+    status: int,
+    cwd: str | None = None,
+    stdout_snippet: str | None = None,
+    stderr_snippet: str | None = None,
+) -> None:
+    """Persist one shell turn and fan out to failure recording on non-zero exit."""
+    if turn_is_skippable(command):
+        return
+
+    turn_cwd = cwd or os.getcwd()
+    security = create_trust_metadata(
+        glyph="turn",
+        integrity="human",
+        capability="read",
+        taint=[],
+        fresh_human=True,
+    )
+    entry = {
+        "id": _new_event_id(),
+        "time": time.time(),
+        "session": session_id(),
+        "command": command,
+        "status": status,
+        "turn_cwd": turn_cwd,
+        **security,
+    }
+    _append_recent_turn(entry)
+
+    if status != 0:
+        from .failure import record_failure
+
+        record_failure(
+            command,
+            status,
+            turn_cwd,
+            stdout_snippet=stdout_snippet,
+            stderr_snippet=stderr_snippet,
+        )
+
+
+def _new_event_id() -> str:
+    import uuid
+
+    return str(uuid.uuid4())
+
+
+def _append_recent_turn(entry: dict[str, Any]) -> None:
+    root = session_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / RECENT_TURNS_FILE
+
+    existing: list[str] = []
+    if path.exists():
+        existing = [
+            line for line in path.read_text(encoding="utf-8").splitlines() if line
+        ]
+
+    serialized = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
+    existing.append(serialized)
+    if len(existing) > RECENT_TURNS_LIMIT:
+        existing = existing[-RECENT_TURNS_LIMIT:]
+
+    tmp = root / f"{RECENT_TURNS_FILE}.tmp"
+    tmp.write_text("\n".join(existing) + "\n", encoding="utf-8")
+    tmp.replace(path)

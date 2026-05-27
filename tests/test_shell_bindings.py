@@ -26,6 +26,7 @@ def make_stub(tmp: Path) -> Path:
               "op , draft executive summary") printf '%s\n%s\n' "echo stream recommended" "because stdin matters" ;;
               op*) printf '%s\n' "op:$*" ;;
               record-failure*) printf '%s\n' "recorded" ;;
+              record-turn*) printf '%s\n' "turn-recorded" ;;
               *) printf '%s\n' "unexpected:$*" >&2; exit 64 ;;
             esac
             """
@@ -183,30 +184,35 @@ def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         assert "because stdin matters" in result.stdout
 
 
-def test_bash_records_failed_non_sigil_history_entries() -> None:
+def test_bash_records_every_non_sigil_turn_via_record_turn() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf '%s\\n' \"bad command\"; }\n                    false\n                    __sigil_precmd\n                    __sigil_history_line() { printf '%s\\n' \", should not record\"; }\n                    false\n                    __sigil_precmd\n                    :\n                    "
+                "                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf '%s\\n' \"ls -la\"; }\n                    true\n                    __sigil_precmd\n                    __sigil_history_line() { printf '%s\\n' \"bad command\"; }\n                    false\n                    __sigil_precmd\n                    __sigil_history_line() { printf '%s\\n' \", should not record\"; }\n                    false\n                    __sigil_precmd\n                    wait\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == [f"record-failure --status 1 --cwd {ROOT} bad command"]
+        assert sorted(read_log(tmp)) == sorted(
+            [
+                f"record-turn --status 0 --cwd {ROOT} ls -la",
+                f"record-turn --status 1 --cwd {ROOT} bad command",
+            ]
+        )
 
 
-def test_bash_does_not_record_failed_sigil_commands() -> None:
+def test_bash_does_not_record_sigil_commands() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf '%s\\n' \"sigil bad\"; }\n                    false\n                    __sigil_precmd\n                    :\n                    "
+                "                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf '%s\\n' \"sigil bad\"; }\n                    false\n                    __sigil_precmd\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -215,21 +221,21 @@ def test_bash_does_not_record_failed_sigil_commands() -> None:
         assert read_log(tmp) == []
 
 
-def test_bash_passes_failure_snippet_env_when_present() -> None:
+def test_bash_passes_failure_snippet_env_to_record_turn() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                '                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf \'%s\\n\' "bad command"; }\n                    export SIGIL_FAILURE_STDOUT="stdout line"\n                    export SIGIL_FAILURE_STDERR="stderr line"\n                    false\n                    __sigil_precmd\n                    :\n                    '
+                '                    source shell/bash/sigil.bash\n                    __sigil_history_line() { printf \'%s\\n\' "bad command"; }\n                    export SIGIL_FAILURE_STDOUT="stdout line"\n                    export SIGIL_FAILURE_STDERR="stderr line"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
             ),
             tmp,
             stub,
         )
         assert_success(result)
         assert read_log(tmp) == [
-            f"record-failure --status 1 --cwd {ROOT} --stdout-snippet stdout line --stderr-snippet stderr line bad command"
+            f"record-turn --status 1 --cwd {ROOT} --stdout-snippet stdout line --stderr-snippet stderr line bad command"
         ]
 
 
@@ -327,17 +333,39 @@ def test_zsh_glyph_aliases_dispatch_piped_stdin_before_globbing() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_does_not_record_failed_sigil_commands() -> None:
+def test_zsh_does_not_record_sigil_commands() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    __sigil_preexec "sigil bad"\n                    false\n                    __sigil_precmd\n                    :\n                    '
+                '                    source shell/zsh/sigil.zsh\n                    __sigil_preexec "sigil bad"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
             ),
             tmp,
             stub,
         )
         assert_success(result)
         assert read_log(tmp) == []
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_records_every_non_sigil_turn_via_record_turn() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    source shell/zsh/sigil.zsh\n                    __sigil_preexec "ls -la"\n                    true\n                    __sigil_precmd\n                    __sigil_preexec "bad command"\n                    false\n                    __sigil_precmd\n                    __sigil_preexec ", should not record"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert sorted(read_log(tmp)) == sorted(
+            [
+                f"record-turn --status 0 --cwd {ROOT} ls -la",
+                f"record-turn --status 1 --cwd {ROOT} bad command",
+            ]
+        )

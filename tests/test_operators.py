@@ -375,7 +375,7 @@ def test_double_comma_executes_command_proposal() -> None:
         ),
         patch("sigil.operators.append_event", side_effect=fake_append_event),
     ):
-        result = CliRunner().invoke(cli, ["op", ",,", "fix", "it"])
+        result = CliRunner().invoke(cli, ["op", ",,", "update", "it"])
 
     assert result.exit_code == 0, result.output
     assert result.stdout == ""

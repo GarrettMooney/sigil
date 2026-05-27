@@ -1,8 +1,4 @@
-"""Failure recovery for the caret glyph.
-
-`^` turns the last failed shell command into repair candidates. It deliberately
-stops at a visible repair preview and never executes automatically.
-"""
+"""Failure context captured by shell hooks for later comma proposals."""
 
 from __future__ import annotations
 
@@ -13,19 +9,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .ansi import LOVE, MUTED, RESET
-from .commands import COMMAND_SCHEMA, select
-from .qwen import chat_json, ensure_server
-from .security import create_trust_metadata, normalize_trust_record
+from .ansi import LOVE, RESET
+from .security import create_trust_metadata
 from .state import append_event, read_json, write_json
 
-FIX_SYSTEM = (
-    "You fix failed macOS zsh commands with the default BSD userland. "
-    "Return 2-4 corrected candidate commands, best first, each with a terse "
-    "one-line note. Do not invent hidden context. Preserve user intent. "
-    "Commands must be directly runnable, but they will be reviewed by a human "
-    "before execution."
-)
 MAX_SNIPPET_CHARS = 4000
 MAX_CONTEXT_LINES = 40
 
@@ -96,7 +83,7 @@ def record_failure(
     stderr_text = truncate_snippet(stderr_snippet)
     context = cwd_context(failure_cwd)
     security = create_trust_metadata(
-        glyph="^",
+        glyph="failure",
         integrity="human",
         capability="propose",
         taint=[],
@@ -139,8 +126,8 @@ def last_failure() -> dict[str, Any]:
     return failure
 
 
-def fix_prompt(failure: dict[str, Any]) -> str:
-    """Build the model prompt for repair without inventing missing output."""
+def failure_context_prompt(failure: dict[str, Any]) -> str:
+    """Build proposal context from a failed command without inventing output."""
     context = failure.get("context") if isinstance(failure.get("context"), dict) else {}
     prompt_lines = [
         f"Failed command: {failure['command']}",
@@ -158,7 +145,7 @@ def fix_prompt(failure: dict[str, Any]) -> str:
     prompt_lines.extend(
         [
             "",
-            "Repair guidance:",
+            "Failure-context guidance:",
             "- Do not invent missing stdout or stderr.",
             "- Use the command, exit status, cwd, git status, and cwd entries first.",
             "- If output is not captured, say so in the candidate note when relevant.",
@@ -176,75 +163,3 @@ def fix_prompt(failure: dict[str, Any]) -> str:
             prompt_lines.append("cwd_entries:")
             prompt_lines.extend(f"  {entry}" for entry in context["entries"])
     return "\n".join(prompt_lines)
-
-
-def generate_fixes() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
-    """Generate repair candidates for the current session's last failure."""
-    failure = normalize_trust_record(last_failure())
-    if not ensure_server():
-        raise SystemExit(1)
-
-    print(f"{MUTED}❯ sigil ^  · repair · model-authored{RESET}", file=sys.stderr)
-    print(f"{MUTED}⟳ thinking…{RESET}", end="", file=sys.stderr, flush=True)
-    user = fix_prompt(failure)
-    try:
-        data = chat_json(FIX_SYSTEM, user, COMMAND_SCHEMA)
-    except RuntimeError as exc:
-        print("\r\033[K", end="", file=sys.stderr)
-        print(f"{LOVE}✗ qwen request failed{RESET}", file=sys.stderr)
-        print(f"  {exc}", file=sys.stderr)
-        print("  Check that the local model server is still running.", file=sys.stderr)
-        raise SystemExit(1) from exc
-    except Exception:
-        print("\r\033[K", end="", file=sys.stderr)
-        print(f"{LOVE}✗ could not generate fix candidates{RESET}", file=sys.stderr)
-        raise SystemExit(1)
-    print("\r\033[K", end="", file=sys.stderr)
-
-    candidates = [
-        {"command": str(item.get("command", "")), "note": str(item.get("note", ""))}
-        for item in data.get("commands", [])
-        if item.get("command")
-    ]
-    if not candidates:
-        print(f"{LOVE}✗ no fix candidates{RESET}", file=sys.stderr)
-        raise SystemExit(1)
-
-    security = create_trust_metadata(
-        glyph="^",
-        integrity="local_model",
-        capability="propose",
-        taint=["model"],
-        inputs=[str(failure.get("event_id") or failure.get("id") or "")],
-        input_records=[failure],
-        fresh_human=True,
-    )
-    append_event(
-        {
-            "type": "fix_generated",
-            "failure": failure,
-            "commands": candidates,
-            **security,
-        }
-    )
-    return str(failure["command"]), candidates, security
-
-
-def select_fix() -> str | None:
-    """Generate fixes and return the user's selected repair command."""
-    prompt, candidates, security = generate_fixes()
-    command = select(prompt, candidates, security)
-    print_selected_fix_note(command, candidates)
-    return command
-
-
-def print_selected_fix_note(
-    command: str | None, candidates: list[dict[str, str]]
-) -> None:
-    """Show the selected rationale on stderr without changing stdout payload."""
-    if not command:
-        return
-    for candidate in candidates:
-        if candidate.get("command") == command and candidate.get("note"):
-            print(f"{MUTED}why: {candidate['note']}{RESET}", file=sys.stderr)
-            return

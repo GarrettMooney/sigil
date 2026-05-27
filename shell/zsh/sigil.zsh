@@ -99,17 +99,17 @@ __sigil_preexec() {
 
 __sigil_precmd() {
   local exit_status=$?
-  if (( exit_status != 0 )) && [[ -n "$__sigil_preexec_command" ]]; then
-    case "$__sigil_preexec_command" in
-      ,*|\?*|sigil\ *|__sigil_*) __sigil_preexec_command=""; return ;;
-    esac
-    local record_args=(record-failure --status "$exit_status" --cwd "$PWD")
-    [[ -n "${SIGIL_FAILURE_STDOUT:-}" ]] && record_args+=(--stdout-snippet "$SIGIL_FAILURE_STDOUT")
-    [[ -n "${SIGIL_FAILURE_STDERR:-}" ]] && record_args+=(--stderr-snippet "$SIGIL_FAILURE_STDERR")
-    "$__sigil_bin" "${record_args[@]}" "$__sigil_preexec_command" >/dev/null 2>&1
-    unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
-  fi
+  local command="$__sigil_preexec_command"
   __sigil_preexec_command=""
+  [[ -z "$command" ]] && return
+  case "$command" in
+    ,*|\?*|sigil\ *|__sigil_*) return ;;
+  esac
+  local record_args=(record-turn --status "$exit_status" --cwd "$PWD")
+  [[ -n "${SIGIL_FAILURE_STDOUT:-}" ]] && record_args+=(--stdout-snippet "$SIGIL_FAILURE_STDOUT")
+  [[ -n "${SIGIL_FAILURE_STDERR:-}" ]] && record_args+=(--stderr-snippet "$SIGIL_FAILURE_STDERR")
+  "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
+  unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
 }
 
 add-zsh-hook preexec __sigil_preexec

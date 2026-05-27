@@ -13,7 +13,7 @@ from click.testing import CliRunner
 from _patch import patch, patch_dict
 from sigil.cli import cli, main
 from sigil.commands import select
-from sigil.failure import generate_fixes, record_failure, select_fix
+from sigil.failure import failure_context_prompt, record_failure
 from sigil.pi_stream import should_color, stream_events
 from sigil.question import QUESTION_SYSTEM_PROMPT, ask, renderer_command
 from sigil.security import (
@@ -23,6 +23,7 @@ from sigil.security import (
     normalize_trust_record,
     reject_promotion,
 )
+from sigil.session import record_turn
 from sigil.state import append_event, append_jsonl, read_jsonl, write_jsonl
 from sigil.tty import confirmation_tty_paths, confirm_on_tty
 
@@ -579,7 +580,9 @@ def test_question_and_follow_up_record_web_taint() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
-def test_fix_inherits_model_taint() -> None:
+def test_failure_context_prompt_uses_recorded_failure_without_inventing_output() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as tmp:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
@@ -587,37 +590,20 @@ def test_fix_inherits_model_taint() -> None:
         os.environ["SIGIL_SESSION_ID"] = "test"
         try:
             record_failure("bad command", 2, "/tmp")
-            captured_prompts = []
-
-            def fake_chat_json(
-                system: str, prompt: str, schema: dict[str, object]
-            ) -> dict[str, object]:
-                del system, schema
-                captured_prompts.append(prompt)
-                return {
-                    "commands": [
-                        {
-                            "command": "fixed command",
-                            "note": "repair the failed command",
-                        }
-                    ]
-                }
-
-            with patch("sigil.failure.ensure_server", return_value=True):
-                with patch("sigil.failure.chat_json", side_effect=fake_chat_json):
-                    prompt, candidates, security = generate_fixes()
-            assert prompt == "bad command"
-            assert candidates[0]["command"] == "fixed command"
-            assert security["glyph"] == "^"
-            assert security["integrity"] == "local_model"
-            assert security["capability"] == "propose"
-            assert security["taint"] == ["model"]
-            assert security["inputs"][0]
-            assert "Failed command: bad command" in captured_prompts[0]
-            assert "Working directory: /tmp" in captured_prompts[0]
-            assert "Recent stderr: <not captured>" in captured_prompts[0]
-            assert "Recent stdout: <not captured>" in captured_prompts[0]
-            assert "Do not invent missing stdout or stderr." in captured_prompts[0]
+            failure = json.loads(
+                (Path(tmp) / "sessions" / "test" / "last-failure.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            prompt = failure_context_prompt(failure)
+            assert failure["glyph"] == "failure"
+            assert failure["integrity"] == "human"
+            assert failure["capability"] == "propose"
+            assert "Failed command: bad command" in prompt
+            assert "Working directory: /tmp" in prompt
+            assert "Recent stderr: <not captured>" in prompt
+            assert "Recent stdout: <not captured>" in prompt
+            assert "Do not invent missing stdout or stderr." in prompt
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)
@@ -671,40 +657,157 @@ def test_failure_records_snippets_and_safe_context() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
-def test_select_fix_prints_note_to_stderr_but_stdout_is_command_only() -> None:
+def read_recent_turns(tmp: str) -> list[dict[str, object]]:
+    path = Path(tmp) / "sessions" / "test" / "recent-turns.jsonl"
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line:
+            rows.append(json.loads(line))
+    return rows
+
+
+def test_record_turn_appends_command_with_human_read_trust_metadata() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp
-        os.environ["SIGIL_SESSION_ID"] = "test"
-        stderr = StringIO()
-        try:
-            record_failure("bad command", 2, "/tmp")
-            with patch("sigil.failure.ensure_server", return_value=True):
-                with patch(
-                    "sigil.failure.chat_json",
-                    return_value={
-                        "commands": [
-                            {
-                                "command": "fixed command",
-                                "note": "because bad command missed an argument",
-                            }
-                        ]
-                    },
-                ):
-                    with redirect_stderr(stderr):
-                        command = select_fix()
-            assert command == "fixed command"
-            assert "why: because bad command missed an argument" in stderr.getvalue()
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
-            else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
-            else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn("ls -la", 0, "/repo")
+
+        rows = read_recent_turns(tmp)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["command"] == "ls -la"
+        assert row["status"] == 0
+        assert row["turn_cwd"] == "/repo"
+        assert row["integrity"] == "human"
+        assert row["capability"] == "read"
+        assert row["taint"] == []
+        assert row["glyph"] == "turn"
+
+
+def test_record_turn_trims_buffer_to_last_fifty_entries() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            for index in range(60):
+                record_turn(f"cmd-{index}", 0, "/repo")
+
+        rows = read_recent_turns(tmp)
+        assert len(rows) == 50
+        assert rows[0]["command"] == "cmd-10"
+        assert rows[-1]["command"] == "cmd-59"
+
+
+def test_record_turn_skips_empty_command() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn("", 0, "/repo")
+            record_turn("   ", 0, "/repo")
+        assert read_recent_turns(tmp) == []
+
+
+def test_record_turn_skips_leading_whitespace_command() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn(" curl -H 'Authorization: Bearer secret' x", 0, "/repo")
+            record_turn("\tprintenv SECRET", 0, "/repo")
+        assert read_recent_turns(tmp) == []
+
+
+def test_record_turn_skips_comma_question_and_sigil_commands() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn(", run tests", 0, "/repo")
+            record_turn("? what is this", 0, "/repo")
+            record_turn("sigil ask hello", 0, "/repo")
+            record_turn("__sigil_precmd", 0, "/repo")
+        assert read_recent_turns(tmp) == []
+
+
+def test_record_turn_records_unsupported_caret_text() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn("^^", 0, "/repo")
+        rows = read_recent_turns(tmp)
+        assert len(rows) == 1
+        assert rows[0]["command"] == "^^"
+
+
+def test_record_turn_fans_out_to_record_failure_on_nonzero_status() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            with patch("sigil.failure.cwd_context", return_value={"cwd": "/repo"}):
+                record_turn(
+                    "pytest tests",
+                    1,
+                    "/repo",
+                    stdout_snippet="captured stdout",
+                    stderr_snippet="captured stderr",
+                )
+
+        rows = read_recent_turns(tmp)
+        assert len(rows) == 1
+        assert rows[0]["command"] == "pytest tests"
+        assert rows[0]["status"] == 1
+
+        failure_path = Path(tmp) / "sessions" / "test" / "last-failure.json"
+        failure = json.loads(failure_path.read_text(encoding="utf-8"))
+        assert failure["command"] == "pytest tests"
+        assert failure["status"] == 1
+        assert failure["stdout_snippet"] == "captured stdout"
+        assert failure["stderr_snippet"] == "captured stderr"
+
+
+def test_record_turn_does_not_record_failure_on_zero_status() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn("ls", 0, "/repo")
+
+        rows = read_recent_turns(tmp)
+        assert len(rows) == 1
+        failure_path = Path(tmp) / "sessions" / "test" / "last-failure.json"
+        assert not failure_path.exists()
+
+
+def test_record_turn_cli_command_persists_entry() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            result = CliRunner().invoke(
+                cli,
+                ["record-turn", "--status", "0", "--cwd", "/repo", "ls -la"],
+            )
+
+        assert result.exit_code == 0, result.output
+        rows = read_recent_turns(tmp)
+        assert len(rows) == 1
+        assert rows[0]["command"] == "ls -la"
+        assert rows[0]["status"] == 0
 
 
 def test_pi_stream_records_web_tainted_answer_inputs() -> None:
