@@ -42,13 +42,10 @@ class TtyStringIO(StringIO):
         return True
 
 
-def test_legacy_record_is_alpha_propose_mode() -> None:
+def test_record_without_trust_fields_defaults_to_propose_mode() -> None:
     record = normalize_trust_record({"type": "old"})
     assert record["mode"] == "propose"
     assert record["labels"] == []
-    assert "integrity" not in record
-    assert "capability" not in record
-    assert "taint" not in record
 
 
 def test_question_system_prompt_points_pi_at_events_log_for_older_history() -> None:

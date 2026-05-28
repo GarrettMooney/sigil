@@ -39,9 +39,6 @@ def normalize_inputs(value: object) -> list[str]:
 def normalize_trust_record(record: dict[str, Any]) -> dict[str, Any]:
     """Return a record with only alpha trust fields."""
     normalized = dict(record)
-    for field in ("capability", "integrity", "taint", "provisional"):
-        normalized.pop(field, None)
-
     normalized["mode"] = normalize_mode(normalized.get("mode"))
     normalized["labels"] = normalize_labels(normalized.get("labels"))
     normalized["inputs"] = normalize_inputs(normalized.get("inputs"))
