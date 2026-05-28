@@ -8,8 +8,8 @@
 Natural-language shell assistant.
 
 Sigil turns short terminal intents into explicit, inspectable shell actions.
-Ask for one command, run one confirmed command, or ask a read-only question
-without leaving your prompt.
+Ask from local context, authorize web search, propose one command, delegate one
+agent step, or pursue a bounded goal without leaving your prompt.
 
 ![15-second Sigil terminal demo](docs/demo.gif)
 
@@ -17,7 +17,8 @@ without leaving your prompt.
 , find files over 10 MB in this repo excluding .git
 ,, run the relevant tests
 ? what changed in this repo?
-?? what should I run next?
+?? what changed upstream in the latest release?
+@ fix the failing parser test
 ```
 
 Sigil is alpha software. It is ready for early shell users who are comfortable
@@ -32,10 +33,12 @@ suggesting, executing, and explaining. Sigil keeps those routes separate.
 | Need | Glyph | What happens |
 | --- | --- | --- |
 | "Give me the command." | `,` | Proposes one command. Nothing runs. |
-| "Do the next step." | `,,` | Runs one generated command. |
-| "Make one edit pass." | `,,,` | Runs one confirmed Pi read/edit/write action, then returns control. |
-| "Answer this." | `?` | Read-only question with read and web tools. No shell is exposed. |
-| "Continue that answer." | `??` | Follows up in the same terminal session. |
+| "Do one agent step." | `,,` | Runs one Pi read/edit/write step after confirmation. |
+| "Do one routine step." | `,,,` | Runs one Pi read/edit/write step without routine confirmation, within policy. |
+| "Answer from local context." | `?` | Read-only answer with the read tool. No shell is exposed. |
+| "Answer with web." | `??` | Read-only answer with read and web search tools. |
+| "Work toward a goal." | `@` | Runs a bounded goal loop with checkpoints. |
+| "Continue routinely." | `@@` | Runs a bounded goal loop with routine steps auto-approved within policy. |
 
 The result is a shell workflow with small blast radius, durable state, and a
 plain CLI underneath the punctuation.
@@ -83,7 +86,7 @@ updates the binding without duplicating the rc block.
 - zsh or Bash for shell bindings
 - A local OpenAI-compatible chat completions endpoint for command generation
   and Pi-backed routes (default `http://127.0.0.1:8080/v1/chat/completions`)
-- `pi` for `?`, `??`, `???`, and `,,,`
+- `pi` for `?`, `??`, `,,`, `,,,`, `@`, and `@@`
 - `glow` for Markdown rendering, optional but recommended
 
 Useful environment variables:
@@ -107,14 +110,17 @@ Once the shell binding is installed, use the glyphs directly:
 # Propose one command. In zsh, the command is inserted into the prompt buffer.
 , find wav files larger than 50 MB
 
-# Execute one generated command.
+# Run one confirmed agent step.
 ,, run the relevant tests
 
-# Ask a read/web question with no execute path.
+# Ask from local read-only context.
 ? why did the last command fail?
 
-# Follow up in the same shell session.
-?? what should I try first?
+# Ask with web search authorized.
+?? what changed in the latest release?
+
+# Pursue a goal with checkpoints.
+@ fix the failing parser test
 ```
 
 Use stdin as context:
@@ -156,11 +162,12 @@ Installed zsh and Bash bindings expose these shortcuts:
 | Glyph | Name | Behavior |
 | --- | --- | --- |
 | `,` | recommend | Recommend one command. |
-| `,,` | execute | Generate and run one command. |
-| `,,,` | act | Run one confirmed Pi edit action. |
-| `?` | ask | Ask a fresh read/web question. |
-| `??` | follow up | Continue the previous question in the same shell session. |
-| `???` | exhaustive | Ask for a more exhaustive read-only answer. |
+| `,,` | step | Run one agent step, confirming effects. |
+| `,,,` | auto step | Run one agent step, auto-approving routine effects within policy. |
+| `?` | answer | Answer from local read-only context. |
+| `??` | web answer | Answer from local context plus web search. |
+| `@` | goal | Run a bounded goal loop with checkpoints. |
+| `@@` | auto goal | Run a bounded goal loop with routine auto-approval. |
 
 Examples:
 
@@ -169,21 +176,23 @@ Examples:
 ,, run the relevant tests
 ,,, fix the failing parser test
 ? why does git say this branch diverged?
-?? what is the safest next command?
-??? explain the release options and their risks
+?? what does the remote branch contain?
+@ fix the failing parser test
+@@ update docs and run checks
 ```
 
 `,` prints a command proposal. The zsh binding puts it in the editable prompt
 buffer with `print -z` and records it in shell history. Bash records it in
 history. Proposals include terse labels such as `local · read-only · focused`
-or `network · publish · high-risk`. `,,` executes command proposals through
-your shell and asks before high-risk commands.
+or `network · publish · high-risk`.
 
-`,,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
-tools, and returns control to the shell after one bounded edit pass. Bash
-calls inside that pass are blocked and handed off. By default, Sigil shows a
-compact tool trace and a short completion summary; use `,,, --verbose ...`
-for Pi's raw tool stream and prose.
+`,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
+tools, and returns control to the shell after one bounded step. `,,,` runs the
+same one-step route without routine confirmation. Bash calls inside those steps
+are blocked and handed off. `@` and `@@` repeat bounded Pi steps toward a
+durable goal until completion, blockage, budget exhaustion, or interruption.
+By default, Sigil shows a compact tool trace and a short completion summary;
+use `--verbose` for Pi's raw tool stream and prose.
 
 Question routes do not expose Bash. If an answer recommends a command, it is
 plain answer text, not a tool call or terminal handoff.
@@ -201,9 +210,12 @@ Sigil's important user rules are:
 | Route | Capability | Rule |
 | --- | --- | --- |
 | `,` | propose | Model-authored proposal only. |
-| `,,` | exec boxed | One generated command. |
-| `,,,` | exec/write boxed | One confirmed Pi edit action at a time. |
-| `?`, `??`, `???` | read | Read/web question routes with no Bash tool. |
+| `,,` | exec/write boxed | One confirmed Pi agent step. |
+| `,,,` | exec/write boxed | One auto-approved Pi agent step within policy. |
+| `@` | exec/write boxed | Bounded goal loop with checkpoints. |
+| `@@` | exec/write boxed | Bounded goal loop with routine auto-approval. |
+| `?` | read | Local read-only answer route with no Bash tool. |
+| `??` | read | Read plus web answer route with no Bash tool. |
 
 Trust records include route, integrity, capability, taint, provisional
 status, and input event ids. Inspect them with:

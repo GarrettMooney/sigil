@@ -80,7 +80,7 @@ printf 'README.md\n' | sigil command --json "summarize this target"
   "glyph": ",",
   "base": ",",
   "depth": 1,
-  "name": "recommend",
+  "name": "propose",
   "prompt": "summarize this target",
   "stdin": "README.md\n",
   "mode": "pipeline"
@@ -89,8 +89,9 @@ printf 'README.md\n' | sigil command --json "summarize this target"
 
 ## `sigil ask`
 
-Answers a shell question using Pi with `read,web_search` tools. Question routes
-can inspect local files and use the web, but they do not expose Bash to Pi.
+Answers a shell question using Pi. `sigil ask` uses the local read-only answer
+route by default. `--follow-up` remains an explicit long-form continuation path
+and uses the web-authorized answer route.
 
 ```sh
 sigil ask "what is this error?"
@@ -126,9 +127,9 @@ The JSON form is one object:
   "malformed_events": 0,
   "security": {
     "glyph": "?",
-    "integrity": "web",
+    "integrity": "local_model",
     "capability": "read",
-    "taint": ["web"],
+    "taint": ["model"],
     "provisional": true
   }
 }
@@ -159,7 +160,7 @@ printf 'hello\n' | sigil ask --json "summarize"
   "glyph": "?",
   "base": "?",
   "depth": 1,
-  "name": "inspect",
+  "name": "answer",
   "prompt": "summarize",
   "stdin": "hello\n",
   "mode": "pipeline"
@@ -173,11 +174,12 @@ Glyphs are installed shell functions over the CLI runtime. Install them with
 
 ```text
 ,    recommend one command
-,,   generate and run one command
-,,,  run one confirmed Pi edit action
-?    ask a fresh read/web question
-??   follow up on the previous question in the same shell session
-???  ask for a more exhaustive read-only answer
+,,   run one agent step, confirming effects
+,,,  run one agent step, auto-approving routine effects within policy
+?    answer from local read-only context
+??   answer from local context plus web search
+@    run a bounded goal loop with checkpoints
+@@   run a bounded goal loop with routine auto-approval
 ```
 
 Examples:
@@ -187,17 +189,19 @@ Examples:
 ,, run the relevant tests
 ,,, fix the failing parser test
 ? why does git say this branch diverged?
-?? what is the safest next command?
-??? explain the options in detail
+?? what changed upstream in the latest release?
+@ fix the failing parser test
+@@ update docs and run checks
 ```
 
 `,` prints a command proposal. The zsh binding inserts it into the editable
 prompt buffer and adds it to shell history; the Bash binding adds it to history.
 Proposal output includes a terse label line such as `local · read-only ·
-focused` or `network · publish · high-risk`. `,,` runs command proposals
-through your shell and asks for confirmation before high-risk commands. `,,,`
-asks for confirmation, invokes Pi with read/search/edit/write tools, blocks
-Bash tool execution as a handoff, and then returns control to the shell.
+focused` or `network · publish · high-risk`. `,,` asks before running one Pi
+agent step with read/search/edit/write tools. `,,,` runs the same one-step
+route without routine confirmation. `@` and `@@` repeat bounded steps toward a
+durable goal, stopping on completion, blockage, budget exhaustion, or policy
+boundaries. Bash tool execution is blocked and exposed as a handoff.
 
 To install bindings without glyphs:
 
@@ -207,7 +211,7 @@ sigil install zsh --no-glyphs
 
 ## `sigil act`
 
-Inspects or controls the Pi edit action used by `,,,`.
+Inspects or controls the current one-step Pi action used by comma routes.
 
 ```sh
 sigil act
@@ -480,7 +484,8 @@ By default, Sigil writes state under `~/.sigil/`.
 ```text
 events.jsonl                              global event log
 sessions/<session-id>/last-failure.json   latest failed shell command
-sessions/<session-id>/last-act.jsonl      confirmed Pi edit action snapshots
+sessions/<session-id>/last-act.jsonl      one-step Pi agent action snapshots
+sessions/<session-id>/last-goal.jsonl     bounded goal loop snapshots
 sessions/<session-id>/last-question.jsonl same-session question transcript
 sessions/<session-id>/last-bash-handoff.jsonl latest blocked Bash handoff
 sessions/<session-id>/last-tools.jsonl    latest Pi tool trace

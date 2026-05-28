@@ -21,8 +21,8 @@ User-facing event records can include:
 
 Fields:
 
-- `glyph`: route that produced the record, such as `,`, `,,`, `,,,`, `?`, or
-  `??`.
+- `glyph`: route that produced the record, such as `,`, `,,`, `,,,`, `?`, `??`,
+  `@`, or `@@`.
 - `inputs`: previous event ids used as context.
 - `integrity`: origin label, ordered as `human > local_model > local_file > web
   > unknown`.
@@ -41,38 +41,40 @@ Fields:
      capability=propose
      taint=["model"]
 
-,,   local model command execution
-     proposal event: capability=propose
-     command execution event: capability=exec_boxed
+,,   confirmed Pi agent step
+     step decision event: capability=none
+     step execution event: capability=exec_boxed
      taint=["model"]
 
-,,,  confirmed Pi edit action
+,,,  auto-approved Pi agent step
      act creation events: capability=propose
-     confirmed Pi execution events: capability=exec_boxed
+     step execution events: capability=exec_boxed
      taint=["model"]
 
-?    read/web question
-     integrity=web
+?    local read question
+     integrity=local_model
      capability=read
-     taint=["web"]
+     taint=["model"]
      provisional=true
 
-??   read/web follow-up
-     inherits prior question transcript inputs
+??   read/web question
      capability=read
      taint includes "web"
      provisional=true
 
-???  exhaustive read/web question
-     capability=read
-     taint includes "web"
-     provisional=true
+@    confirmed goal loop
+     goal and step events: capability=exec_boxed
+     taint=["model"]
+
+@@   auto-approved goal loop
+     goal and step events: capability=exec_boxed
+     taint=["model"]
 ```
 
-Question routes never expose Bash to Pi. Triple-comma act steps may hand off a
-proposed Bash command, but they do not execute it through Pi. In zsh the shell
+Question routes never expose Bash to Pi. Comma and goal agent steps may hand off
+a proposed Bash command, but they do not execute it through Pi. In zsh the shell
 binding inserts the handed-off command into the editable prompt buffer; Bash
-stores it in history. Execution and file writes happen through comma routes, Pi
+stores it in history. Execution and file writes happen through Pi
 edit/write tools, or through the user pressing Enter on an edited handoff
 command.
 
@@ -88,9 +90,9 @@ Example table:
 
 ```text
 time      id        action       trust                   session   summary
-12:00:01  e3b0c442  ? question   web/read                9aa2f6e1  what changed?
+12:00:01  e3b0c442  ? question   local_model/read        9aa2f6e1  what changed?
 12:01:10  2f7d6a8c  , recommend  local_model/propose     9aa2f6e1  run the tests
-12:01:18  b1c4a901  ,, executed  local_model/exec_boxed  9aa2f6e1  uv run pytest -> 0
+12:01:18  b1c4a901  ,, step      local_model/exec_boxed  9aa2f6e1  run the tests
 ```
 
 Inspect provenance:
@@ -110,7 +112,7 @@ ids if an event references records that are no longer present:
       "id": "b1c4a901-...",
       "depth": 0,
       "event": {
-        "type": "operator_command_executed",
+        "type": "act_step_executed",
         "glyph": ",,",
         "integrity": "local_model",
         "capability": "exec_boxed",
@@ -141,8 +143,8 @@ current context.
 ## User Rules
 
 - `,` recommends; it does not execute.
-- `,,` can execute a generated command.
-- `,,,` executes at most one confirmed Pi edit action per invocation.
-- `?`, `??`, and `???` are read/web question routes with no Bash tool.
-- `??` continues the same-session question transcript; it does not switch to a
-  command route.
+- `,,` executes at most one confirmed Pi agent step per invocation.
+- `,,,` executes at most one auto-approved Pi agent step per invocation.
+- `@` and `@@` run bounded goal loops with budgets and checkpoints.
+- `?` is a local read question route with no Bash tool.
+- `??` is a read/web question route with no Bash tool.

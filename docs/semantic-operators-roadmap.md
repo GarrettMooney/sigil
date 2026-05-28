@@ -157,33 +157,33 @@ mixed glyph tokens such as ,?
 
 ## TODO
 
-- [ ] Update operator parsing to support `@` and per-glyph max depths.
-- [ ] Reject `???` and `@@@` with clear errors.
-- [ ] Refactor `ask()` to use explicit source authorization instead of
+- [x] Update operator parsing to support `@` and per-glyph max depths.
+- [x] Reject `???` and `@@@` with clear errors.
+- [x] Refactor `ask()` to use explicit source authorization instead of
       `follow_up`.
-- [ ] Route `?` through read-only tools without web search.
-- [ ] Route `??` through read plus web search.
-- [ ] Update question trust metadata so only `??` is web-tainted.
-- [ ] Remove glyph-level follow-up and exhaustive-question behavior.
-- [ ] Keep or remove `sigil ask --follow-up` as an explicit CLI decision.
-- [ ] Refactor the act stepper to accept `confirm_step` and `glyph`.
-- [ ] Route `,,` to one confirmed agent step.
-- [ ] Route `,,,` to one auto-approved agent step within policy.
-- [ ] Ensure `,,,` still blocks on high-risk policy boundaries.
-- [ ] Extract shared Pi agent-step execution for comma and goal routes.
-- [ ] Add `goals.py` or equivalent durable goal-loop module.
-- [ ] Add goal state recording in `last-goal.jsonl`.
-- [ ] Implement `@` as a confirmed goal loop with checkpoints.
-- [ ] Implement `@@` as an auto-approved goal loop with budgets and policy
+- [x] Route `?` through read-only tools without web search.
+- [x] Route `??` through read plus web search.
+- [x] Update question trust metadata so only `??` is web-tainted.
+- [x] Remove glyph-level follow-up and exhaustive-question behavior.
+- [x] Keep or remove `sigil ask --follow-up` as an explicit CLI decision.
+- [x] Refactor the act stepper to accept `confirm_step` and `glyph`.
+- [x] Route `,,` to one confirmed agent step.
+- [x] Route `,,,` to one auto-approved agent step within policy.
+- [x] Ensure `,,,` still blocks on high-risk policy boundaries.
+- [x] Extract shared Pi agent-step execution for comma and goal routes.
+- [x] Add `goals.py` or equivalent durable goal-loop module.
+- [x] Add goal state recording in `last-goal.jsonl`.
+- [x] Implement `@` as a confirmed goal loop with checkpoints.
+- [x] Implement `@@` as an auto-approved goal loop with budgets and policy
       stops.
-- [ ] Add structured goal step status detection: continue, complete, blocked.
-- [ ] Update zsh bindings for `?`, `??`, `,`, `,,`, `,,,`, `@`, and `@@`.
-- [ ] Update Bash bindings for `?`, `??`, `,`, `,,`, `,,,`, `@`, and `@@`.
-- [ ] Remove shell bindings for `???`.
-- [ ] Update README glyph reference and examples.
-- [ ] Update CLI docs and security lattice docs.
-- [ ] Rewrite tests for question routing and trust metadata.
-- [ ] Rewrite tests for comma routing.
-- [ ] Add parser and shell binding tests for `@` and `@@`.
-- [ ] Add tests that `???` and `@@@` fail.
-- [ ] Run the full test suite.
+- [x] Add structured goal step status detection: continue, complete, blocked.
+- [x] Update zsh bindings for `?`, `??`, `,`, `,,`, `,,,`, `@`, and `@@`.
+- [x] Update Bash bindings for `?`, `??`, `,`, `,,`, `,,,`, `@`, and `@@`.
+- [x] Remove shell bindings for `???`.
+- [x] Update README glyph reference and examples.
+- [x] Update CLI docs and security lattice docs.
+- [x] Rewrite tests for question routing and trust metadata.
+- [x] Rewrite tests for comma routing.
+- [x] Add parser and shell binding tests for `@` and `@@`.
+- [x] Add tests that `???` and `@@@` fail.
+- [x] Run the full test suite.

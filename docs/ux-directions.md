@@ -20,7 +20,7 @@ Ask questions:
 sigil ask "what changed in this repo?"
 sigil ask --follow-up "what should I test?"
 ? why did that command fail?
-?? what should I try first?
+?? what changed in the latest release notes?
 ```
 
 Work from stdin:
@@ -31,17 +31,24 @@ git diff --name-only | sigil command "choose a focused test command"
 git diff | ? explain the riskiest part
 ```
 
-Run one generated action:
+Run one agent step:
 
 ```sh
 ,, run the formatter for files I changed
 ```
 
-Let Pi take one bounded edit action:
+Let Pi take one routine bounded step:
 
 ```sh
 ,,, fix the failing parser test
 sigil act show
+```
+
+Pursue a bounded goal:
+
+```sh
+@ fix the failing parser test
+@@ update docs and run checks
 ```
 
 ## Review Points
@@ -49,10 +56,12 @@ sigil act show
 The shell remains the review boundary:
 
 - `,` proposes and does not execute.
-- `,,` executes one command proposal.
-- `,,,` asks before one Pi edit action, blocks Pi Bash calls as handoffs, and
-  then returns control to the shell.
-- `?`, `??`, and `???` answer questions with read/web tools only.
+- `,,` runs one Pi agent step after confirming effects.
+- `,,,` runs one Pi agent step without routine confirmation, within policy.
+- `@` runs a bounded goal loop with checkpoints.
+- `@@` runs a bounded goal loop with routine auto-approval.
+- `?` answers from local read-only context.
+- `??` answers from local context plus web search.
 
 ## Session Continuity
 

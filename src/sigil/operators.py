@@ -308,12 +308,11 @@ def depth_guidance(invocation: OperatorInvocation) -> str:
         if invocation.depth == 1:
             return "Comma means recommend one concrete next action."
         if invocation.depth == 2:
-            return "Comma depth two means generate exactly one command that Sigil will execute."
-        return "Comma depth three is handled by the confirmed Pi act runner."
+            return "Comma depth two is handled by the confirmed Pi agent step runner."
+        return "Comma depth three is handled by the auto-approved Pi agent step runner."
     return {
         1: "Use a quick pass.",
         2: "Use a deeper pass and call out important caveats.",
-        3: "Use a thorough pass and organize the result for follow-up work.",
     }.get(invocation.depth, "Use a thorough pass and be explicit about uncertainty.")
 
 
