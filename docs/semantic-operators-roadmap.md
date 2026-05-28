@@ -1,85 +1,189 @@
-# Glyph Reference
+# Semantic Operators Roadmap
 
-Sigil's shell glyphs are optional shortcuts installed by `sigil install zsh` or
-`sigil install bash`. They are current user-facing shell APIs.
+This is the planned breaking redesign for Sigil's shell glyphs. Do not preserve
+the old glyph meanings during this migration.
+
+## Target Grammar
 
 ```text
-,    recommend one command
-,,   generate and run one command
-,,,  run one confirmed Pi edit action
+?    answer from read
+??   answer from read + web
 
-?    ask a fresh read/web question
-??   follow up on the previous question in the same shell session
-???  ask for a more exhaustive read-only answer
+,    propose
+,,   one agent step, confirm effects
+,,,  one agent step, auto-approve routine effects within policy
+
+@    agent goal loop, confirm each step/checkpoint
+@@   agent goal loop, auto-approve routine steps within policy
 ```
 
-## Comma Routes
+The design separates the axes:
 
-Use `,` when you want a proposal:
+- `?` controls information sources.
+- `,` delegates one next action.
+- `@` pursues a durable goal across multiple steps.
 
-```sh
-, run the relevant tests
-, summarize what command I should run next
-git diff --name-only | , choose a focused test command
-```
+More punctuation grants more authority on the same axis. It should not secretly
+change the unit of work.
 
-`comma` prints one command proposal. The zsh binding puts it in the editable
-prompt buffer and records it in history; the Bash binding records it in history
-so you can recall, edit, and run it yourself.
+## Removed Behavior
 
-Use `,,` when you want Sigil to take one action:
+The migration intentionally removes these meanings:
 
-```sh
-,, run the relevant formatter
-,, check whether this branch builds
-```
+- `??` no longer means follow up on the previous answer.
+- `???` no longer means exhaustive question.
+- `,,` no longer means generate and execute one shell command.
+- `,,,` no longer means the only agentic/editing route.
 
-Command proposals run through your shell.
-
-Use `,,,` for one bounded Pi edit action:
-
-```sh
-,,, fix the failing parser test
-sigil act show
-sigil act abort
-```
-
-The act state is durable in the current shell session. Each invocation runs at
-most one accepted Pi edit pass.
+If follow-up remains useful, keep it as explicit CLI behavior such as
+`sigil ask --follow-up`, not as a glyph. If exhaustive answers remain useful,
+make them prompt text or a long-form flag, not `???`.
 
 ## Question Routes
 
-Use `?` for a fresh answer:
+`?` answers with local read-only context. It may use shell/session context and
+the `read` tool, but it must not authorize web search.
 
-```sh
-? why does git say this branch diverged?
-git diff | ? review risky changes
+`??` answers with local read-only context plus web search. This is the explicit
+web authorization route.
+
+Both routes have no Bash execution path. If an answer recommends a command, it
+is plain answer text.
+
+Implementation notes:
+
+- Refactor `ask()` to accept explicit `glyph`, `tools`, and `use_web` or source
+  authorization parameters.
+- Route `?` to `--tools read`.
+- Route `??` to `--tools read,web_search`.
+- Make `?` trust metadata non-web-tainted.
+- Make `??` trust metadata web-tainted.
+- Reject `???`.
+
+## Comma Routes
+
+`,` proposes the next command/action and changes nothing.
+
+`,,` runs one agent step after showing the step and asking before effects.
+
+`,,,` runs one agent step without routine per-step confirmation, but only within
+policy. It skips the confirmation prompt, not the policy boundary.
+
+Policy boundaries should still block or require explicit approval for risky
+effects such as:
+
+- privileged commands
+- destructive deletes
+- commits and pushes
+- publishing
+- dependency installs
+- network writes
+- secret exposure
+- broad unrelated edits
+
+Implementation notes:
+
+- Keep the current `,` proposal surface where possible.
+- Refactor the existing act stepper so it can run with `confirm_step=True` for
+  `,,` and `confirm_step=False` for `,,,`.
+- Make the step runner accept the originating glyph so trust records and tool
+  traces match the route.
+- Preserve the "one step, then return control" invariant for both `,,` and
+  `,,,`.
+
+## Goal Routes
+
+`@` starts or resumes a durable goal loop with confirmation at each step or
+checkpoint.
+
+`@@` starts or resumes a durable goal loop that auto-approves routine steps
+within policy.
+
+The goal loop is similar in spirit to Codex `/goal`: it pursues an objective
+until completion, blockage, budget exhaustion, or interruption. It is not an
+unbounded shell loop.
+
+Recommended goal statuses:
+
+```text
+active
+completed
+blocked
+budget_hit
+aborted
 ```
 
-Use `??` to continue the previous question transcript from the same terminal:
+Recommended state file:
 
-```sh
-?? what is the safest next command?
+```text
+last-goal.jsonl
 ```
 
-Use `???` when you want a more exhaustive read-only answer:
+Recommended goal shape:
 
-```sh
-??? explain the release options and their risks
+```json
+{
+  "goal_id": "...",
+  "objective": "...",
+  "status": "active",
+  "approval": "confirm",
+  "steps": [],
+  "budgets": {
+    "max_steps": 5
+  }
+}
 ```
 
-Question routes do not execute commands or expose Bash. If an answer recommends
-a command, it is plain answer text.
+Goal loops should have default budgets. `@@` must stop on unclear status or a
+risky policy boundary rather than continuing indefinitely.
 
-## Piped Input
+## Parser Rules
 
-Piped input is previewed before it can influence a comma route. Question routes
-attach piped input without an extra confirmation because they have no execute
-path:
+Supported operators:
 
-```sh
-git diff | ? review this change
-git diff --name-only | , pick the most relevant tests
+```text
+?   depth 1..2
+,   depth 1..3
+@   depth 1..2
 ```
 
-If you decline the preview, Sigil exits without using the input.
+Invalid:
+
+```text
+???
+@@@
+mixed glyph tokens such as ,?
+```
+
+## TODO
+
+- [ ] Update operator parsing to support `@` and per-glyph max depths.
+- [ ] Reject `???` and `@@@` with clear errors.
+- [ ] Refactor `ask()` to use explicit source authorization instead of
+      `follow_up`.
+- [ ] Route `?` through read-only tools without web search.
+- [ ] Route `??` through read plus web search.
+- [ ] Update question trust metadata so only `??` is web-tainted.
+- [ ] Remove glyph-level follow-up and exhaustive-question behavior.
+- [ ] Keep or remove `sigil ask --follow-up` as an explicit CLI decision.
+- [ ] Refactor the act stepper to accept `confirm_step` and `glyph`.
+- [ ] Route `,,` to one confirmed agent step.
+- [ ] Route `,,,` to one auto-approved agent step within policy.
+- [ ] Ensure `,,,` still blocks on high-risk policy boundaries.
+- [ ] Extract shared Pi agent-step execution for comma and goal routes.
+- [ ] Add `goals.py` or equivalent durable goal-loop module.
+- [ ] Add goal state recording in `last-goal.jsonl`.
+- [ ] Implement `@` as a confirmed goal loop with checkpoints.
+- [ ] Implement `@@` as an auto-approved goal loop with budgets and policy
+      stops.
+- [ ] Add structured goal step status detection: continue, complete, blocked.
+- [ ] Update zsh bindings for `?`, `??`, `,`, `,,`, `,,,`, `@`, and `@@`.
+- [ ] Update Bash bindings for `?`, `??`, `,`, `,,`, `,,,`, `@`, and `@@`.
+- [ ] Remove shell bindings for `???`.
+- [ ] Update README glyph reference and examples.
+- [ ] Update CLI docs and security lattice docs.
+- [ ] Rewrite tests for question routing and trust metadata.
+- [ ] Rewrite tests for comma routing.
+- [ ] Add parser and shell binding tests for `@` and `@@`.
+- [ ] Add tests that `???` and `@@@` fail.
+- [ ] Run the full test suite.

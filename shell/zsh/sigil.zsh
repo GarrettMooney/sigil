@@ -77,7 +77,7 @@ __sigil_recordable_command() {
   local command="${1:-}"
   [[ -n "$command" ]] || return 1
   case "$command" in
-    [[:space:]]*|,*|\?*|sigil\ *|__sigil_*)
+    [[:space:]]*|,*|\?*|sigil\ *|sigil_*|noglob\ sigil_*|command\ sigil_*|__sigil_*)
       return 1
       ;;
   esac

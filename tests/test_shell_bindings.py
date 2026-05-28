@@ -358,6 +358,23 @@ def test_bash_does_not_record_sigil_commands() -> None:
         assert read_log(tmp) == []
 
 
+def test_bash_does_not_capture_or_record_sigil_wrapper_commands() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"sigil_command hello\"; }\n                    sigil_command hello\n                    __sigil_precmd\n                    wait\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "echo recommended\nbecause it is safe\n"
+        assert read_log(tmp) == ["op , hello"]
+
+
 def test_bash_passes_failure_snippet_env_to_record_turn() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -540,6 +557,24 @@ def test_zsh_does_not_record_sigil_commands() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == []
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_does_not_capture_or_record_sigil_wrapper_commands() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    source shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_preexec "noglob sigil_command hello"\n                    sigil_command hello\n                    __sigil_precmd\n                    wait\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "echo recommended\nbecause it is safe\n"
+        assert read_log(tmp) == ["op , hello"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
