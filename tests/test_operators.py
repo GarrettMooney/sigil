@@ -513,8 +513,8 @@ def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
     assert result.exit_code == 0, result.output
-    assert "sigil act (active):" in result.output
-    assert "pi --tools read,grep,find,ls,bash,edit,write" in result.output
+    assert "objective: ship it" in result.output
+    assert "tools: read,grep,find,ls,bash,edit,write" in result.output
     assert len(pi_calls) == 1
     assert pi_calls[0][1]["glyph"] == ",,,"
     assert [event["type"] for event in events] == [
@@ -776,7 +776,8 @@ def test_act_resume_executes_pending_step_without_regenerating() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
     assert result.exit_code == 0, result.output
-    assert "Run the pending edit." in result.output
+    assert "objective: ship it" in result.output
+    assert "tools: read,grep,find,ls,bash,edit,write" in result.output
     assert len(pi_calls) == 1
     assert act_events[-1]["act"]["status"] == "completed"
 
@@ -822,7 +823,7 @@ def test_act_show_and_abort_use_last_act_state() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
     assert shown.exit_code == 0, shown.output
-    assert "[pending] Inspect" in shown.output
+    assert "objective: ship it" in shown.output
     assert aborted.exit_code == 0, aborted.output
     assert json.loads(aborted.output)["aborted"]
     assert act_events[-1]["act"]["status"] == "aborted"

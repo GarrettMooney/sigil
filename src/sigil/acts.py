@@ -228,29 +228,28 @@ def next_pending_step(act: dict[str, Any]) -> dict[str, Any] | None:
 
 def print_act(act: dict[str, Any]) -> None:
     """Print a compact act overview."""
-    steps = [step for step in act.get("steps", []) if isinstance(step, dict)]
-    print(f"sigil act ({act.get('status', 'active')}):")
-    print(f"  objective: {act.get('objective')}")
-    for step in steps:
-        status = str(step.get("status") or "pending")
-        print(f"  {step.get('id')}. [{status}] {step.get('title')}")
+    print(f"objective: {act.get('objective')}")
 
 
 def print_next_step(step: dict[str, Any]) -> None:
-    """Print the next proposed Pi step."""
-    print("")
-    print("next:")
-    print(str(step.get("command") or ""))
-    explanation = str(step.get("explanation") or "")
-    if explanation:
-        print(explanation)
-    print("")
+    """Print the tools available for the next Pi step."""
+    tools = tools_from_step(step)
+    print(f"tools: {tools}")
 
 
-def read_step_decision(prompt: str = "proceed? [y/N/skip/edit/quit] ") -> str:
+def read_step_decision(prompt: str = "run? [y/N] ") -> str:
     """Read an act-step decision from the terminal."""
     answer = prompt_on_tty(prompt)
     return "" if answer is None else answer.strip().lower()
+
+
+def tools_from_step(step: dict[str, Any]) -> str:
+    """Return the tool list from a step command, if present."""
+    command = str(step.get("command") or "")
+    marker = "--tools "
+    if marker not in command:
+        return command
+    return command.split(marker, 1)[1].split(maxsplit=1)[0]
 
 
 def run_pi_agent_step(
