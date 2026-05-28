@@ -17,8 +17,14 @@ typeset -g __sigil_capture_stdout_file=""
 typeset -g __sigil_capture_stderr_file=""
 typeset -g __sigil_capture_stdout_pipe=""
 typeset -g __sigil_capture_stderr_pipe=""
+typeset -g __sigil_capture_stdout_done=""
+typeset -g __sigil_capture_stderr_done=""
+typeset -g __sigil_capture_stdout_fd=""
+typeset -g __sigil_capture_stderr_fd=""
 typeset -g __sigil_capture_stdout_pid=""
 typeset -g __sigil_capture_stderr_pid=""
+typeset -g __sigil_capture_jobs_silenced=0
+typeset -g __sigil_capture_notify_was_set=0
 
 if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   if command -v uuidgen >/dev/null 2>&1; then
@@ -97,8 +103,8 @@ __sigil_turn_capture_enabled() {
 }
 
 __sigil_capture_start() {
-  setopt local_options no_bg_nice
   local command="${1:-}"
+  local bg_nice_was_set=0
   __sigil_turn_capture_enabled || return 0
   __sigil_recordable_command "$command" || return 0
   [[ $__sigil_capture_active -eq 0 ]] || return 0
@@ -118,6 +124,9 @@ __sigil_capture_start() {
     __sigil_capture_cleanup
     return 0
   }
+  __sigil_capture_stdout_done="${__sigil_capture_stdout_file}.done"
+  __sigil_capture_stderr_done="${__sigil_capture_stderr_file}.done"
+  rm -f "$__sigil_capture_stdout_done" "$__sigil_capture_stderr_done"
   rm -f "$__sigil_capture_stdout_pipe" "$__sigil_capture_stderr_pipe"
   mkfifo "$__sigil_capture_stdout_pipe" || {
     __sigil_capture_cleanup
@@ -128,32 +137,122 @@ __sigil_capture_start() {
     return 0
   }
 
-  exec 7>&1 || return 0
-  exec 8>&2 || {
-    exec 7>&-
+  if [[ -o bg_nice ]]; then
+    bg_nice_was_set=1
+    unsetopt bg_nice
+  fi
+  __sigil_capture_silence_jobs
+  exec {__sigil_capture_stdout_fd}>&1 || {
+    [[ $bg_nice_was_set -eq 1 ]] && setopt bg_nice
+    __sigil_capture_cleanup
     return 0
   }
-  tee "$__sigil_capture_stdout_file" < "$__sigil_capture_stdout_pipe" &
+  exec {__sigil_capture_stderr_fd}>&2 || {
+    exec {__sigil_capture_stdout_fd}>&-
+    __sigil_capture_stdout_fd=""
+    [[ $bg_nice_was_set -eq 1 ]] && setopt bg_nice
+    __sigil_capture_cleanup
+    return 0
+  }
+  {
+    tee "$__sigil_capture_stdout_file" < "$__sigil_capture_stdout_pipe"
+    print -r -- "$?" > "$__sigil_capture_stdout_done"
+  } &!
   __sigil_capture_stdout_pid="$!"
-  tee "$__sigil_capture_stderr_file" < "$__sigil_capture_stderr_pipe" >&2 &
+  {
+    tee "$__sigil_capture_stderr_file" < "$__sigil_capture_stderr_pipe" >&2
+    print -r -- "$?" > "$__sigil_capture_stderr_done"
+  } &!
   __sigil_capture_stderr_pid="$!"
-  exec > "$__sigil_capture_stdout_pipe"
-  exec 2> "$__sigil_capture_stderr_pipe"
+  [[ $bg_nice_was_set -eq 1 ]] && setopt bg_nice
+  if ! exec > "$__sigil_capture_stdout_pipe"; then
+    __sigil_capture_close_saved_fds
+    __sigil_capture_cleanup
+    return 0
+  fi
+  if ! exec 2> "$__sigil_capture_stderr_pipe"; then
+    __sigil_capture_restore_stdout
+    __sigil_capture_close_saved_fds
+    __sigil_capture_cleanup
+    return 0
+  fi
   rm -f "$__sigil_capture_stdout_pipe" "$__sigil_capture_stderr_pipe"
   __sigil_capture_active=1
 }
 
 __sigil_capture_stop() {
+  local stdout_ok=0
+  local stderr_ok=0
   [[ $__sigil_capture_active -eq 1 ]] || return 0
-  exec 1>&7
-  exec 2>&8
-  exec 7>&-
-  exec 8>&-
-  [[ -n "$__sigil_capture_stdout_pid" ]] && wait "$__sigil_capture_stdout_pid" 2>/dev/null || true
-  [[ -n "$__sigil_capture_stderr_pid" ]] && wait "$__sigil_capture_stderr_pid" 2>/dev/null || true
+  __sigil_capture_restore_stdout
+  __sigil_capture_restore_stderr
+  __sigil_capture_close_saved_fds
+  __sigil_capture_wait_done "$__sigil_capture_stdout_done" && __sigil_capture_done_success "$__sigil_capture_stdout_done" && stdout_ok=1
+  __sigil_capture_wait_done "$__sigil_capture_stderr_done" && __sigil_capture_done_success "$__sigil_capture_stderr_done" && stderr_ok=1
+  [[ $stdout_ok -eq 1 ]] || : > "$__sigil_capture_stdout_file" 2>/dev/null || true
+  [[ $stderr_ok -eq 1 ]] || : > "$__sigil_capture_stderr_file" 2>/dev/null || true
   __sigil_capture_stdout_pid=""
   __sigil_capture_stderr_pid=""
   __sigil_capture_active=0
+  __sigil_capture_restore_jobs
+}
+
+__sigil_capture_restore_stdout() {
+  [[ -n "$__sigil_capture_stdout_fd" ]] || return 0
+  exec 1>&$__sigil_capture_stdout_fd
+}
+
+__sigil_capture_restore_stderr() {
+  [[ -n "$__sigil_capture_stderr_fd" ]] || return 0
+  exec 2>&$__sigil_capture_stderr_fd
+}
+
+__sigil_capture_close_saved_fds() {
+  if [[ -n "$__sigil_capture_stdout_fd" ]]; then
+    exec {__sigil_capture_stdout_fd}>&-
+    __sigil_capture_stdout_fd=""
+  fi
+  if [[ -n "$__sigil_capture_stderr_fd" ]]; then
+    exec {__sigil_capture_stderr_fd}>&-
+    __sigil_capture_stderr_fd=""
+  fi
+}
+
+__sigil_capture_wait_done() {
+  local done_path="${1:-}"
+  local attempts="${SIGIL_CAPTURE_WAIT_ATTEMPTS:-100}"
+  local i
+  [[ -n "$done_path" ]] || return 0
+  for i in {1..$attempts}; do
+    [[ -e "$done_path" ]] && return 0
+    sleep 0.01
+  done
+  return 1
+}
+
+__sigil_capture_done_success() {
+  local done_path="${1:-}"
+  [[ -n "$done_path" && -r "$done_path" ]] || return 1
+  [[ "$(< "$done_path")" == "0" ]]
+}
+
+__sigil_capture_silence_jobs() {
+  __sigil_capture_jobs_silenced=0
+  __sigil_capture_notify_was_set=0
+  if [[ -o notify ]]; then
+    __sigil_capture_notify_was_set=1
+    unsetopt notify
+  fi
+  __sigil_capture_jobs_silenced=1
+}
+
+__sigil_capture_restore_jobs() {
+  [[ $__sigil_capture_jobs_silenced -eq 1 ]] || return 0
+  if [[ $__sigil_capture_notify_was_set -eq 1 ]]; then
+    setopt notify
+  fi
+  __sigil_capture_jobs_silenced=0
+  __sigil_capture_notify_was_set=0
 }
 
 __sigil_capture_file_snippet() {
@@ -168,10 +267,18 @@ __sigil_capture_cleanup() {
   [[ -n "$__sigil_capture_stderr_file" ]] && rm -f "$__sigil_capture_stderr_file"
   [[ -n "$__sigil_capture_stdout_pipe" ]] && rm -f "$__sigil_capture_stdout_pipe"
   [[ -n "$__sigil_capture_stderr_pipe" ]] && rm -f "$__sigil_capture_stderr_pipe"
+  [[ -n "$__sigil_capture_stdout_done" ]] && rm -f "$__sigil_capture_stdout_done"
+  [[ -n "$__sigil_capture_stderr_done" ]] && rm -f "$__sigil_capture_stderr_done"
+  __sigil_capture_close_saved_fds
   __sigil_capture_stdout_file=""
   __sigil_capture_stderr_file=""
   __sigil_capture_stdout_pipe=""
   __sigil_capture_stderr_pipe=""
+  __sigil_capture_stdout_done=""
+  __sigil_capture_stderr_done=""
+  if [[ $__sigil_capture_active -eq 0 ]]; then
+    __sigil_capture_restore_jobs
+  fi
 }
 
 __sigil_refresh_prompt_marker() {
@@ -260,13 +367,13 @@ sigil_goal_auto() {
 }
 
 if __sigil_glyphs_enabled; then
-  function ',' { sigil_command "$*" }
-  function ',,' { sigil_agent_step "$*" }
-  function ',,,' { sigil_agent_step_auto "$*" }
-  function '?' { sigil_question "$*" }
-  function '??' { sigil_web_question "$*" }
-  function '@' { sigil_goal "$*" }
-  function '@@' { sigil_goal_auto "$*" }
+  function ',' { sigil_command "$@" }
+  function ',,' { sigil_agent_step "$@" }
+  function ',,,' { sigil_agent_step_auto "$@" }
+  function '?' { sigil_question "$@" }
+  function '??' { sigil_web_question "$@" }
+  function '@' { sigil_goal "$@" }
+  function '@@' { sigil_goal_auto "$@" }
 
   alias ','='noglob sigil_command'
   alias ',,'='noglob sigil_agent_step'
@@ -319,12 +426,13 @@ add-zsh-hook preexec __sigil_preexec
 add-zsh-hook precmd __sigil_precmd
 
 if __sigil_glyphs_enabled; then
-  zshaddhistory() {
+  __sigil_zshaddhistory() {
     emulate -L zsh
     local line="${1%%$'\n'}"
     case "$line" in
-      ,*|\\\?*) return 1 ;;
+      ,*|\?*|\\\?*|@*) return 1 ;;
     esac
     return 0
   }
+  add-zsh-hook zshaddhistory __sigil_zshaddhistory
 fi

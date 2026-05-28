@@ -1,6 +1,7 @@
 from __future__ import annotations
 import pytest
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -622,3 +623,114 @@ def test_zsh_captures_turn_output_for_record_turn() -> None:
         assert read_log(tmp) == [
             f"record-turn --status 1 --cwd {ROOT} --stdout-snippet stdout line --stderr-snippet stderr line bad command"
         ]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_capture_suppresses_notify_until_helper_jobs_are_waited() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell_args(
+            ["zsh", "-f", "-ic"],
+            textwrap.dedent(
+                '                    setopt notify\n                    source shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_capture_start "bad command"\n                    jobs > "$ZLE_LOG"\n                    print -- "during=${options[notify]}"\n                    print -- "stdout line"\n                    print -- "stderr line" >&2\n                    __sigil_capture_stop\n                    print -- "after=${options[notify]}"\n                    wait\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "during=off" in result.stdout
+        assert "after=on" in result.stdout
+        assert "stdout line" in result.stdout
+        assert result.stderr == "stderr line\n"
+        assert (tmp / "zle.log").read_text(encoding="utf-8") == ""
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_capture_preserves_user_file_descriptors() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        fd7_path = tmp / "fd7.out"
+        fd8_path = tmp / "fd8.out"
+        result = run_shell_args(
+            ["zsh", "-f", "-ic"],
+            textwrap.dedent(
+                f"""\
+                source shell/zsh/sigil.zsh
+                export SIGIL_ENABLE_TURN_CAPTURE=1
+                exec 7>{shlex.quote(str(fd7_path))}
+                exec 8>{shlex.quote(str(fd8_path))}
+                __sigil_capture_start "bad command"
+                print -- "stdout line"
+                print -- "stderr line" >&2
+                __sigil_capture_stop
+                print -- "fd7 after" >&7
+                print -- "fd8 after" >&8
+                exec 7>&-
+                exec 8>&-
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "stdout line\n"
+        assert result.stderr == "stderr line\n"
+        assert fd7_path.read_text(encoding="utf-8") == "fd7 after\n"
+        assert fd8_path.read_text(encoding="utf-8") == "fd8 after\n"
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell_args(
+            ["zsh", "-f", "-ic"],
+            textwrap.dedent(
+                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source shell/zsh/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "__sigil_zshaddhistory" in result.stdout
+        assert "comma=1" in result.stdout
+        assert "question=1" in result.stdout
+        assert "escaped_question=1" in result.stdout
+        assert "at=1" in result.stdout
+        assert "echo=0" in result.stdout
+        assert (tmp / "zle.log").read_text(encoding="utf-8") == "user:echo hello\n"
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_capture_helper_status_is_observable() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        done_path = tmp / "capture.done"
+        missing_path = tmp / "missing.done"
+        result = run_shell_args(
+            ["zsh", "-f", "-ic"],
+            textwrap.dedent(
+                f"""\
+                source shell/zsh/sigil.zsh
+                print -- 1 > {shlex.quote(str(done_path))}
+                __sigil_capture_done_success {shlex.quote(str(done_path))}
+                print -- "failed=$?"
+                print -- 0 > {shlex.quote(str(done_path))}
+                __sigil_capture_done_success {shlex.quote(str(done_path))}
+                print -- "succeeded=$?"
+                export SIGIL_CAPTURE_WAIT_ATTEMPTS=1
+                __sigil_capture_wait_done {shlex.quote(str(missing_path))}
+                print -- "timeout=$?"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "failed=1" in result.stdout
+        assert "succeeded=0" in result.stdout
+        assert "timeout=1" in result.stdout

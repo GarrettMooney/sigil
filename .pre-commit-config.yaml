@@ -21,3 +21,15 @@ repos:
         language: system
         require_serial: true
         pass_filenames: false
+      - id: vulture
+        name: vulture
+        entry: uv run vulture src tests --min-confidence 80
+        language: system
+        require_serial: true
+        pass_filenames: false
+      - id: complexipy
+        name: complexipy
+        entry: uv run complexipy src tests --plain --failed --max-complexity-allowed 91
+        language: system
+        require_serial: true
+        pass_filenames: false
