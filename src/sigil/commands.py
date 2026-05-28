@@ -11,7 +11,7 @@ import sys
 from typing import Any, TextIO
 
 from .ansi import LOVE, MUTED, RESET
-from .openai_compat import chat_json, ensure_server
+from .model import chat_json, ensure_server
 from .security import (
     candidate_prefix,
     create_trust_metadata,

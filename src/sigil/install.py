@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .openai_compat import DEFAULT_MODEL_URL, model_url
+from .model import DEFAULT_MODEL_URL, model_url
 from .state import state_dir
 
 

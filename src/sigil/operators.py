@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
 from .policy import ExecutionPolicy, PolicyDecision, evaluate_policy
-from .openai_compat import chat_json, chat_text, ensure_server
+from .model import chat_json, chat_text, ensure_server
 from .security import create_trust_metadata
 from .state import append_event, append_jsonl, read_jsonl
 from .tty import confirm_on_tty

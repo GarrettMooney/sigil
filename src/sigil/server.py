@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from .openai_compat import endpoint_reachable, model_url
+from .model import endpoint_reachable, model_url
 
 
 def model_endpoint_open() -> bool:
