@@ -225,9 +225,9 @@ sigil act show --json
 `resume` runs the pending action only after confirmation. If there is no active
 action, it exits with status `2`.
 
-Act output is compact by default: Sigil prints a short tool trace and a final
-`done:` summary while recording the full Pi transcript and tool events in
-session state. Use `--verbose` to stream Pi's raw tool calls and prose.
+Act output streams Pi's raw tool calls and prose through `glow` or `cat`.
+Sigil does not replace the final answer with a compact `done:` summary for
+agent steps.
 
 JSON output for `show` is the stored act object, or `null`:
 

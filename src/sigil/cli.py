@@ -196,7 +196,11 @@ def question_with_stdin(question: str, stdin_text: str) -> str:
 @click.argument("prompt_parts", nargs=-1)
 @click.option("--json", "json_output", is_flag=True)
 @click.option("--dry-run", is_flag=True, help="Classify output and skip execution.")
-@click.option("--verbose", is_flag=True, help="Show raw Pi tool and prose output.")
+@click.option(
+    "--verbose",
+    is_flag=True,
+    help="Compatibility flag; agent steps already stream raw Pi output.",
+)
 def cmd_op(
     glyph: str,
     prompt_parts: tuple[str, ...],
@@ -370,7 +374,11 @@ def stdin_preview(text: str) -> str:
     type=click.Choice(["show", "resume", "abort"]),
 )
 @click.option("--json", "json_output", is_flag=True)
-@click.option("--verbose", is_flag=True, help="Show raw Pi tool and prose output.")
+@click.option(
+    "--verbose",
+    is_flag=True,
+    help="Compatibility flag; agent steps already stream raw Pi output.",
+)
 def cmd_act(act_command: str, json_output: bool, verbose: bool) -> int:
     """Inspect, resume, or abort the current Pi edit action."""
     return run_act_command(act_command, json_output, verbose=verbose)
@@ -384,7 +392,11 @@ def cmd_act(act_command: str, json_output: bool, verbose: bool) -> int:
     type=click.Choice(["show", "resume", "abort"]),
 )
 @click.option("--json", "json_output", is_flag=True)
-@click.option("--verbose", is_flag=True, help="Show raw Pi tool and prose output.")
+@click.option(
+    "--verbose",
+    is_flag=True,
+    help="Compatibility flag; agent steps already stream raw Pi output.",
+)
 def cmd_plan(act_command: str, json_output: bool, verbose: bool) -> int:
     """Compatibility alias for `sigil act`."""
     return run_act_command(act_command, json_output, verbose=verbose)

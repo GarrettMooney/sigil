@@ -314,8 +314,6 @@ def run_pi_agent_step(
         ]
     )
     filter_cmd = [sys.argv[0], "render-pi-stream"]
-    if not verbose:
-        filter_cmd.append("--compact")
     filter_env = {
         **os.environ,
         "SIGIL_CAPTURE_ANSWER": "1",

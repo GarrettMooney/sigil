@@ -191,8 +191,8 @@ tools, and returns control to the shell after one bounded step. `,,,` runs the
 same one-step route without routine confirmation. Bash calls inside those steps
 are blocked and handed off. `@` and `@@` repeat bounded Pi steps toward a
 durable goal until completion, blockage, budget exhaustion, or interruption.
-By default, Sigil shows a compact tool trace and a short completion summary;
-use `--verbose` for Pi's raw tool stream and prose.
+Agent steps always stream Pi's raw tool calls and prose through `glow` or
+`cat`; they do not replace the final answer with a compact summary.
 
 Question routes do not expose Bash. If an answer recommends a command, it is
 plain answer text, not a tool call or terminal handoff.

@@ -674,13 +674,13 @@ def test_act_pi_step_uses_bash_handoff_extension() -> None:
     assert pi_cmd[pi_cmd.index("--tools") + 1] == "read,grep,find,ls,bash,edit,write"
     assert "--extension" in pi_cmd
     filter_cmd, filter_kwargs = next(call for call in popen_calls if call[0][0] != "pi")
-    assert "--compact" in filter_cmd
+    assert "--compact" not in filter_cmd
     filter_env = filter_kwargs["env"]
     assert isinstance(filter_env, dict)
     assert "SIGIL_BASH_HANDOFF_PATH" in filter_env
 
 
-def test_act_pi_step_verbose_uses_raw_stream_renderer() -> None:
+def test_act_pi_step_verbose_keeps_raw_stream_renderer() -> None:
     class FakeProc:
         def __init__(self, stdout: object | None = None) -> None:
             self.stdout = stdout
