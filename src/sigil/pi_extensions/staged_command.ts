@@ -14,7 +14,7 @@ export default function (pi: ExtensionAPI) {
 		if (event.toolName !== "bash") return undefined;
 
 		const command = commandFrom(event);
-		const path = process.env.SIGIL_BASH_HANDOFF_PATH;
+		const path = process.env.SIGIL_STAGED_COMMAND_PATH;
 		if (path && command) {
 			await mkdir(dirname(path), { recursive: true });
 			await appendFile(
@@ -33,7 +33,7 @@ export default function (pi: ExtensionAPI) {
 
 		return {
 			block: true,
-			reason: "Bash command handed off to the terminal for user review.",
+			reason: "Command staged in the terminal for user review.",
 		};
 	});
 }

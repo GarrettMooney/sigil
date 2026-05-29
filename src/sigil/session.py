@@ -19,8 +19,8 @@ from .state import session_dir, session_id, state_dir
 SESSION_FILES = (
     "last-question.jsonl",
     "last-tools.jsonl",
-    "last-bash-handoff.jsonl",
-    "pending-bash-handoff.jsonl",
+    "last-staged-command.jsonl",
+    "pending-staged-commands.jsonl",
     "last-failure.json",
     "last-act.jsonl",
     "last-plan.jsonl",

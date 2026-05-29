@@ -52,9 +52,9 @@ __sigil_history_insert() {
   builtin history -s "$1" 2>/dev/null || true
 }
 
-__sigil_insert_pending_handoff() {
+__sigil_insert_staged_command() {
   local command
-  command="$("$__sigil_bin" handoff pop 2>/dev/null)" || return 0
+  command="$("$__sigil_bin" staged pop 2>/dev/null)" || return 0
   __sigil_history_insert "$command"
 }
 
@@ -211,14 +211,14 @@ sigil_command() {
 sigil_agent_step() {
   "$__sigil_bin" op ",," "$@"
   local status=$?
-  __sigil_insert_pending_handoff
+  __sigil_insert_staged_command
   return "$status"
 }
 
 sigil_agent_step_auto() {
   "$__sigil_bin" op ",,," "$@"
   local status=$?
-  __sigil_insert_pending_handoff
+  __sigil_insert_staged_command
   return "$status"
 }
 
@@ -245,14 +245,14 @@ sigil_follow_up() {
 sigil_goal() {
   "$__sigil_bin" op "@" "$@"
   local status=$?
-  __sigil_insert_pending_handoff
+  __sigil_insert_staged_command
   return "$status"
 }
 
 sigil_goal_auto() {
   "$__sigil_bin" op "@@" "$@"
   local status=$?
-  __sigil_insert_pending_handoff
+  __sigil_insert_staged_command
   return "$status"
 }
 

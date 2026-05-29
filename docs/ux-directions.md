@@ -2,7 +2,7 @@
 
 Sigil keeps the shell as the main interface. Use the long-form CLI verbs when
 you want explicit commands, and use glyphs when you want fast interactive
-handoffs.
+turns.
 
 ## Common Workflows
 

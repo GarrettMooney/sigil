@@ -200,7 +200,7 @@ agent turn with read/search/edit/write tools. A turn is one Pi invocation and
 may include zero or more tool calls. `,,,` runs the same one-turn route without
 routine confirmation. `@` and `@@` repeat bounded turns toward a
 durable goal, stopping on completion, blockage, budget exhaustion, or policy
-boundaries. Bash tool execution is blocked and exposed as a handoff.
+boundaries. Bash tool execution is blocked and staged as a command for review.
 
 To install bindings without glyphs:
 
@@ -387,7 +387,7 @@ clean
 
 When attention is needed, it exits with status `1` and prints the highest
 priority condition plus exact next commands. Priority is active act, pending
-bash handoff, latest failed shell turn, then latest failed Sigil execution.
+staged command, latest failed shell turn, then latest failed Sigil execution.
 
 Installed shell bindings use this state to add a one-character prompt marker:
 `!` means `sigil status` has something worth showing. Disable the marker with
@@ -486,7 +486,7 @@ sessions/<session-id>/last-failure.json   latest failed shell command
 sessions/<session-id>/last-act.jsonl      one-step Pi agent action snapshots
 sessions/<session-id>/last-goal.jsonl     bounded goal loop snapshots
 sessions/<session-id>/last-question.jsonl same-session question transcript
-sessions/<session-id>/last-bash-handoff.jsonl latest blocked Bash handoff
+sessions/<session-id>/last-staged-command.jsonl latest blocked command staged for review
 sessions/<session-id>/last-tools.jsonl    latest Pi tool trace
 sessions/<session-id>/recent-turns.jsonl  recent shell turns recorded by bindings
 ```

@@ -17,7 +17,7 @@ import click
 from .commands import generate
 from .failure import record_failure
 from .goals import run_goal_loop
-from .handoff import consume_latest_bash_handoff, latest_bash_handoff
+from .staged_command import consume_latest_staged_command, latest_staged_command
 from .install import (
     SUPPORTED_SHELLS,
     checks_exit_code,
@@ -542,20 +542,20 @@ def cmd_render_pi_stream(json_output: bool, compact: bool) -> int:
     return stream_events(json_output=json_output, compact=compact)
 
 
-@cli.command("handoff", hidden=True)
+@cli.command("staged", hidden=True)
 @click.argument(
-    "handoff_command",
+    "staged_command",
     required=False,
     default="show",
     type=click.Choice(["show", "pop"]),
 )
 @click.option("--json", "json_output", is_flag=True)
-def cmd_handoff(handoff_command: str, json_output: bool) -> int:
-    """Inspect or consume the latest Pi bash handoff."""
+def cmd_staged(staged_command: str, json_output: bool) -> int:
+    """Inspect or consume the latest staged command."""
     record = (
-        consume_latest_bash_handoff()
-        if handoff_command == "pop"
-        else latest_bash_handoff()
+        consume_latest_staged_command()
+        if staged_command == "pop"
+        else latest_staged_command()
     )
     if json_output:
         pretty_print_json(record)

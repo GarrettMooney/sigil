@@ -46,7 +46,7 @@ call, no network, no doctor checks, no mutation.
 Initial attention reasons:
 
 - active act
-- pending bash handoff
+- pending staged command
 - latest failed shell turn
 - latest failed Sigil action
 

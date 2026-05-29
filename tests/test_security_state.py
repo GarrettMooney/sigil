@@ -12,12 +12,12 @@ from click.testing import CliRunner
 from _patch import patch, patch_dict
 from sigil.cli import cli, main
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
-from sigil.handoff import (
-    LAST_BASH_HANDOFF_FILE,
-    PENDING_BASH_HANDOFF_FILE,
-    consume_latest_bash_handoff,
-    prepare_bash_handoff,
-    record_bash_handoffs,
+from sigil.staged_command import (
+    LAST_STAGED_COMMAND_FILE,
+    PENDING_STAGED_COMMANDS_FILE,
+    consume_latest_staged_command,
+    prepare_staged_commands,
+    record_staged_commands,
 )
 from sigil.pi_stream import should_color, stream_events
 from sigil.question import (
@@ -497,13 +497,13 @@ def test_question_routes_record_alpha_trust_labels() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
-def test_bash_handoff_records_and_consumes_blocked_command() -> None:
+def test_staged_command_records_and_consumes_blocked_command() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
-            pending = prepare_bash_handoff()
+            pending = prepare_staged_commands()
             pending.write_text(
                 json.dumps(
                     {
@@ -515,7 +515,7 @@ def test_bash_handoff_records_and_consumes_blocked_command() -> None:
                 + "\n",
                 encoding="utf-8",
             )
-            records = record_bash_handoffs(
+            records = record_staged_commands(
                 source_event={
                     "id": "question-event",
                     "mode": "read-only",
@@ -533,13 +533,13 @@ def test_bash_handoff_records_and_consumes_blocked_command() -> None:
             assert records[0]["labels"] == ["network"]
             assert records[0]["inputs"] == ["question-event"]
             assert not (
-                Path(tmp) / "sessions/test" / PENDING_BASH_HANDOFF_FILE
+                Path(tmp) / "sessions/test" / PENDING_STAGED_COMMANDS_FILE
             ).exists()
 
-            consumed = consume_latest_bash_handoff()
+            consumed = consume_latest_staged_command()
             assert consumed is not None
             assert consumed["command"] == "git diff --stat"
-            assert read_jsonl(LAST_BASH_HANDOFF_FILE) == []
+            assert read_jsonl(LAST_STAGED_COMMAND_FILE) == []
 
 
 def test_failure_context_prompt_uses_recorded_failure_without_inventing_output() -> (

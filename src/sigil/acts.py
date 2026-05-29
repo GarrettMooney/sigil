@@ -9,10 +9,10 @@ import uuid
 from typing import Any
 
 from .ansi import MUTED, RESET
-from .handoff import (
-    bash_handoff_extension_path,
-    prepare_bash_handoff,
-    record_bash_handoffs,
+from .staged_command import (
+    prepare_staged_commands,
+    record_staged_commands,
+    staged_command_extension_path,
 )
 from .question import renderer_command
 from .security import create_trust_metadata
@@ -293,12 +293,14 @@ def run_pi_agent_step(
         inputs=[decision_event_id] if decision_event_id else [],
         input_records=[decision_event] if decision_event else [],
     )
-    handoff_path = prepare_bash_handoff()
-    extension_path = bash_handoff_extension_path()
+    staged_command_path = prepare_staged_commands()
+    extension_path = staged_command_extension_path()
     tools = (
         PI_AGENT_TOOLS if extension_path is not None else PI_AGENT_TOOLS_WITHOUT_BASH
     )
-    tool_label = "read+bash-handoff+edit+write" if extension_path else "read+edit+write"
+    tool_label = (
+        "read+staged-command+edit+write" if extension_path else "read+edit+write"
+    )
     approval = str(act.get("approval") or "confirm")
     step_label = (
         "one auto-approved step" if approval == "auto" else "one confirmed step"
@@ -343,7 +345,7 @@ def run_pi_agent_step(
         "SIGIL_QUESTION": str(act.get("objective") or ""),
         "SIGIL_PROMPT": pi_agent_prompt(act),
         "SIGIL_FOLLOW_UP": "0",
-        "SIGIL_BASH_HANDOFF_PATH": str(handoff_path),
+        "SIGIL_STAGED_COMMAND_PATH": str(staged_command_path),
     }
 
     pi_proc = subprocess.Popen(pi_cmd, stdout=subprocess.PIPE)
@@ -362,14 +364,14 @@ def run_pi_agent_step(
     renderer_code = renderer_proc.wait()
     filter_code = filter_proc.wait()
     pi_code = pi_proc.wait()
-    handoffs = record_bash_handoffs(
+    staged = record_staged_commands(
         source_event=decision_event,
         source_security=security,
     )
-    if handoffs:
-        latest = str(handoffs[-1].get("command") or "")
+    if staged:
+        latest = str(staged[-1].get("command") or "")
         print(
-            f"{MUTED}❯ bash handoff  {latest}{RESET}",
+            f"{MUTED}❯ staged command  {latest}{RESET}",
             file=sys.stderr,
         )
     print()

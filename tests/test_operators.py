@@ -625,7 +625,7 @@ def test_auto_goal_loop_stops_on_unclear_status_without_prompting() -> None:
     assert goal_events[-1]["goal"]["approval"] == "auto"
 
 
-def test_act_pi_step_uses_bash_handoff_extension() -> None:
+def test_act_pi_step_uses_staged_command_extension() -> None:
     class FakeProc:
         def __init__(self, stdout: object | None = None) -> None:
             self.stdout = stdout
@@ -650,7 +650,7 @@ def test_act_pi_step_uses_bash_handoff_extension() -> None:
                 patch("sigil.acts.ensure_model_for_pi", return_value=True),
                 patch("sigil.acts.subprocess.Popen", side_effect=fake_popen),
                 patch("sigil.acts.renderer_command", return_value=["cat"]),
-                patch("sigil.acts.record_bash_handoffs", return_value=[]),
+                patch("sigil.acts.record_staged_commands", return_value=[]),
             ):
                 from sigil.acts import run_pi_agent_step
 
@@ -671,7 +671,7 @@ def test_act_pi_step_uses_bash_handoff_extension() -> None:
     assert "--compact" not in filter_cmd
     filter_env = filter_kwargs["env"]
     assert isinstance(filter_env, dict)
-    assert "SIGIL_BASH_HANDOFF_PATH" in filter_env
+    assert "SIGIL_STAGED_COMMAND_PATH" in filter_env
 
 
 def test_act_pi_step_keeps_raw_stream_renderer() -> None:
@@ -698,7 +698,7 @@ def test_act_pi_step_keeps_raw_stream_renderer() -> None:
                 patch("sigil.acts.ensure_model_for_pi", return_value=True),
                 patch("sigil.acts.subprocess.Popen", side_effect=fake_popen),
                 patch("sigil.acts.renderer_command", return_value=["cat"]),
-                patch("sigil.acts.record_bash_handoffs", return_value=[]),
+                patch("sigil.acts.record_staged_commands", return_value=[]),
             ):
                 from sigil.acts import run_pi_agent_step
 

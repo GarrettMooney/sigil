@@ -25,9 +25,9 @@ def make_stub(tmp: Path) -> Path:
               printf '%s\n' '{"state":"clean"}'
               exit 0
             fi
-            if [ "$*" = "handoff pop" ]; then
-              [ -n "${SIGIL_STUB_HANDOFF:-}" ] || exit 1
-              printf '%s\n' "$SIGIL_STUB_HANDOFF"
+            if [ "$*" = "staged pop" ]; then
+              [ -n "${SIGIL_STUB_STAGED:-}" ] || exit 1
+              printf '%s\n' "$SIGIL_STUB_STAGED"
               exit 0
             fi
             printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
@@ -161,14 +161,14 @@ def test_bash_recommendations_print_stdout_and_command_to_history() -> None:
         )
 
 
-def test_bash_question_does_not_consume_handoff() -> None:
+def test_bash_question_does_not_consume_staged_command() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_command hello\n                    export SIGIL_STUB_HANDOFF='git diff --stat'\n                    sigil_question review\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_command hello\n                    export SIGIL_STUB_STAGED='git diff --stat'\n                    sigil_question review\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
@@ -178,14 +178,14 @@ def test_bash_question_does_not_consume_handoff() -> None:
         assert "history=echo recommended" in result.stdout
 
 
-def test_bash_act_handoff_adds_command_to_history() -> None:
+def test_bash_act_staged_command_adds_to_history() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_STUB_HANDOFF='uv run pytest'\n                    sigil_command_loop repair\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_STUB_STAGED='uv run pytest'\n                    sigil_command_loop repair\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
@@ -444,14 +444,14 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_question_does_not_consume_handoff() -> None:
+def test_zsh_question_does_not_consume_staged_command() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_command hello\n                    export SIGIL_STUB_HANDOFF="git diff --stat"\n                    sigil_question review\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_command hello\n                    export SIGIL_STUB_STAGED="git diff --stat"\n                    sigil_question review\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -462,14 +462,14 @@ def test_zsh_question_does_not_consume_handoff() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_act_handoff_adds_command_to_history() -> None:
+def test_zsh_act_staged_command_adds_to_history() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_STUB_HANDOFF="uv run pytest"\n                    sigil_command_loop repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_STUB_STAGED="uv run pytest"\n                    sigil_command_loop repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,

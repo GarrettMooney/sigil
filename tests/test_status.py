@@ -9,7 +9,7 @@ from click.testing import CliRunner
 
 from sigil.cli import cli
 from sigil.failure import record_failure
-from sigil.handoff import LAST_BASH_HANDOFF_FILE
+from sigil.staged_command import LAST_STAGED_COMMAND_FILE
 from sigil.session import record_turn
 from sigil.status import current_status, format_status
 from sigil.state import append_event, append_jsonl, write_jsonl
@@ -54,16 +54,16 @@ def test_status_reports_active_act_before_other_state() -> None:
     assert "objective\n  fix parser" in format_status(status)
 
 
-def test_status_reports_pending_handoff() -> None:
+def test_status_reports_pending_staged_command() -> None:
     with isolated_sigil_state():
         append_jsonl(
-            LAST_BASH_HANDOFF_FILE,
-            {"event_id": "handoff-1", "command": "uv run pytest"},
+            LAST_STAGED_COMMAND_FILE,
+            {"event_id": "staged-1", "command": "uv run pytest"},
         )
         status = current_status()
 
-    assert status.reason == "pending bash handoff"
-    assert status.actions == ("sigil handoff pop",)
+    assert status.reason == "pending staged command"
+    assert status.actions == ("sigil staged pop",)
     assert "uv run pytest" in format_status(status)
 
 
