@@ -35,8 +35,8 @@ suggesting, executing, and explaining. Sigil keeps those routes separate.
 | "Give me the command." | `,` | Proposes one command. Nothing runs. |
 | "Do one agent turn." | `,,` | Runs one Pi invocation after confirmation. |
 | "Do one routine turn." | `,,,` | Runs one Pi invocation without routine confirmation, within policy. |
-| "Answer from local context." | `?` | Read-only answer with the read tool. No shell is exposed. |
-| "Answer with web." | `??` | Read-only answer with read and web search tools. |
+| "Answer from local context." | `?` | Read-only answer with the read and search tools. No shell is exposed. |
+| "Answer with web." | `??` | Read-only answer with the read, search, and web search tools. |
 | "Work toward a goal." | `@` | Runs a bounded goal loop with checkpoints. |
 | "Continue routinely." | `@@` | Runs a bounded goal loop with routine steps auto-approved within policy. |
 
@@ -223,7 +223,7 @@ Sigil's important user rules are:
 | `@` | execute-write | Bounded goal loop with checkpoints. |
 | `@@` | execute-write | Bounded goal loop with routine auto-approval. |
 | `?` | read-only | Local answer route with no Bash tool. |
-| `??` | read-only | Read plus web answer route with no Bash tool. |
+| `??` | read-only | Read, search, plus web answer route with no Bash tool. |
 
 Trust records include route, mode, risk labels, and simple input event ids.
 Inspect them with:

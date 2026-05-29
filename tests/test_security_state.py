@@ -464,7 +464,7 @@ def test_question_routes_record_alpha_trust_labels() -> None:
                         ask(
                             "what is sigil on the web?",
                             glyph="??",
-                            tools="read,web_search",
+                            tools="read,grep,find,ls,web_search",
                             use_web=True,
                             json_output=True,
                         )
@@ -476,8 +476,11 @@ def test_question_routes_record_alpha_trust_labels() -> None:
             assert web_turn["labels"] == ["network"]
             pi_calls = [cmd for cmd in popen_calls if cmd[0] == "pi"]
             assert len(pi_calls) == 2
-            assert pi_calls[0][pi_calls[0].index("--tools") + 1] == "read"
-            assert pi_calls[1][pi_calls[1].index("--tools") + 1] == "read,web_search"
+            assert pi_calls[0][pi_calls[0].index("--tools") + 1] == "read,grep,find,ls"
+            assert (
+                pi_calls[1][pi_calls[1].index("--tools") + 1]
+                == "read,grep,find,ls,web_search"
+            )
             for cmd in pi_calls:
                 assert "--extension" not in cmd
                 system_prompt = cmd[cmd.index("--append-system-prompt") + 1]
@@ -1032,7 +1035,7 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
                     ask(
                         continuation_prompt("follow up", discussion_turns()),
                         glyph="??",
-                        tools="read,web_search",
+                        tools="read,grep,find,ls,web_search",
                         use_web=True,
                         append_transcript=True,
                         json_output=True,

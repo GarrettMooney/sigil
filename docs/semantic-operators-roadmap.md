@@ -42,7 +42,8 @@ make them prompt text or a long-form flag, not `???`.
 ## Question Routes
 
 `?` answers with local read-only context. It may use shell/session context and
-the `read` tool, but it must not authorize web search.
+the read-only inspection tools (`read`, `grep`, `find`, `ls`), but it must not
+authorize web search.
 
 `??` answers with local read-only context plus web search. This is the explicit
 web authorization route.
@@ -54,8 +55,8 @@ Implementation notes:
 
 - Refactor `ask()` to accept explicit `glyph`, `tools`, and `use_web` or source
   authorization parameters.
-- Route `?` to `--tools read`.
-- Route `??` to `--tools read,web_search`.
+- Route `?` to `--tools read,grep,find,ls`.
+- Route `??` to `--tools read,grep,find,ls,web_search`.
 - Record `?` as `read-only` without risk labels.
 - Record `??` as `read-only` with the `network` label.
 - Reject `???`.

@@ -30,7 +30,13 @@ from .operators import OperatorInvocation, create_invocation, run_invocation
 from .acts import abort_active_act, last_act, print_act, run_act_stepper
 from .policy import ExecutionPolicy
 from .pi_stream import stream_events
-from .question import ask, continuation_prompt, discussion_turns
+from .question import (
+    PI_QUESTION_TOOLS,
+    PI_QUESTION_TOOLS_WITH_WEB,
+    ask,
+    continuation_prompt,
+    discussion_turns,
+)
 from .session import (
     clear_current_session,
     current_session_snapshot,
@@ -152,7 +158,7 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
             return ask(
                 prompt,
                 glyph="??",
-                tools="read,web_search",
+                tools=PI_QUESTION_TOOLS_WITH_WEB,
                 use_web=True,
                 append_transcript=True,
                 json_output=json_output,
@@ -170,7 +176,7 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
         return ask(
             prompt,
             glyph="??",
-            tools="read,web_search",
+            tools=PI_QUESTION_TOOLS_WITH_WEB,
             use_web=True,
             append_transcript=True,
             json_output=json_output,
@@ -178,7 +184,7 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
     return ask(
         question,
         glyph="?",
-        tools="read",
+        tools=PI_QUESTION_TOOLS,
         use_web=False,
         json_output=json_output,
     )
@@ -279,7 +285,7 @@ def dispatch_act_operator(
 def dispatch_question_operator(invocation: OperatorInvocation, *, dry_run: bool) -> int:
     """Run a `?`/`??` invocation through the question route."""
     if dry_run:
-        tools = "read+web" if invocation.depth == 2 else "read"
+        tools = "read+search+web" if invocation.depth == 2 else "read+search"
         print(
             f"sigil op: {invocation.glyph} dry-run: would call {tools} question route",
             file=sys.stderr,
@@ -370,7 +376,7 @@ def run_question_operator(invocation: object) -> int:
     return ask(
         question,
         glyph=glyph,
-        tools="read,web_search" if use_web else "read",
+        tools=PI_QUESTION_TOOLS_WITH_WEB if use_web else PI_QUESTION_TOOLS,
         use_web=use_web,
     )
 

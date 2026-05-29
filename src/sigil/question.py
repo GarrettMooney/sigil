@@ -32,6 +32,9 @@ QUESTION_SYSTEM_PROMPT = (
 DEFAULT_GLOW_STYLE = "notty"
 DEFAULT_GLOW_WIDTH = "88"
 
+PI_QUESTION_TOOLS = "read,grep,find,ls"
+PI_QUESTION_TOOLS_WITH_WEB = f"{PI_QUESTION_TOOLS},web_search"
+
 
 def renderer_command() -> list[str]:
     """Return the Markdown renderer command for interactive question answers."""
@@ -124,7 +127,7 @@ def ask(
     stream_filter: str | None = None,
     *,
     glyph: str = "?",
-    tools: str = "read",
+    tools: str = PI_QUESTION_TOOLS,
     use_web: bool = False,
     append_transcript: bool = False,
     json_output: bool = False,
@@ -161,7 +164,7 @@ def ask(
     else:
         write_jsonl("last-question.jsonl", [question_turn])
     write_jsonl("last-tools.jsonl", [])
-    tool_label = "read+web" if use_web else "read"
+    tool_label = "read+search+web" if use_web else "read+search"
     print(
         f"{MUTED}❯ pi {glyph:<5} · {tool_label} · no execute path{RESET}",
         file=sys.stderr,

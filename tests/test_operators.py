@@ -198,7 +198,11 @@ def test_op_cli_runs_piped_double_question_operator_through_web_route() -> None:
     assert calls == [
         (
             ("review risky changes\n\nPiped input:\ndiff --git a/file b/file\n",),
-            {"glyph": "??", "tools": "read,web_search", "use_web": True},
+            {
+                "glyph": "??",
+                "tools": "read,grep,find,ls,web_search",
+                "use_web": True,
+            },
         )
     ]
 
@@ -217,10 +221,13 @@ def test_question_operators_use_source_specific_routes() -> None:
     assert first.exit_code == 0, first.output
     assert second.exit_code == 0, second.output
     assert calls == [
-        (("first question",), {"glyph": "?", "tools": "read", "use_web": False}),
+        (
+            ("first question",),
+            {"glyph": "?", "tools": "read,grep,find,ls", "use_web": False},
+        ),
         (
             ("second question",),
-            {"glyph": "??", "tools": "read,web_search", "use_web": True},
+            {"glyph": "??", "tools": "read,grep,find,ls,web_search", "use_web": True},
         ),
     ]
 
@@ -448,7 +455,7 @@ def test_op_cli_dry_run_question_does_not_call_web_route() -> None:
         result = CliRunner().invoke(cli, ["op", "--dry-run", "?", "status"])
 
     assert result.exit_code == 0
-    assert "read question route" in result.output
+    assert "read+search question route" in result.output
 
 
 def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
@@ -841,7 +848,7 @@ def test_op_cli_sends_piped_question_without_confirmation() -> None:
     assert calls == [
         (
             ("review\n\nPiped input:\ndiff\n",),
-            {"glyph": "?", "tools": "read", "use_web": False},
+            {"glyph": "?", "tools": "read,grep,find,ls", "use_web": False},
         ),
     ]
 
@@ -869,7 +876,7 @@ def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
             ("review\n\nPiped input:\ndiff\n",),
             {
                 "glyph": "??",
-                "tools": "read,web_search",
+                "tools": "read,grep,find,ls,web_search",
                 "use_web": True,
                 "append_transcript": True,
                 "json_output": False,
@@ -901,7 +908,7 @@ def test_ask_follow_up_sends_confirmed_piped_input_to_web_route() -> None:
             ("review\n\nPiped input:\ndiff\n",),
             {
                 "glyph": "??",
-                "tools": "read,web_search",
+                "tools": "read,grep,find,ls,web_search",
                 "use_web": True,
                 "append_transcript": True,
                 "json_output": False,
@@ -1015,7 +1022,7 @@ def test_verb_commands_run_piped_stream_operators() -> None:
     assert ask_calls == [
         (
             ("review\n\nPiped input:\ndiff\n",),
-            {"glyph": "?", "tools": "read", "use_web": False},
+            {"glyph": "?", "tools": "read,grep,find,ls", "use_web": False},
         )
     ]
     assert "Operator: , (propose)" in json_calls[0][1]
