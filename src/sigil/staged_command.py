@@ -11,7 +11,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from .security import create_trust_metadata, normalize_labels, normalize_mode
+from .security import create_trust_metadata, normalize_labels
 from .state import append_event, read_jsonl, session_dir, write_jsonl
 
 PENDING_STAGED_COMMANDS_FILE = "pending-staged-commands.jsonl"
@@ -48,7 +48,6 @@ def record_staged_commands(
     source_event_id = str(source_event.get("id") or "")
     glyph = str(source_security.get("glyph") or "?")
     labels = normalize_labels(source_security.get("labels"))
-    mode = normalize_mode(source_security.get("mode"))
 
     for raw in read_jsonl(PENDING_STAGED_COMMANDS_FILE):
         command = str(raw.get("command") or "").strip()
@@ -56,7 +55,7 @@ def record_staged_commands(
             continue
         security = create_trust_metadata(
             glyph=glyph,
-            mode=mode if mode == "propose" else "propose",
+            mode="propose",
             labels=labels,
             inputs=[source_event_id] if source_event_id else [],
             input_records=[source_event],
