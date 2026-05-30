@@ -5,6 +5,7 @@ import os
 import tempfile
 from io import StringIO
 from pathlib import Path
+from typing import cast
 
 import pytest
 from click.testing import CliRunner
@@ -517,8 +518,8 @@ def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
     assert result.exit_code == 0, result.output
-    assert "objective: ship it" in result.output
-    assert "tools: read,grep,find,ls,bash,edit,write" in result.output
+    assert "objective: ship it" not in result.output
+    assert "❯ tools  read,grep,find,ls,bash,edit,write" in result.output
     assert len(pi_calls) == 1
     assert pi_calls[0][1]["glyph"] == ",,,"
     assert [event["type"] for event in events] == [
@@ -672,40 +673,30 @@ def test_act_pi_step_uses_staged_command_extension() -> None:
                 )
 
     assert result == 0
-    pi_cmd, _ = next(call for call in popen_calls if call[0][0] == "pi")
+    pi_cmd, pi_kwargs = next(call for call in popen_calls if call[0][0] == "pi")
     assert pi_cmd[pi_cmd.index("--tools") + 1] == "read,grep,find,ls,bash,edit,write"
     assert "--extension" in pi_cmd
-    filter_cmd, filter_kwargs = next(call for call in popen_calls if call[0][0] != "pi")
-    assert "--compact" not in filter_cmd
-    filter_env = filter_kwargs["env"]
-    assert isinstance(filter_env, dict)
-    assert "SIGIL_STAGED_COMMAND_PATH" in filter_env
+    pi_env = pi_kwargs["env"]
+    assert isinstance(pi_env, dict)
+    assert "SIGIL_STAGED_COMMAND_PATH" in pi_env
 
 
-def test_act_pi_step_keeps_raw_stream_renderer() -> None:
-    class FakeProc:
-        def __init__(self, stdout: object | None = None) -> None:
-            self.stdout = stdout
+def test_act_pi_step_streams_in_full_mode() -> None:
+    captured: dict[str, object] = {}
 
-        def wait(self) -> int:
-            return 0
+    def fake_run_pi_stream(pi_cmd: list[str], **kwargs: object) -> int:
+        captured["pi_cmd"] = pi_cmd
+        captured["kwargs"] = kwargs
+        return 0
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         with patch_dict(
             os.environ,
             {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "act-session"},
         ):
-            popen_calls: list[tuple[list[str], dict[str, object]]] = []
-
-            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
-                del args
-                popen_calls.append((cmd, kwargs))
-                return FakeProc(stdout=StringIO(""))
-
             with (
                 patch("sigil.acts.ensure_model_for_pi", return_value=True),
-                patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen),
-                patch("sigil.pi_stream.renderer_command", return_value=["cat"]),
+                patch("sigil.acts.run_pi_stream", side_effect=fake_run_pi_stream),
                 patch("sigil.acts.record_staged_commands", return_value=[]),
             ):
                 from sigil.acts import run_pi_agent_step
@@ -720,8 +711,12 @@ def test_act_pi_step_keeps_raw_stream_renderer() -> None:
                 )
 
     assert result == 0
-    filter_cmd, _ = next(call for call in popen_calls if call[0][0] != "pi")
-    assert "--compact" not in filter_cmd
+    kwargs = cast("dict[str, object]", captured["kwargs"])
+    assert not kwargs.get("compact")
+    assert not kwargs.get("json_output")
+    assert kwargs["tool_output_stdout"]
+    pi_env = cast("dict[str, str]", kwargs["pi_env"])
+    assert "SIGIL_STAGED_COMMAND_PATH" in pi_env
 
 
 def test_act_resume_executes_pending_step_without_regenerating() -> None:
@@ -775,10 +770,69 @@ def test_act_resume_executes_pending_step_without_regenerating() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
     assert result.exit_code == 0, result.output
-    assert "objective: ship it" in result.output
-    assert "tools: read,grep,find,ls,bash,edit,write" in result.output
+    assert "objective: ship it" not in result.output
+    assert "❯ tools  read,grep,find,ls,bash,edit,write" in result.output
     assert len(pi_calls) == 1
     assert act_events[-1]["act"]["status"] == "completed"
+
+
+def test_act_replaces_stale_same_objective_act_without_pending_step() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        os.environ["SIGIL_STATE_DIR"] = tmp_dir
+        os.environ["SIGIL_SESSION_ID"] = "act-session"
+        pi_calls = []
+
+        def fake_run_pi(*args: object, **kwargs: object) -> int:
+            pi_calls.append((args, kwargs))
+            return 0
+
+        try:
+            append_jsonl(
+                "last-act.jsonl",
+                {
+                    "type": "act_created",
+                    "act": {
+                        "act_id": "stale-act",
+                        "objective": "ship it",
+                        "status": "active",
+                        "steps": [
+                            {
+                                "id": "1",
+                                "title": "Run one Pi edit step",
+                                "command": "pi --tools read,grep,find,ls,bash,edit,write",
+                                "explanation": "Already handled.",
+                                "status": "done",
+                            },
+                        ],
+                    },
+                },
+            )
+            with (
+                patch(
+                    "sigil.acts.prompt_on_tty", side_effect=AssertionError("no prompt")
+                ),
+                patch("sigil.acts.run_pi_agent_step", side_effect=fake_run_pi),
+            ):
+                result = CliRunner().invoke(cli, ["op", ",,,", "ship", "it"])
+            act_events = read_jsonl("last-act.jsonl")
+        finally:
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    assert result.exit_code == 0, result.output
+    assert "objective: ship it" not in result.output
+    assert "❯ tools  read,grep,find,ls,bash,edit,write" in result.output
+    assert len(pi_calls) == 1
+    created = [event for event in act_events if event["type"] == "act_created"]
+    assert created[-1]["act"]["act_id"] != "stale-act"
 
 
 def test_act_show_and_abort_use_last_act_state() -> None:

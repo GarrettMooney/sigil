@@ -1,4 +1,4 @@
-"""The `events` group plus the hidden render-pi-stream / staged commands."""
+"""The `events` group plus the hidden staged commands."""
 
 from __future__ import annotations
 
@@ -9,19 +9,10 @@ import click
 
 from ._base import cli
 from ._shared import pretty_print_json
-from ..pi_stream import stream_events
 from ..session import event_lineage, read_event_log
 from ..staged_command import consume_latest_staged_command, latest_staged_command
 
 EVENT_LIST_COLUMNS = ("time", "id", "action", "trust", "session", "summary")
-
-
-@cli.command("render-pi-stream", hidden=True)
-@click.option("--json", "json_output", is_flag=True)
-@click.option("--compact", is_flag=True)
-def cmd_render_pi_stream(json_output: bool, compact: bool) -> int:
-    """Render Pi's JSON event stream for the question pipeline."""
-    return stream_events(json_output=json_output, compact=compact)
 
 
 @cli.command("staged", hidden=True)

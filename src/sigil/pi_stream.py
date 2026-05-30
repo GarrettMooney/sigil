@@ -24,6 +24,7 @@ from .state import append_event, append_jsonl
 
 DEFAULT_GLOW_STYLE = "notty"
 DEFAULT_GLOW_WIDTH = "88"
+TRACE_LABEL_WIDTH = 5
 
 
 def renderer_command() -> list[str]:
@@ -35,74 +36,69 @@ def renderer_command() -> list[str]:
     return ["glow", "--style", style, "--width", width, "-"]
 
 
-def pi_trust_env(
-    security: dict[str, object],
-    *,
-    question: str,
-    prompt: str,
-    follow_up: str,
-    inputs: str | None = None,
-    extra: dict[str, str] | None = None,
-) -> dict[str, str]:
-    """Build the environment passed to the `render-pi-stream` filter."""
-    env = {
-        **os.environ,
-        "SIGIL_CAPTURE_ANSWER": "1",
-        "SIGIL_CAPTURE_TRACE": "1",
-        "SIGIL_TRUST_GLYPH": str(security["glyph"]),
-        "SIGIL_TRUST_MODE": str(security["mode"]),
-        "SIGIL_TRUST_LABELS": ",".join(cast("list[str]", security["labels"])),
-        "SIGIL_TRUST_INPUTS": inputs
-        if inputs is not None
-        else ",".join(cast("list[str]", security["inputs"])),
-        "SIGIL_QUESTION": question,
-        "SIGIL_PROMPT": prompt,
-        "SIGIL_FOLLOW_UP": follow_up,
-    }
-    if extra:
-        env.update(extra)
-    return env
-
-
-def run_pi_pipeline(
+def run_pi_stream(
     pi_cmd: list[str],
     *,
-    env: dict[str, str],
+    security: dict[str, object],
+    pi_env: dict[str, str] | None = None,
+    question: str = "",
+    prompt: str = "",
+    follow_up: bool = False,
+    capture_answer: bool = True,
+    capture_trace: bool = True,
     json_output: bool = False,
-    stream_filter: str | None = None,
+    compact: bool = False,
+    tool_output_stdout: bool = False,
 ) -> int:
-    """Run Pi through `render-pi-stream` and the renderer; return the exit code."""
-    filter_cmd = [stream_filter or sys.argv[0], "render-pi-stream"]
-    if json_output:
-        filter_cmd.append("--json")
-
-    pi_proc = subprocess.Popen(pi_cmd, stdout=subprocess.PIPE)
-    filter_stdout = None if json_output else subprocess.PIPE
-    filter_proc = subprocess.Popen(
-        filter_cmd, stdin=pi_proc.stdout, stdout=filter_stdout, env=env
+    """Run Pi and render its JSON event stream in-process; return Pi's exit code."""
+    pi_proc = subprocess.Popen(
+        pi_cmd,
+        stdout=subprocess.PIPE,
+        env=pi_env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     assert pi_proc.stdout is not None
-    pi_proc.stdout.close()
-    if json_output:
-        renderer_code = 0
-    else:
-        renderer_proc = subprocess.Popen(renderer_command(), stdin=filter_proc.stdout)
-        assert filter_proc.stdout is not None
-        filter_proc.stdout.close()
-        renderer_code = renderer_proc.wait()
+    try:
+        stream_events(
+            cast(TextIO, pi_proc.stdout),
+            security=security,
+            question=question,
+            prompt=prompt,
+            follow_up=follow_up,
+            capture_answer=capture_answer,
+            capture_trace=capture_trace,
+            json_output=json_output,
+            compact=compact,
+            tool_output_stdout=tool_output_stdout,
+        )
+    finally:
+        pi_proc.stdout.close()
+    return pi_proc.wait()
 
-    filter_code = filter_proc.wait()
-    pi_code = pi_proc.wait()
-    if pi_code:
-        return pi_code
-    if filter_code:
-        return filter_code
-    return renderer_code
+
+def render_answer(answer: str, stdout: TextIO) -> None:
+    """Render the finished answer once, through the Markdown renderer when on a tty."""
+    if not answer:
+        return
+    cmd = renderer_command()
+    if cmd[0] != "cat" and is_interactive(stdout):
+        try:
+            stdout.write("\n")
+            stdout.flush()
+            subprocess.run(cmd, input=answer, text=True, stdout=stdout, check=False)
+            return
+        except OSError:
+            pass
+    stdout.write(f"\n{answer}\n")
+    stdout.flush()
 
 
 TOOL_START_EVENT_TYPES = {
     "tool_execution_start",
     "tool_call",
+    "toolcall_end",
     "function_call",
 }
 TOOL_END_EVENT_TYPES = {
@@ -184,6 +180,17 @@ def tool_name(payload: dict[str, object]) -> str:
         value = payload.get(key)
         if value:
             return str(value)
+    tool_call = payload.get("toolCall")
+    if isinstance(tool_call, dict):
+        tool_call_payload = cast(dict[str, object], tool_call)
+        name = tool_call_payload.get("name")
+        if name:
+            return str(name)
+    indexed_tool_call = tool_call_from_partial(payload)
+    if indexed_tool_call is not None:
+        name = indexed_tool_call.get("name")
+        if name:
+            return str(name)
     function = payload.get("function")
     if isinstance(function, dict):
         function_payload = cast(dict[str, object], function)
@@ -198,11 +205,63 @@ def tool_args(payload: dict[str, object]) -> object:
     for key in ("args", "input", "arguments"):
         if key in payload:
             return decoded_args(payload.get(key))
+    tool_call = payload.get("toolCall")
+    if isinstance(tool_call, dict):
+        tool_call_payload = cast(dict[str, object], tool_call)
+        return decoded_args(tool_call_payload.get("arguments"))
+    indexed_tool_call = tool_call_from_partial(payload)
+    if indexed_tool_call is not None:
+        return decoded_args(indexed_tool_call.get("arguments"))
     function = payload.get("function")
     if isinstance(function, dict):
         function_payload = cast(dict[str, object], function)
         return decoded_args(function_payload.get("arguments"))
     return None
+
+
+def tool_call_id(payload: dict[str, object]) -> str:
+    """Extract a stable tool-call id from known Pi event shapes."""
+    for key in ("toolCallId", "tool_call_id", "id"):
+        value = payload.get(key)
+        if value:
+            return str(value)
+    tool_call = payload.get("toolCall")
+    if isinstance(tool_call, dict):
+        tool_call_payload = cast(dict[str, object], tool_call)
+        value = tool_call_payload.get("id")
+        if value:
+            return str(value)
+    indexed_tool_call = tool_call_from_partial(payload)
+    if indexed_tool_call is not None:
+        value = indexed_tool_call.get("id")
+        if value:
+            return str(value)
+    return ""
+
+
+def tool_call_from_partial(payload: dict[str, object]) -> dict[str, object] | None:
+    """Return the indexed toolCall block from a partial assistant message."""
+    content_index = payload.get("contentIndex")
+    if not isinstance(content_index, int):
+        return None
+    partial = payload.get("partial")
+    if not isinstance(partial, dict):
+        return None
+    partial_payload = cast(dict[str, object], partial)
+    content = partial_payload.get("content")
+    if (
+        not isinstance(content, list)
+        or content_index < 0
+        or content_index >= len(content)
+    ):
+        return None
+    block = content[content_index]
+    if not isinstance(block, dict):
+        return None
+    block_payload = cast(dict[str, object], block)
+    if block_payload.get("type") != "toolCall":
+        return None
+    return block_payload
 
 
 def decoded_args(value: object) -> object:
@@ -216,7 +275,7 @@ def decoded_args(value: object) -> object:
     return decoded
 
 
-def tool_start_event(event: dict[str, object]) -> tuple[str, object] | None:
+def tool_start_event(event: dict[str, object]) -> tuple[str, object, str] | None:
     """Return normalized tool start data when an event begins a call."""
     payload = event_payload(event)
     if event_kind(event) not in TOOL_START_EVENT_TYPES:
@@ -224,7 +283,7 @@ def tool_start_event(event: dict[str, object]) -> tuple[str, object] | None:
     name = tool_name(payload)
     if not name:
         return None
-    return name, tool_args(payload)
+    return name, tool_args(payload), tool_call_id(payload)
 
 
 def tool_end_event(event: dict[str, object]) -> str | None:
@@ -300,19 +359,13 @@ def compact_answer_summary(answer: str, *, limit: int = 180) -> str:
     return text[: limit - 3] + "..."
 
 
-def env_security() -> dict[str, object]:
-    """Recover alpha trust fields passed from the parent operator or ask process."""
-    labels = [
-        item for item in os.environ.get("SIGIL_TRUST_LABELS", "").split(",") if item
-    ]
-    inputs = [
-        item for item in os.environ.get("SIGIL_TRUST_INPUTS", "").split(",") if item
-    ]
+def default_security() -> dict[str, object]:
+    """Return placeholder trust fields for callers that pass no security context."""
     return {
-        "glyph": os.environ.get("SIGIL_TRUST_GLYPH", "?"),
-        "inputs": inputs,
-        "mode": normalize_mode(os.environ.get("SIGIL_TRUST_MODE")),
-        "labels": normalize_labels(labels),
+        "glyph": "?",
+        "inputs": [],
+        "mode": normalize_mode(None),
+        "labels": normalize_labels([]),
     }
 
 
@@ -388,25 +441,32 @@ class _StreamContext:
     compact: bool
     json_output: bool
     color_enabled: bool
+    tool_output_stdout: bool = False
+    question: str = ""
+    prompt: str = ""
+    follow_up: bool = False
+    capture_answer: bool = False
+    capture_trace: bool = False
 
 
-def _record_tool_trace(trace_event: dict[str, object]) -> None:
+def _record_tool_trace(ctx: _StreamContext, trace_event: dict[str, object]) -> None:
     """Persist a tool trace event to the trace log and global event log."""
-    if os.environ.get("SIGIL_CAPTURE_TRACE") == "1":
+    if ctx.capture_trace:
         append_jsonl("last-tools.jsonl", trace_event)
     append_event(trace_event)
 
 
 def _render_tool_start(ctx: _StreamContext, tool: str, detail: str) -> None:
     """Print a tool-start status line to stderr."""
+    output = ctx.stdout if ctx.tool_output_stdout else ctx.stderr
     if ctx.compact:
         label = compact_tool_label(tool)
         short_detail = compact_detail(detail)
         status = f"  {label:<6} {short_detail}" if short_detail else f"  {label}"
-        print(status, file=ctx.stderr, flush=True)
+        print(status, file=output, flush=True)
         return
-    status = f"❯ {tool}  {detail}" if detail else f"❯ {tool}"
-    print(muted(status, enabled=ctx.color_enabled), file=ctx.stderr, flush=True)
+    status = f"❯ {tool:<{TRACE_LABEL_WIDTH}}  {detail}" if detail else f"❯ {tool}"
+    print(muted(status, enabled=ctx.color_enabled), file=output, flush=True)
 
 
 def _handle_tool_start(
@@ -414,24 +474,31 @@ def _handle_tool_start(
     ctx: _StreamContext,
     spinner: Spinner,
     tool_events: list[dict[str, object]],
+    seen_tool_calls: dict[str, str],
 ) -> bool:
     """Handle a tool-start event; return True when the event was consumed."""
     tool_start = tool_start_event(event)
     if tool_start is None:
         return False
+    tool, args, call_id = tool_start
+    detail = summarize(tool, args)
+    if call_id:
+        previous_detail = seen_tool_calls.get(call_id)
+        if previous_detail or not detail:
+            return True
+        seen_tool_calls[call_id] = detail
     if spinner.running:
         spinner.pause()
-    tool, args = tool_start
-    detail = summarize(tool, args)
     trace_event = {
         "type": "tool_start",
         "tool": tool,
         "detail": detail,
         "args": args,
+        "tool_call_id": call_id,
         **ctx.security,
     }
     tool_events.append(trace_event)
-    _record_tool_trace(trace_event)
+    _record_tool_trace(ctx, trace_event)
     if not ctx.json_output:
         _render_tool_start(ctx, tool, detail)
     return True
@@ -449,7 +516,7 @@ def _handle_tool_end(
         return False
     trace_event = {"type": "tool_end", "tool": tool_end, **ctx.security}
     tool_events.append(trace_event)
-    _record_tool_trace(trace_event)
+    _record_tool_trace(ctx, trace_event)
     if spinner.running:
         spinner.resume()
     return True
@@ -472,17 +539,10 @@ def _handle_text_delta(
     if update.get("type") != "text_delta":
         return started_text
     delta = str(update.get("delta", ""))
-    if ctx.compact:
-        answer_chunks.append(delta)
-        return started_text
-    if not ctx.json_output and not started_text:
+    if not ctx.json_output and not ctx.compact and not started_text:
         spinner.stop()
-        ctx.stdout.write("\n")
         started_text = True
     answer_chunks.append(delta)
-    if not ctx.json_output:
-        ctx.stdout.write(delta)
-        ctx.stdout.flush()
     return started_text
 
 
@@ -493,7 +553,7 @@ def _record_answer(ctx: _StreamContext, answer: str) -> str | None:
     answer_event = append_event(
         {"type": "answer_done", "bytes": len(answer.encode("utf-8")), **ctx.security}
     )
-    if os.environ.get("SIGIL_CAPTURE_ANSWER") == "1":
+    if ctx.capture_answer:
         append_jsonl(
             "last-question.jsonl",
             {
@@ -519,9 +579,9 @@ def _write_json_result(
             {
                 "ok": True,
                 "type": "answer",
-                "question": os.environ.get("SIGIL_QUESTION", ""),
-                "prompt": os.environ.get("SIGIL_PROMPT", ""),
-                "follow_up": os.environ.get("SIGIL_FOLLOW_UP") == "1",
+                "question": ctx.question,
+                "prompt": ctx.prompt,
+                "follow_up": ctx.follow_up,
                 "answer": answer,
                 "answer_event_id": answer_event_id,
                 "tools": tool_events,
@@ -549,9 +609,14 @@ def _finalize(
     elif ctx.compact:
         ctx.stdout.write(f"done: {compact_answer_summary(answer)}\n")
         ctx.stdout.flush()
-    elif malformed_events:
-        noun = "event" if malformed_events == 1 else "events"
-        print(f"sigil: ignored {malformed_events} malformed Pi {noun}", file=ctx.stderr)
+    else:
+        render_answer(answer, ctx.stdout)
+        if malformed_events:
+            noun = "event" if malformed_events == 1 else "events"
+            print(
+                f"sigil: ignored {malformed_events} malformed Pi {noun}",
+                file=ctx.stderr,
+            )
 
 
 def stream_events(
@@ -559,21 +624,35 @@ def stream_events(
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
     *,
+    security: dict[str, object] | None = None,
+    question: str = "",
+    prompt: str = "",
+    follow_up: bool = False,
+    capture_answer: bool = False,
+    capture_trace: bool = False,
     json_output: bool = False,
     compact: bool = False,
+    tool_output_stdout: bool = False,
 ) -> int:
     """Filter Pi's event stream into terminal output and Sigil state files."""
     started_text = False
     answer_chunks: list[str] = []
     tool_events: list[dict[str, object]] = []
+    seen_tool_calls: dict[str, str] = {}
     malformed_events = 0
     ctx = _StreamContext(
         stdout=stdout,
         stderr=stderr,
-        security=env_security(),
+        security=security if security is not None else default_security(),
         compact=compact,
         json_output=json_output,
         color_enabled=should_color(stderr),
+        tool_output_stdout=tool_output_stdout,
+        question=question,
+        prompt=prompt,
+        follow_up=follow_up,
+        capture_answer=capture_answer,
+        capture_trace=capture_trace,
     )
     spinner_active = not json_output and not compact and is_interactive(stderr)
     spinner = Spinner(stderr, enabled=spinner_active, color=ctx.color_enabled)
@@ -586,7 +665,7 @@ def stream_events(
             except Exception:
                 malformed_events += 1
                 continue
-            if _handle_tool_start(event, ctx, spinner, tool_events):
+            if _handle_tool_start(event, ctx, spinner, tool_events, seen_tool_calls):
                 continue
             if _handle_tool_end(event, ctx, spinner, tool_events):
                 continue

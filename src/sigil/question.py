@@ -12,7 +12,7 @@ import sys
 from .ansi import MUTED, RESET
 from .security import create_trust_metadata
 from .model import ensure_model_for_pi
-from .pi_stream import pi_trust_env, run_pi_pipeline
+from .pi_stream import run_pi_stream
 from .session import recent_turns_context
 from .state import append_event, append_jsonl, read_jsonl, write_jsonl
 
@@ -97,7 +97,6 @@ def recent_question_context(
 
 def ask(
     question: str,
-    stream_filter: str | None = None,
     *,
     glyph: str = "?",
     tools: str = PI_QUESTION_TOOLS,
@@ -159,18 +158,19 @@ def ask(
             prompt,
         ]
     )
-    filter_env = pi_trust_env(
-        security,
+    stream_security = {
+        **security,
+        "inputs": [question_event["id"]]
+        if question_event["id"]
+        else security["inputs"],
+    }
+    exit_code = run_pi_stream(
+        pi_cmd,
+        security=stream_security,
         question=question,
         prompt=prompt,
-        follow_up="1" if append_transcript else "0",
-        inputs=question_event["id"] or ",".join(security["inputs"]),
-    )
-    exit_code = run_pi_pipeline(
-        pi_cmd,
-        env=filter_env,
+        follow_up=append_transcript,
         json_output=json_output,
-        stream_filter=stream_filter,
     )
     if not json_output:
         print()

@@ -55,6 +55,38 @@ def prompt_on_fd(fd: int, prompt: str) -> str:
     return answer.decode("utf-8", errors="replace")
 
 
+def clear_lines_on_tty(count: int) -> None:
+    """Erase the last ``count`` lines from the controlling terminal."""
+    if count <= 0:
+        return
+    sys.stdout.flush()
+    fd = open_tty_fd()
+    if fd is None:
+        return
+    try:
+        if not os.isatty(fd):
+            return
+        os.write(fd, f"\033[{count}A\r\033[J".encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def open_tty_fd() -> int | None:
+    """Open the controlling terminal for writing; return its fd or None."""
+    tty_fd = os.environ.get("SIGIL_TTY_FD")
+    if tty_fd:
+        try:
+            return os.dup(int(tty_fd))
+        except (OSError, ValueError):
+            pass
+    for tty_path in confirmation_tty_paths():
+        try:
+            return os.open(tty_path, os.O_RDWR)
+        except OSError:
+            continue
+    return None
+
+
 def confirmation_tty_paths() -> list[str]:
     """Return candidate terminal devices for interactive confirmation."""
     paths = []

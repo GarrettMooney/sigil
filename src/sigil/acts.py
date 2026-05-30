@@ -13,11 +13,11 @@ from .staged_command import (
     record_staged_commands,
     staged_command_extension_path,
 )
-from .pi_stream import pi_trust_env, run_pi_pipeline
+from .pi_stream import TRACE_LABEL_WIDTH, run_pi_stream
 from .security import create_trust_metadata
 from .model import ensure_model_for_pi
 from .state import append_event, append_jsonl, read_jsonl
-from .tty import prompt_on_tty
+from .tty import clear_lines_on_tty, prompt_on_tty
 
 LAST_ACT = "last-act.jsonl"
 MAX_EVENT_OUTPUT_CHARS = 4000
@@ -57,7 +57,6 @@ def run_act_stepper(
         return prepared
     act = prepared
 
-    print_act(act)
     step = next_pending_step(act)
     if step is None:
         act["status"] = "completed"
@@ -66,7 +65,9 @@ def run_act_stepper(
         return 0
 
     print_next_step(step)
-    proceed, decision_label = confirm_act_step(act, step, confirm_step)
+    proceed, decision_label = confirm_act_step(
+        act, step, confirm_step, preamble_lines=2
+    )
     if not proceed:
         return 0
 
@@ -108,6 +109,18 @@ def prepare_act(
             confirm_step=confirm_step,
             glyph=glyph,
         )
+    if objective and next_pending_step(act) is None:
+        if dry_run:
+            print(
+                "sigil act: would replace completed Pi edit step with a new objective"
+            )
+            return 0
+        return create_act(
+            objective=objective,
+            stdin_text=stdin_text,
+            confirm_step=confirm_step,
+            glyph=glyph,
+        )
     if objective and objective != str(act.get("objective", "")):
         if dry_run:
             print("sigil act: would replace active Pi edit step with a new objective")
@@ -130,29 +143,40 @@ def confirm_act_step(
     act: dict[str, Any],
     step: dict[str, Any],
     confirm_step: bool,
+    preamble_lines: int = 0,
 ) -> tuple[bool, str]:
     """Confirm one act step; return (proceed, decision_label) and record stops."""
     if not confirm_step:
         return True, "auto_accepted"
+    shown = preamble_lines
     decision = read_step_decision()
+    shown += 1
     if decision in {"", "n", "no", "quit", "q"}:
+        clear_lines_on_tty(shown)
         return False, ""
     if decision == "skip":
         step["status"] = "skipped"
         record_step_decision(act, step, "skipped")
+        clear_lines_on_tty(shown)
         print(f"skipped step {step['id']}")
         return False, ""
     if decision == "edit":
         edited = prompt_on_tty("objective> ")
+        shown += 1
         if edited is None or not edited.strip():
+            clear_lines_on_tty(shown)
             return False, ""
         act["objective"] = edited.strip()
         step["edited"] = True
         confirm = read_step_decision(prompt="run edited Pi step? [y/N] ")
+        shown += 1
         if confirm not in {"y", "yes"}:
+            clear_lines_on_tty(shown)
             return False, ""
     elif decision not in {"y", "yes"}:
+        clear_lines_on_tty(shown)
         return False, ""
+    clear_lines_on_tty(shown)
     return True, "accepted"
 
 
@@ -255,7 +279,7 @@ def print_act(act: dict[str, Any]) -> None:
 def print_next_step(step: dict[str, Any]) -> None:
     """Print the tools available for the next Pi step."""
     tools = tools_from_step(step)
-    print(f"tools: {tools}")
+    print(f"❯ {'tools':<{TRACE_LABEL_WIDTH}}  {tools}")
 
 
 def read_step_decision(prompt: str = "run? [y/N] ") -> str:
@@ -332,14 +356,15 @@ def run_pi_agent_step(
             pi_agent_prompt(act),
         ]
     )
-    filter_env = pi_trust_env(
-        security,
+    pi_env = {**os.environ, "SIGIL_STAGED_COMMAND_PATH": str(staged_command_path)}
+    exit_code = run_pi_stream(
+        pi_cmd,
+        security=security,
+        pi_env=pi_env,
         question=str(act.get("objective") or ""),
         prompt=pi_agent_prompt(act),
-        follow_up="0",
-        extra={"SIGIL_STAGED_COMMAND_PATH": str(staged_command_path)},
+        tool_output_stdout=True,
     )
-    exit_code = run_pi_pipeline(pi_cmd, env=filter_env)
     staged = record_staged_commands(
         source_event=decision_event,
         source_security=security,
