@@ -5,9 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
-from .policy import ActionLabel, ExecutionPolicy, PolicyDecision, evaluate_policy
 from .model import chat_json, chat_text, ensure_server
-from .security import create_trust_metadata
 from .state import append_event, append_jsonl, read_jsonl
 from .failure import active_failure_context
 from .question import recent_question_context as _recent_question_context
@@ -87,10 +85,9 @@ class OperatorInvocation:
 
 @dataclass(frozen=True)
 class OperatorResult:
-    """Model output plus the policy decision applied to it."""
+    """Model output produced by a semantic operator invocation."""
 
     output: str
-    decision: PolicyDecision
     command: str | None = None
     explanation: str = ""
     stderr: str = ""
@@ -105,11 +102,9 @@ class TypedProposal:
     body: str
     explanation: str = ""
 
-    def display(self, labels: tuple[ActionLabel, ...] = ()) -> str:
+    def display(self) -> str:
         """Return terminal-visible proposal text."""
         lines = [self.body]
-        if labels:
-            lines.append(format_labels(labels))
         if self.explanation:
             lines.append(self.explanation)
         return "\n".join(lines)
@@ -161,11 +156,7 @@ def create_invocation(
     )
 
 
-def run_invocation(
-    invocation: OperatorInvocation,
-    *,
-    policy: ExecutionPolicy | None = None,
-) -> OperatorResult:
+def run_invocation(invocation: OperatorInvocation) -> OperatorResult:
     """Run a semantic operator invocation and return stdout text."""
     if invocation.base == "," and invocation.depth > 1:
         raise RuntimeError(
@@ -174,43 +165,29 @@ def run_invocation(
     if not ensure_server():
         raise SystemExit(1)
 
-    execution_policy = policy or ExecutionPolicy()
     system = operator_system_prompt(invocation)
     user = operator_user_prompt(invocation)
     proposal = run_proposal_model(invocation, system, user)
-    policy_output = (
+    model_output = (
         proposal.body if proposal is not None else run_model(invocation, system, user)
     )
-    decision = evaluate_policy(
-        glyph=invocation.glyph,
-        depth=invocation.depth,
-        output=policy_output,
-        policy=execution_policy,
-    )
     output = (
-        proposal.display(decision.classification.labels)
+        proposal.display()
         if proposal is not None and invocation.depth == 1
-        else policy_output
-    )
-    security = create_trust_metadata(
-        glyph=invocation.glyph,
-        mode=mode_for_operator(invocation),
-        labels=decision.classification.labels,
+        else model_output
     )
     event = append_event(
         {
             "type": "operator_completed",
             "operator": invocation.to_dict(),
             "output_snippet": output[:MAX_EVENT_OUTPUT_CHARS],
-            "labels": decision.classification.labels,
-            **security,
+            "glyph": invocation.glyph,
         }
     )
     if invocation.base == "?":
-        append_inspect_turns(invocation, output, event, security)
+        append_inspect_turns(invocation, output, event)
     return OperatorResult(
         output=output,
-        decision=decision,
         command=proposal.body if proposal is not None else None,
         explanation=proposal.explanation if proposal is not None else "",
     )
@@ -358,7 +335,6 @@ def append_inspect_turns(
     invocation: OperatorInvocation,
     output: str,
     event: dict[str, object],
-    security: dict[str, object],
 ) -> None:
     """Record inspect turns for same-terminal continuity."""
     event_id = str(event.get("id") or "")
@@ -371,7 +347,6 @@ def append_inspect_turns(
             "role": "user",
             "content": prompt,
             "event_id": event_id,
-            **security,
         },
     )
     if output:
@@ -381,7 +356,6 @@ def append_inspect_turns(
                 "role": "assistant",
                 "content": output,
                 "event_id": event_id,
-                **security,
             },
         )
 
@@ -391,15 +365,6 @@ def default_prompt(invocation: OperatorInvocation) -> str:
     if invocation.base == "?":
         return "Inspect and summarize the input."
     return "Recommend the best next action."
-
-
-def mode_for_operator(
-    invocation: OperatorInvocation,
-) -> Literal["read-only", "propose"]:
-    """Return the alpha trust mode for an operator invocation."""
-    if invocation.base == "?":
-        return "read-only"
-    return "propose"
 
 
 def readable_target_files(lines: list[str]) -> list[tuple[Path, str]]:
@@ -434,8 +399,3 @@ def max_tokens_for_depth(depth: int) -> int:
     if depth <= 1:
         return 700
     return 1200
-
-
-def format_labels(labels: tuple[ActionLabel, ...]) -> str:
-    """Return terminal-visible action labels."""
-    return " · ".join(labels)

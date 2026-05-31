@@ -14,8 +14,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .security import normalize_trust_record
-
 
 def state_dir() -> Path:
     """Return the global Sigil state directory."""
@@ -39,18 +37,16 @@ def session_dir() -> Path:
 
 
 def append_event(event: dict[str, Any]) -> dict[str, Any]:
-    """Append a global audit/debug event with session and alpha trust fields."""
+    """Append a global audit/debug event with session metadata."""
     root = state_dir()
     root.mkdir(parents=True, exist_ok=True)
-    payload = normalize_trust_record(
-        {
-            "id": str(uuid.uuid4()),
-            "time": time.time(),
-            "cwd": os.getcwd(),
-            "session": session_id(),
-            **event,
-        }
-    )
+    payload = {
+        "id": str(uuid.uuid4()),
+        "time": time.time(),
+        "cwd": os.getcwd(),
+        "session": session_id(),
+        **event,
+    }
     with (root / "events.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
     return payload
@@ -72,15 +68,13 @@ def append_jsonl(name: str, event: dict[str, Any]) -> dict[str, Any]:
     """Append a session-scoped JSONL event."""
     root = session_dir()
     root.mkdir(parents=True, exist_ok=True)
-    payload = normalize_trust_record(
-        {
-            "id": str(uuid.uuid4()),
-            "time": time.time(),
-            "cwd": os.getcwd(),
-            "session": session_id(),
-            **event,
-        }
-    )
+    payload = {
+        "id": str(uuid.uuid4()),
+        "time": time.time(),
+        "cwd": os.getcwd(),
+        "session": session_id(),
+        **event,
+    }
     with (root / name).open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
     return payload
@@ -95,15 +89,13 @@ def write_jsonl(name: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]
     payloads = []
     with tmp.open("w", encoding="utf-8") as f:
         for event in events:
-            payload = normalize_trust_record(
-                {
-                    "id": str(uuid.uuid4()),
-                    "time": time.time(),
-                    "cwd": os.getcwd(),
-                    "session": session_id(),
-                    **event,
-                }
-            )
+            payload = {
+                "id": str(uuid.uuid4()),
+                "time": time.time(),
+                "cwd": os.getcwd(),
+                "session": session_id(),
+                **event,
+            }
             payloads.append(payload)
             f.write(
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
@@ -124,7 +116,7 @@ def read_jsonl(name: str) -> list[dict[str, Any]]:
         except Exception:
             continue
         if isinstance(event, dict):
-            events.append(normalize_trust_record(event))
+            events.append(event)
     return events
 
 
@@ -137,6 +129,4 @@ def read_json(name: str) -> Any | None:
         value = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
-    if isinstance(value, dict):
-        return normalize_trust_record(value)
     return value

@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .security import create_trust_metadata
 from .state import append_event, read_json, write_json
 
 MAX_SNIPPET_CHARS = 4000
@@ -106,10 +105,6 @@ def record_failure(
     stdout_text = truncate_snippet(stdout_snippet)
     stderr_text = truncate_snippet(stderr_snippet)
     context = cwd_context(failure_cwd)
-    security = create_trust_metadata(
-        glyph="failure",
-        mode="propose",
-    )
     event = append_event(
         {
             "type": "failure_recorded",
@@ -119,7 +114,7 @@ def record_failure(
             "stdout_snippet": stdout_text,
             "stderr_snippet": stderr_text,
             "context": context,
-            **security,
+            "glyph": "failure",
         }
     )
     write_json(
@@ -133,7 +128,7 @@ def record_failure(
             "context": context,
             "time": time.time(),
             "event_id": event["id"],
-            **security,
+            "glyph": "failure",
         },
     )
 

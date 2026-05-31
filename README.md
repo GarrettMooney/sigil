@@ -34,11 +34,11 @@ suggesting, executing, and explaining. Sigil keeps those routes separate.
 | --- | --- | --- |
 | "Give me the command." | `,` | Proposes one command. Nothing runs. |
 | "Do one agent turn." | `,,` | Runs one Pi invocation after confirmation. |
-| "Do one routine turn." | `,,,` | Runs one Pi invocation without routine confirmation, within policy. |
+| "Do one routine turn." | `,,,` | Runs one Pi invocation without per-step confirmation. |
 | "Answer from local context." | `?` | Read-only answer with the read and search tools. No shell is exposed. |
 | "Answer with web." | `??` | Read-only answer with the read, search, and web search tools. |
 | "Work toward a goal." | `@` | Runs a bounded goal loop with checkpoints. |
-| "Continue routinely." | `@@` | Runs a bounded goal loop with routine steps auto-approved within policy. |
+| "Continue routinely." | `@@` | Runs a bounded goal loop with steps auto-approved. |
 
 The result is a shell workflow with small blast radius, durable state, and a
 plain CLI underneath the punctuation.
@@ -157,11 +157,10 @@ no execute path.
 
 # 4. Audit what happened.
 sigil events
-sigil events lineage
 ```
 
-Sigil stores command suggestions, question answers, and act steps with alpha
-trust fields so you can inspect the route, mode, risk labels, and event inputs.
+Sigil stores command suggestions, question answers, and act steps in an
+inspectable event log so you can review the route each event came from.
 
 ## Glyph Reference
 
@@ -171,7 +170,7 @@ Installed zsh and Bash bindings expose these shortcuts:
 | --- | --- | --- |
 | `,` | recommend | Recommend one command. |
 | `,,` | step | Run one agent turn, confirming effects. |
-| `,,,` | auto step | Run one agent turn, auto-approving routine effects within policy. |
+| `,,,` | auto step | Run one agent turn, auto-approving routine effects. |
 | `?` | answer | Answer from local read-only context. |
 | `??` | web answer | Answer from local context plus web search. |
 | `@` | goal | Run a bounded goal loop with checkpoints. |
@@ -191,7 +190,7 @@ Examples:
 
 `,` prints a command proposal. The zsh binding puts it in the editable prompt
 buffer with `print -z` and records it in shell history. Bash records it in
-history. Proposals include terse risk labels such as `network · publish`.
+history.
 
 `,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
 tools, and returns control to the shell after one bounded Pi invocation. That
@@ -211,29 +210,25 @@ To install the CLI without punctuation shortcuts:
 sigil install zsh --no-glyphs
 ```
 
-## Trust Model
+## Route Model
 
-Sigil's important user rules are:
+Each route has a fixed effect on your system:
 
-| Route | Mode | Rule |
+| Route | Effect | Rule |
 | --- | --- | --- |
 | `,` | propose | Model-authored proposal only. |
 | `,,` | execute-write | One confirmed Pi agent step. |
-| `,,,` | execute-write | One auto-approved Pi agent step within policy. |
+| `,,,` | execute-write | One auto-approved Pi agent step. |
 | `@` | execute-write | Bounded goal loop with checkpoints. |
 | `@@` | execute-write | Bounded goal loop with routine auto-approval. |
 | `?` | read-only | Local answer route with no Bash tool. |
 | `??` | read-only | Read, search, plus web answer route with no Bash tool. |
 
-Trust records include route, mode, risk labels, and simple input event ids.
-Inspect them with:
+Every route records what it did to the event log. Inspect it with:
 
 ```sh
 sigil events
-sigil events lineage
 ```
-
-For details, see [docs/trust-model.md](docs/trust-model.md).
 
 ## CLI
 
@@ -242,7 +237,6 @@ The glyphs are thin shell functions over a regular CLI:
 ```text
 sigil command [--json] [PROMPT]
 sigil events [--limit N] [--json] [--raw]
-sigil events lineage [EVENT_ID] [--json]
 sigil session [show|list|clear] [--json]
 sigil status [--json]
 sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
@@ -278,7 +272,6 @@ sigil session show
 sigil session list
 sigil session clear
 sigil events
-sigil events lineage
 ```
 
 ## Project Scope

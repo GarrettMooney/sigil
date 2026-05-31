@@ -15,7 +15,6 @@ sigil ask [--follow-up] [--json] [QUESTION]
 sigil act [show|resume|abort] [--json] [--verbose]
 sigil events [--limit N] [--json] [--raw]
 sigil events list [--limit N] [--json] [--raw]
-sigil events lineage [EVENT_ID] [--json]
 sigil session [show|path|list|clear] [--json]
 sigil status [--json]
 sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs] [--json]
@@ -48,8 +47,8 @@ sigil command "show the largest directories"
 git diff --name-only | sigil command "run the relevant tests"
 ```
 
-Sigil prints the proposed command to stdout, followed by terse risk labels and a
-short explanation on their own lines when present.
+Sigil prints the proposed command to stdout, followed by a short explanation on
+its own line when present.
 
 When stdin is piped, Sigil asks before using the piped text (except with
 `--json`, which is treated as a machine-mode call and skips the prompt).
@@ -61,14 +60,13 @@ sigil command --json "find Python tests"
 ```
 
 ```json
-{"prompt":"find Python tests","command":"find . -name 'test_*.py' -o -name '*_test.py'","labels":[],"explanation":"Finds common Python test filenames."}
+{"prompt":"find Python tests","command":"find . -name 'test_*.py' -o -name '*_test.py'","explanation":"Finds common Python test filenames."}
 ```
 
 Stable fields:
 
 - `prompt`: prompt text.
 - `command`: directly runnable shell command.
-- `labels`: terse risk labels for the command (e.g. `network`, `publish`).
 - `explanation`: short explanation from the model.
 
 ## `sigil ask`
@@ -108,12 +106,7 @@ The JSON form is one object:
   "answer": "Sigil is a shell assistant...",
   "answer_event_id": "c8ad3f8e-...",
   "tools": [],
-  "malformed_events": 0,
-  "security": {
-    "glyph": "?",
-    "mode": "read-only",
-    "labels": []
-  }
+  "malformed_events": 0
 }
 ```
 
@@ -128,7 +121,6 @@ Stable fields:
 - `answer_event_id`: stored answer event id, or `null`.
 - `tools`: ordered Pi tool trace events.
 - `malformed_events`: malformed Pi JSON event lines ignored.
-- `security`: alpha trust fields recorded for the answer.
 
 With piped stdin and `--json`, a fresh `sigil ask` currently emits pipeline
 metadata instead of calling Pi:
@@ -157,7 +149,7 @@ Glyphs are installed shell functions over the CLI runtime. Install them with
 ```text
 ,    recommend one command
 ,,   run one agent turn, confirming effects
-,,,  run one agent turn, auto-approving routine effects within policy
+,,,  run one agent turn, auto-approving routine effects
 ?    answer from local read-only context
 ??   answer from local context plus web search
 @    run a bounded goal loop with checkpoints
@@ -178,13 +170,12 @@ Examples:
 
 `,` prints a command proposal. The zsh binding inserts it into the editable
 prompt buffer and adds it to shell history; the Bash binding adds it to history.
-Proposal output includes a terse risk label line such as `network · publish`.
 `,,` asks before running one Pi
 agent turn with read/search/edit/write tools. A turn is one Pi invocation and
 may include zero or more tool calls. `,,,` runs the same one-turn route without
 routine confirmation. `@` and `@@` repeat bounded turns toward a
-durable goal, stopping on completion, blockage, budget exhaustion, or policy
-boundaries. Bash tool execution is blocked and staged as a command for review.
+durable goal, stopping on completion, blockage, budget exhaustion, or
+interruption. Bash tool execution is blocked and staged as a command for review.
 
 To install bindings without glyphs:
 
@@ -252,8 +243,8 @@ sigil events list --json
 Without `--json`, each event is printed as a table:
 
 ```text
-time      id        action      trust                session   summary
-12:34:56  7c0d5a11  ? question  web/read             2e9a0b3c  what changed?
+time      id        action      session   summary
+12:34:56  7c0d5a11  ? question  2e9a0b3c  what changed?
 ```
 
 The summary JSON form returns:
@@ -268,46 +259,15 @@ The summary JSON form returns:
     "type": "question",
     "glyph": "?",
     "action": "? question",
-    "trust": "web/read",
     "session": "2e9a0b3c-...",
     "short_session": "2e9a0b3c",
     "cwd": "/path/to/repo",
-    "summary": "what changed?",
-    "lineage": "sigil events lineage 7c0d5a11-..."
+    "summary": "what changed?"
   }
 ]
 ```
 
 Use `--raw --json` to return exact stored event payloads.
-
-## `sigil events lineage`
-
-Shows the selected event and the transitive input events it inherited from.
-
-```sh
-sigil events lineage
-sigil events lineage 7c0d5a11-...
-sigil events lineage 7c0d5a11-... --json
-```
-
-When no event id is provided, Sigil uses the latest event from the current
-session, falling back to the latest global event.
-
-JSON output:
-
-```json
-{
-  "event_id": "7c0d5a11-...",
-  "nodes": [
-    {
-      "id": "7c0d5a11-...",
-      "depth": 0,
-      "event": { "type": "question", "glyph": "?" }
-    }
-  ],
-  "missing_inputs": []
-}
-```
 
 ## `sigil session`
 

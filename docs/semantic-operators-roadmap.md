@@ -11,10 +11,10 @@ the old glyph meanings during this migration.
 
 ,    propose
 ,,   one agent step, confirm effects
-,,,  one agent step, auto-approve routine effects within policy
+,,,  one agent step, auto-approve routine effects
 
 @    agent goal loop, confirm each step/checkpoint
-@@   agent goal loop, auto-approve routine steps within policy
+@@   agent goal loop, auto-approve routine steps
 ```
 
 The design separates the axes:
@@ -57,8 +57,7 @@ Implementation notes:
   authorization parameters.
 - Route `?` to `--tools read,grep,find,ls`.
 - Route `??` to `--tools read,grep,find,ls,web_search`.
-- Record `?` as `read-only` without risk labels.
-- Record `??` as `read-only` with the `network` label.
+- Record `?` and `??` to the event log under their route glyph.
 - Reject `???`.
 
 ## Comma Routes
@@ -67,28 +66,17 @@ Implementation notes:
 
 `,,` runs one agent step after showing the step and asking before effects.
 
-`,,,` runs one agent step without routine per-step confirmation, but only within
-policy. It skips the confirmation prompt, not the policy boundary.
-
-Policy boundaries should still block or require explicit approval for risky
-effects such as:
-
-- privileged commands
-- destructive deletes
-- commits and pushes
-- publishing
-- dependency installs
-- network writes
-- secret exposure
-- broad unrelated edits
+`,,,` runs one agent step without routine per-step confirmation. The shell
+remains the review boundary: Bash tool execution is blocked and staged as a
+command for explicit review rather than run inline.
 
 Implementation notes:
 
 - Keep the current `,` proposal surface where possible.
 - Refactor the existing act stepper so it can run with `confirm_step=True` for
   `,,` and `confirm_step=False` for `,,,`.
-- Make the step runner accept the originating glyph so trust records and tool
-  traces match the route.
+- Make the step runner accept the originating glyph so tool traces match the
+  route.
 - Preserve the "one step, then return control" invariant for both `,,` and
   `,,,`.
 
@@ -97,8 +85,7 @@ Implementation notes:
 `@` starts or resumes a durable goal loop with confirmation at each step or
 checkpoint.
 
-`@@` starts or resumes a durable goal loop that auto-approves routine steps
-within policy.
+`@@` starts or resumes a durable goal loop that auto-approves routine steps.
 
 The goal loop is similar in spirit to Codex `/goal`: it pursues an objective
 until completion, blockage, budget exhaustion, or interruption. It is not an
@@ -135,8 +122,8 @@ Recommended goal shape:
 }
 ```
 
-Goal loops should have default budgets. `@@` must stop on unclear status or a
-risky policy boundary rather than continuing indefinitely.
+Goal loops should have default budgets. `@@` must stop on unclear status or
+budget exhaustion rather than continuing indefinitely.
 
 ## Parser Rules
 

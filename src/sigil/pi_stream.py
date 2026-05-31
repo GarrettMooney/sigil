@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from typing import TextIO, cast
 
 from .ansi import MUTED, RESET
-from .security import normalize_labels, normalize_mode
 from .state import append_event, append_jsonl
 
 DEFAULT_GLOW_STYLE = "notty"
@@ -39,7 +38,6 @@ def renderer_command() -> list[str]:
 def run_pi_stream(
     pi_cmd: list[str],
     *,
-    security: dict[str, object],
     pi_env: dict[str, str] | None = None,
     question: str = "",
     prompt: str = "",
@@ -63,7 +61,6 @@ def run_pi_stream(
     try:
         stream_events(
             cast(TextIO, pi_proc.stdout),
-            security=security,
             question=question,
             prompt=prompt,
             follow_up=follow_up,
@@ -367,16 +364,6 @@ def compact_answer_summary(answer: str, *, limit: int = 180) -> str:
     return text[: limit - 3] + "..."
 
 
-def default_security() -> dict[str, object]:
-    """Return placeholder trust fields for callers that pass no security context."""
-    return {
-        "glyph": "?",
-        "inputs": [],
-        "mode": normalize_mode(None),
-        "labels": normalize_labels([]),
-    }
-
-
 class Spinner:
     """Transient `thinking` status line driven by a background thread."""
 
@@ -445,7 +432,6 @@ class _StreamContext:
 
     stdout: TextIO
     stderr: TextIO
-    security: dict[str, object]
     compact: bool
     json_output: bool
     color_enabled: bool
@@ -500,13 +486,12 @@ def _handle_tool_start(
         seen_tool_calls[call_id] = detail
     if spinner.running:
         spinner.pause()
-    trace_event = {
+    trace_event: dict[str, object] = {
         "type": "tool_start",
         "tool": tool,
         "detail": detail,
         "args": args,
         "tool_call_id": call_id,
-        **ctx.security,
     }
     tool_events.append(trace_event)
     _record_tool_trace(ctx, trace_event)
@@ -525,7 +510,7 @@ def _handle_tool_end(
     tool_end = tool_end_event(event)
     if tool_end is None:
         return False
-    trace_event = {"type": "tool_end", "tool": tool_end, **ctx.security}
+    trace_event: dict[str, object] = {"type": "tool_end", "tool": tool_end}
     tool_events.append(trace_event)
     _record_tool_trace(ctx, trace_event)
     if spinner.running:
@@ -562,7 +547,7 @@ def _record_answer(ctx: _StreamContext, answer: str) -> str | None:
     if not answer:
         return None
     answer_event = append_event(
-        {"type": "answer_done", "bytes": len(answer.encode("utf-8")), **ctx.security}
+        {"type": "answer_done", "bytes": len(answer.encode("utf-8"))}
     )
     if ctx.capture_answer:
         append_jsonl(
@@ -571,7 +556,6 @@ def _record_answer(ctx: _StreamContext, answer: str) -> str | None:
                 "role": "assistant",
                 "content": answer,
                 "event_id": answer_event["id"],
-                **ctx.security,
             },
         )
     return answer_event["id"]
@@ -597,7 +581,6 @@ def _write_json_result(
                 "answer_event_id": answer_event_id,
                 "tools": tool_events,
                 "malformed_events": malformed_events,
-                "security": ctx.security,
             },
             ensure_ascii=False,
         )
@@ -635,7 +618,6 @@ def stream_events(
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
     *,
-    security: dict[str, object] | None = None,
     question: str = "",
     prompt: str = "",
     follow_up: bool = False,
@@ -664,7 +646,6 @@ def stream_events(
     ctx = _StreamContext(
         stdout=stdout,
         stderr=stderr,
-        security=security if security is not None else default_security(),
         compact=compact,
         json_output=json_output,
         color_enabled=should_color(tool_color_stream),

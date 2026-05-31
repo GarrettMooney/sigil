@@ -57,7 +57,7 @@ The shell remains the review boundary:
 
 - `,` proposes and does not execute.
 - `,,` runs one Pi agent step after confirming effects.
-- `,,,` runs one Pi agent step without routine confirmation, within policy.
+- `,,,` runs one Pi agent step without routine confirmation.
 - `@` runs a bounded goal loop with checkpoints.
 - `@@` runs a bounded goal loop with routine auto-approval.
 - `?` answers from local read-only context.
@@ -75,7 +75,6 @@ Useful inspection commands:
 sigil session show
 sigil session path
 sigil events
-sigil events lineage
 ```
 
 Use `sigil session clear` to remove the current session's continuity files.

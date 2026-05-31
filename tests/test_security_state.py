@@ -26,13 +26,8 @@ from sigil.question import (
     continuation_prompt,
     discussion_turns,
 )
-from sigil.security import (
-    inherit_security,
-    create_trust_metadata,
-    normalize_trust_record,
-)
 from sigil.session import recent_turns, recent_turns_context, record_turn
-from sigil.state import append_event, append_jsonl, read_jsonl, write_jsonl
+from sigil.state import append_event, read_jsonl, write_jsonl
 from sigil.tty import clear_lines_on_tty, confirmation_tty_paths, confirm_on_tty
 
 
@@ -41,47 +36,9 @@ class TtyStringIO(StringIO):
         return True
 
 
-def test_record_without_trust_fields_defaults_to_propose_mode() -> None:
-    record = normalize_trust_record({"type": "old"})
-    assert record["mode"] == "propose"
-    assert record["labels"] == []
-
-
 def test_question_system_prompt_points_pi_at_events_log_for_older_history() -> None:
     assert "events.jsonl" in QUESTION_SYSTEM_PROMPT
     assert "at most one tool call" in QUESTION_SYSTEM_PROMPT
-
-
-def test_continuation_keeps_inputs_and_alpha_labels() -> None:
-    inherited = inherit_security(
-        glyph="??",
-        input_records=[
-            {
-                "event_id": "question-1",
-                "mode": "read-only",
-                "labels": ["network"],
-            },
-            {"event_id": "legacy-1"},
-        ],
-        mode="read-only",
-    )
-    assert inherited["mode"] == "read-only"
-    assert inherited["inputs"] == ["question-1", "legacy-1"]
-    assert inherited["labels"] == ["network"]
-
-
-def test_create_trust_metadata_keeps_alpha_fields_only() -> None:
-    security = create_trust_metadata(
-        glyph=",",
-        mode="propose",
-        labels=["network", "local", "publish"],
-    )
-    assert security == {
-        "glyph": ",",
-        "mode": "propose",
-        "labels": ["network", "publish"],
-        "inputs": [],
-    }
 
 
 def test_top_level_help_lists_commands() -> None:
@@ -155,13 +112,11 @@ def test_events_default_lists_recent_events() -> None:
         "time",
         "id",
         "action",
-        "trust",
         "session",
         "summary",
     ]
     assert str(second["id"])[:8] in text.output
     assert ",, executed" in text.output
-    assert "execute-write" in text.output
     assert "git status --short -> 0" in text.output
     assert first["id"] not in text.output
     assert listed.exit_code == 0, listed.output
@@ -173,62 +128,8 @@ def test_events_default_lists_recent_events() -> None:
     assert summaries[-1]["short_id"] == str(second["id"])[:8]
     assert summaries[-1]["action"] == ",, executed"
     assert summaries[-1]["summary"] == "git status --short -> 0"
-    assert summaries[-1]["lineage"] == f"sigil events lineage {second['id']}"
     assert raw.exit_code == 0, raw.output
     assert "short_id" not in json.loads(raw.output)[0]
-
-
-def test_events_lineage_json_follows_transitive_inputs() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp
-        os.environ["SIGIL_SESSION_ID"] = "test"
-        try:
-            root = append_event(
-                {
-                    "type": "command_generated",
-                    "glyph": ",",
-                    "mode": "propose",
-                }
-            )
-            child = append_event(
-                {
-                    "type": "command_continued",
-                    "glyph": ",,",
-                    "inputs": [root["id"]],
-                    "mode": "propose",
-                }
-            )
-            selected = append_event(
-                {
-                    "type": "command_selected",
-                    "glyph": ",,",
-                    "inputs": [child["id"]],
-                    "mode": "propose",
-                }
-            )
-            result = CliRunner().invoke(
-                cli, ["events", "lineage", selected["id"], "--json"]
-            )
-            assert result.exit_code == 0, result.output
-            lineage = json.loads(result.output)
-            assert lineage["event_id"] == selected["id"]
-            assert [node["event"]["type"] for node in lineage["nodes"]] == [
-                "command_selected",
-                "command_continued",
-                "command_generated",
-            ]
-            assert [node["depth"] for node in lineage["nodes"]] == [0, 1, 2]
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
-            else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
-            else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
 def test_confirmation_uses_exported_tty_before_dev_tty() -> None:
@@ -410,48 +311,7 @@ def test_renderer_falls_back_to_cat_without_glow() -> None:
         assert renderer_command() == ["cat"]
 
 
-def test_writers_normalize_metadata() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp
-        os.environ["SIGIL_SESSION_ID"] = "test"
-        try:
-            event = append_event({"type": "legacy_shape"})
-            assert event["mode"] == "propose"
-            assert event["labels"] == []
-            turn = append_jsonl(
-                "last-question.jsonl",
-                {
-                    "role": "assistant",
-                    "content": "answer",
-                    "glyph": "?",
-                    "mode": "read-only",
-                    "labels": ["network", "local"],
-                    "inputs": [event["id"]],
-                },
-            )
-            assert turn["inputs"] == [event["id"]]
-            assert turn["mode"] == "read-only"
-            assert turn["labels"] == ["network"]
-            written = write_jsonl("last-tools.jsonl", [{"type": "tool_start"}])
-            assert written[0]["mode"] == "propose"
-            assert read_jsonl("last-tools.jsonl")[0]["labels"] == []
-            events_path = Path(tmp) / "events.jsonl"
-            stored = json.loads(events_path.read_text(encoding="utf-8").splitlines()[0])
-            assert stored["mode"] == "propose"
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
-            else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
-            else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
-
-
-def test_question_routes_record_alpha_trust_labels() -> None:
+def test_question_routes_record_glyph_and_web_tools() -> None:
 
     class FakeProc:
         def __init__(self, stdout: StringIO | None = None) -> None:
@@ -479,8 +339,6 @@ def test_question_routes_record_alpha_trust_labels() -> None:
                     assert ask("what is sigil?", json_output=True) == 0
             fresh_turn = read_jsonl("last-question.jsonl")[0]
             assert fresh_turn["glyph"] == "?"
-            assert fresh_turn["mode"] == "read-only"
-            assert fresh_turn["labels"] == []
             with patch("sigil.question.ensure_model_for_pi", return_value=True):
                 with patch("sigil.pi_stream.subprocess.Popen", side_effect=fake_popen):
                     assert (
@@ -495,8 +353,6 @@ def test_question_routes_record_alpha_trust_labels() -> None:
                     )
             web_turn = read_jsonl("last-question.jsonl")[-1]
             assert web_turn["glyph"] == "??"
-            assert web_turn["mode"] == "read-only"
-            assert web_turn["labels"] == ["network"]
             pi_calls = [cmd for cmd in popen_calls if cmd[0] == "pi"]
             assert len(pi_calls) == 2
             assert pi_calls[0][pi_calls[0].index("--tools") + 1] == "read,grep,find,ls"
@@ -651,23 +507,10 @@ def test_staged_command_records_and_consumes_blocked_command() -> None:
                 + "\n",
                 encoding="utf-8",
             )
-            records = record_staged_commands(
-                source_event={
-                    "id": "question-event",
-                    "mode": "read-only",
-                    "labels": ["network"],
-                },
-                source_security={
-                    "glyph": "?",
-                    "mode": "read-only",
-                    "labels": ["network"],
-                },
-            )
+            records = record_staged_commands(glyph="?")
 
             assert records[0]["command"] == "git diff --stat"
-            assert records[0]["mode"] == "propose"
-            assert records[0]["labels"] == ["network"]
-            assert records[0]["inputs"] == ["question-event"]
+            assert records[0]["glyph"] == "?"
             assert not (
                 Path(tmp) / "sessions/test" / PENDING_STAGED_COMMANDS_FILE
             ).exists()
@@ -695,7 +538,6 @@ def test_failure_context_prompt_uses_recorded_failure_without_inventing_output()
             )
             prompt = failure_context_prompt(failure)
             assert failure["glyph"] == "failure"
-            assert failure["mode"] == "propose"
             assert "Failed command: bad command" in prompt
             assert "Working directory: /tmp" in prompt
             assert "Recent stderr: <not captured>" in prompt
@@ -847,7 +689,7 @@ def read_recent_turns(tmp: str) -> list[dict[str, object]]:
     return rows
 
 
-def test_record_turn_appends_command_with_read_only_mode() -> None:
+def test_record_turn_appends_command_with_glyph() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
@@ -861,8 +703,6 @@ def test_record_turn_appends_command_with_read_only_mode() -> None:
         assert row["command"] == "ls -la"
         assert row["status"] == 0
         assert row["turn_cwd"] == "/repo"
-        assert row["mode"] == "read-only"
-        assert row["labels"] == []
         assert row["glyph"] == "turn"
 
 
@@ -1273,7 +1113,7 @@ def test_recent_turns_skips_malformed_lines() -> None:
         assert [turn["command"] for turn in turns] == ["ls"]
 
 
-def test_pi_stream_records_answer_inputs_and_alpha_labels() -> None:
+def test_pi_stream_records_answer_turn() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {
             key: os.environ.get(key) for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID"]
@@ -1298,21 +1138,13 @@ def test_pi_stream_records_answer_inputs_and_alpha_labels() -> None:
                     stdin=stdin,
                     stdout=StringIO(),
                     stderr=StringIO(),
-                    security={
-                        "glyph": "?",
-                        "mode": "read-only",
-                        "labels": ["network"],
-                        "inputs": ["question-event"],
-                    },
                     capture_answer=True,
                 )
                 == 0
             )
             answer = read_jsonl("last-question.jsonl")[0]
-            assert answer["inputs"] == ["question-event"]
+            assert answer["content"] == "answer"
             assert answer["event_id"]
-            assert answer["mode"] == "read-only"
-            assert answer["labels"] == ["network"]
         finally:
             for key, value in saved.items():
                 if value is None:
@@ -1362,12 +1194,6 @@ def test_pi_stream_json_output_is_machine_readable() -> None:
                     stdin=stdin,
                     stdout=stdout,
                     stderr=stderr,
-                    security={
-                        "glyph": "?",
-                        "mode": "read-only",
-                        "labels": ["network"],
-                        "inputs": ["question-event"],
-                    },
                     question="what is sigil?",
                     prompt="what is sigil?",
                     capture_answer=True,
@@ -1381,7 +1207,6 @@ def test_pi_stream_json_output_is_machine_readable() -> None:
             assert payload["type"] == "answer"
             assert payload["question"] == "what is sigil?"
             assert payload["answer"] == "answer"
-            assert payload["security"]["labels"] == ["network"]
             assert payload["malformed_events"] == 0
             assert payload["tools"][0]["tool"] == "web_search"
             assert stderr.getvalue() == ""

@@ -14,7 +14,6 @@ from .staged_command import (
     staged_command_extension_path,
 )
 from .pi_stream import TRACE_LABEL_WIDTH, run_pi_stream
-from .security import create_trust_metadata
 from .model import ensure_model_for_pi
 from .state import append_event, append_jsonl, read_jsonl
 from .tty import clear_lines_on_tty, prompt_on_tty
@@ -43,7 +42,6 @@ def run_act_stepper(
     stdin_text: str = "",
     confirm_step: bool,
     glyph: str,
-    dry_run: bool = False,
 ) -> int:
     """Create or resume a one-step Pi edit action."""
     prepared = prepare_act(
@@ -51,7 +49,6 @@ def run_act_stepper(
         stdin_text=stdin_text,
         confirm_step=confirm_step,
         glyph=glyph,
-        dry_run=dry_run,
     )
     if isinstance(prepared, int):
         return prepared
@@ -71,8 +68,8 @@ def run_act_stepper(
     if not proceed:
         return 0
 
-    decision_event = record_step_decision(act, step, decision_label)
-    status = run_pi_agent_step(act, step, decision_event, glyph=glyph)
+    record_step_decision(act, step, decision_label)
+    status = run_pi_agent_step(act, glyph=glyph)
     step["status"] = "done" if status == 0 else "failed"
     step["exit_code"] = status
     record_step_executed(act, step, status)
@@ -88,7 +85,6 @@ def prepare_act(
     stdin_text: str,
     confirm_step: bool,
     glyph: str,
-    dry_run: bool,
 ) -> dict[str, Any] | int:
     """Create, replace, or resume an act; return the act or an exit code."""
     act = active_act()
@@ -99,10 +95,6 @@ def prepare_act(
                 file=sys.stderr,
             )
             return 2
-        if dry_run:
-            approval = "confirmed" if confirm_step else "auto-approved"
-            print(f"sigil act: would create one {approval} Pi edit step")
-            return 0
         return create_act(
             objective=objective,
             stdin_text=stdin_text,
@@ -110,11 +102,6 @@ def prepare_act(
             glyph=glyph,
         )
     if objective and next_pending_step(act) is None:
-        if dry_run:
-            print(
-                "sigil act: would replace completed Pi edit step with a new objective"
-            )
-            return 0
         return create_act(
             objective=objective,
             stdin_text=stdin_text,
@@ -122,18 +109,12 @@ def prepare_act(
             glyph=glyph,
         )
     if objective and objective != str(act.get("objective", "")):
-        if dry_run:
-            print("sigil act: would replace active Pi edit step with a new objective")
-            return 0
         return create_act(
             objective=objective,
             stdin_text=stdin_text,
             confirm_step=confirm_step,
             glyph=glyph,
         )
-    if dry_run:
-        print("sigil act: would resume the pending Pi edit step")
-        return 0
     act["glyph"] = glyph
     act["approval"] = "confirm" if confirm_step else "auto"
     return act
@@ -192,7 +173,7 @@ def create_act(
     explanation = (
         "One confirmed read/edit/write pass, then control returns to the shell."
         if confirm_step
-        else "One auto-approved read/edit/write pass within policy, then control returns to the shell."
+        else "One auto-approved read/edit/write pass, then control returns to the shell."
     )
     act = {
         "act_id": str(uuid.uuid4()),
@@ -299,8 +280,6 @@ def tools_from_step(step: dict[str, Any]) -> str:
 
 def run_pi_agent_step(
     act: dict[str, Any],
-    step: dict[str, Any],
-    decision_event: dict[str, Any],
     *,
     glyph: str | None = None,
 ) -> int:
@@ -308,14 +287,7 @@ def run_pi_agent_step(
     if not ensure_model_for_pi():
         return 1
 
-    decision_event_id = str(decision_event.get("id") or "")
     route_glyph = glyph or str(act.get("glyph") or ",,,")
-    security = create_trust_metadata(
-        glyph=route_glyph,
-        mode="execute-write",
-        inputs=[decision_event_id] if decision_event_id else [],
-        input_records=[decision_event] if decision_event else [],
-    )
     staged_command_path = prepare_staged_commands()
     extension_path = staged_command_extension_path()
     tools = (
@@ -359,16 +331,12 @@ def run_pi_agent_step(
     pi_env = {**os.environ, "SIGIL_STAGED_COMMAND_PATH": str(staged_command_path)}
     exit_code = run_pi_stream(
         pi_cmd,
-        security=security,
         pi_env=pi_env,
         question=str(act.get("objective") or ""),
         prompt=pi_agent_prompt(act),
         tool_output_stdout=True,
     )
-    staged = record_staged_commands(
-        source_event=decision_event,
-        source_security=security,
-    )
+    staged = record_staged_commands(glyph=route_glyph)
     if staged:
         latest = str(staged[-1].get("command") or "")
         print(
@@ -407,21 +375,12 @@ def pi_agent_prompt(act: dict[str, Any]) -> str:
 
 def record_act_update(event_type: str, act: dict[str, Any]) -> dict[str, Any]:
     """Record an act snapshot in session and global state."""
-    inputs = []
-    last_event_id = act.get("last_event_id")
-    if event_type != "act_created" and isinstance(last_event_id, str):
-        inputs.append(last_event_id)
-    security = create_trust_metadata(
-        glyph=str(act.get("glyph") or ",,,"),
-        mode="propose",
-        inputs=inputs,
-    )
     payload = {
         "type": event_type,
         "act_id": act.get("act_id"),
         "objective": act.get("objective"),
         "act": act,
-        **security,
+        "glyph": str(act.get("glyph") or ",,,"),
     }
     global_event = append_event(payload)
     if event_type == "act_created":
@@ -439,15 +398,6 @@ def record_step_decision(
 ) -> dict[str, Any]:
     """Record a user decision for one Pi edit step."""
     step["decision"] = decision
-    inputs = []
-    act_event_id = act.get("event_id")
-    if isinstance(act_event_id, str):
-        inputs.append(act_event_id)
-    security = create_trust_metadata(
-        glyph=str(act.get("glyph") or ",,,"),
-        mode="propose",
-        inputs=inputs,
-    )
     payload = {
         "type": "act_step_decision",
         "act_id": act.get("act_id"),
@@ -455,7 +405,7 @@ def record_step_decision(
         "decision": decision,
         "command": step.get("command"),
         "act": act,
-        **security,
+        "glyph": str(act.get("glyph") or ",,,"),
     }
     global_event = append_event(payload)
     step["decision_event_id"] = global_event["id"]
@@ -472,15 +422,6 @@ def record_step_executed(
     status: int,
 ) -> dict[str, Any]:
     """Record completion of one Pi edit step."""
-    inputs = []
-    decision_event_id = step.get("decision_event_id")
-    if isinstance(decision_event_id, str):
-        inputs.append(decision_event_id)
-    security = create_trust_metadata(
-        glyph=str(act.get("glyph") or ",,,"),
-        mode="execute-write",
-        inputs=inputs,
-    )
     payload = {
         "type": "act_step_executed",
         "act_id": act.get("act_id"),
@@ -490,7 +431,7 @@ def record_step_executed(
         "stdout_snippet": "",
         "stderr_snippet": "",
         "act": act,
-        **security,
+        "glyph": str(act.get("glyph") or ",,,"),
     }
     global_event = append_event(payload)
     step["execution_event_id"] = global_event["id"]

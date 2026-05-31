@@ -8,7 +8,6 @@ import uuid
 from typing import Any, Literal
 
 from .acts import PI_AGENT_TOOLS, print_next_step, run_pi_agent_step
-from .security import create_trust_metadata
 from .state import append_event, append_jsonl, read_jsonl
 from .tty import prompt_on_tty
 
@@ -23,7 +22,6 @@ def run_goal_loop(
     stdin_text: str = "",
     confirm_steps: bool,
     glyph: str,
-    dry_run: bool = False,
 ) -> int:
     """Create or resume a bounded goal loop."""
     prepared = prepare_goal(
@@ -31,7 +29,6 @@ def run_goal_loop(
         stdin_text=stdin_text,
         confirm_steps=confirm_steps,
         glyph=glyph,
-        dry_run=dry_run,
     )
     if isinstance(prepared, int):
         return prepared
@@ -65,7 +62,6 @@ def prepare_goal(
     stdin_text: str,
     confirm_steps: bool,
     glyph: str,
-    dry_run: bool,
 ) -> dict[str, Any] | int:
     """Create, replace, or resume a goal; return the goal or an exit code."""
     goal = active_goal()
@@ -73,10 +69,6 @@ def prepare_goal(
         if not objective:
             print("sigil goal: no active goal; provide an objective", file=sys.stderr)
             return 2
-        if dry_run:
-            approval = "confirmed" if confirm_steps else "auto-approved"
-            print(f"sigil goal: would create {approval} goal loop")
-            return 0
         return create_goal_state(
             objective=objective,
             stdin_text=stdin_text,
@@ -84,18 +76,12 @@ def prepare_goal(
             glyph=glyph,
         )
     if objective and objective != str(goal.get("objective", "")):
-        if dry_run:
-            print("sigil goal: would replace active goal with a new objective")
-            return 0
         return create_goal_state(
             objective=objective,
             stdin_text=stdin_text,
             confirm_steps=confirm_steps,
             glyph=glyph,
         )
-    if dry_run:
-        print("sigil goal: would resume active goal")
-        return 0
     goal["glyph"] = glyph
     goal["approval"] = "confirm" if confirm_steps else "auto"
     return goal
@@ -125,11 +111,9 @@ def execute_goal_step(
     glyph: str,
 ) -> int | None:
     """Run one approved step; return an exit code to stop, or None to continue."""
-    decision_event = record_goal_step_decision(goal, step, decision_label)
+    record_goal_step_decision(goal, step, decision_label)
     status = run_pi_agent_step(
         goal_as_act(goal),
-        step,
-        decision_event,
         glyph=glyph,
     )
     step["exit_code"] = status
@@ -302,16 +286,12 @@ def parse_step_status(content: str) -> tuple[StepStatus, str] | None:
 
 def record_goal_update(event_type: str, goal: dict[str, Any]) -> dict[str, Any]:
     """Record a goal snapshot in session and global state."""
-    security = create_trust_metadata(
-        glyph=str(goal.get("glyph") or "@"),
-        mode="execute-write",
-    )
     payload = {
         "type": event_type,
         "goal_id": goal.get("goal_id"),
         "objective": goal.get("objective"),
         "goal": goal,
-        **security,
+        "glyph": str(goal.get("glyph") or "@"),
     }
     global_event = append_event(payload)
     if event_type == "goal_created":
@@ -328,18 +308,13 @@ def record_goal_step_decision(
 ) -> dict[str, Any]:
     """Record a goal step approval decision."""
     step["decision"] = decision
-    security = create_trust_metadata(
-        glyph=str(goal.get("glyph") or "@"),
-        mode="propose",
-        inputs=[str(goal.get("last_event_id"))] if goal.get("last_event_id") else [],
-    )
     payload = {
         "type": "goal_step_decision",
         "goal_id": goal.get("goal_id"),
         "step_id": step.get("id"),
         "decision": decision,
         "goal": goal,
-        **security,
+        "glyph": str(goal.get("glyph") or "@"),
     }
     global_event = append_event(payload)
     step["decision_event_id"] = global_event["id"]
@@ -354,20 +329,13 @@ def record_goal_step_executed(
     status: int,
 ) -> dict[str, Any]:
     """Record completion of one goal step."""
-    security = create_trust_metadata(
-        glyph=str(goal.get("glyph") or "@"),
-        mode="execute-write",
-        inputs=[str(step.get("decision_event_id"))]
-        if step.get("decision_event_id")
-        else [],
-    )
     payload = {
         "type": "goal_step_executed",
         "goal_id": goal.get("goal_id"),
         "step_id": step.get("id"),
         "status": status,
         "goal": goal,
-        **security,
+        "glyph": str(goal.get("glyph") or "@"),
     }
     global_event = append_event(payload)
     step["execution_event_id"] = global_event["id"]

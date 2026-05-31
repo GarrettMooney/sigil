@@ -88,7 +88,7 @@ def test_status_ignores_stale_failure_after_successful_turn() -> None:
 
 def test_status_reports_failed_sigil_execution() -> None:
     with isolated_sigil_state(session_id="status-session"):
-        event = append_event(
+        append_event(
             {
                 "type": "operator_command_executed",
                 "operator": {"glyph": ",,"},
@@ -99,7 +99,7 @@ def test_status_reports_failed_sigil_execution() -> None:
         status = current_status()
 
     assert status.reason == "last Sigil action failed"
-    assert status.actions == (f"sigil events lineage {event['id']}",)
+    assert status.actions == ("sigil events",)
 
 
 def test_status_cli_human_and_json() -> None:

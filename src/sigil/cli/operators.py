@@ -17,7 +17,6 @@ from ._shared import (
 from ..acts import run_act_stepper
 from ..goals import run_goal_loop
 from ..operators import OperatorInvocation, create_invocation, run_invocation
-from ..policy import ExecutionPolicy
 from ..question import PI_QUESTION_TOOLS, PI_QUESTION_TOOLS_WITH_WEB, ask
 
 
@@ -51,10 +50,7 @@ def run_stream_operator(
             raise click.exceptions.Exit(2)
 
     try:
-        result = run_invocation(
-            invocation,
-            policy=ExecutionPolicy(),
-        )
+        result = run_invocation(invocation)
     except RuntimeError as exc:
         print(f"sigil {invocation.name}: {exc}", file=sys.stderr)
         return 1
@@ -63,7 +59,6 @@ def run_stream_operator(
             {
                 "prompt": prompt,
                 "command": result.command,
-                "labels": list(result.decision.classification.labels),
                 "explanation": result.explanation,
             }
         )
@@ -81,12 +76,10 @@ def run_stream_operator(
 @click.argument("glyph")
 @click.argument("prompt_parts", nargs=-1)
 @click.option("--json", "json_output", is_flag=True)
-@click.option("--dry-run", is_flag=True, help="Classify output and skip execution.")
 def cmd_op(
     glyph: str,
     prompt_parts: tuple[str, ...],
     json_output: bool,
-    dry_run: bool,
 ) -> int:
     """Parse a semantic operator invocation."""
     stdin_is_tty = sys.stdin.isatty()
@@ -108,7 +101,7 @@ def cmd_op(
         return 0
 
     if should_run_act_operator(invocation):
-        return dispatch_act_operator(invocation, prompt, stdin_text, dry_run=dry_run)
+        return dispatch_act_operator(invocation, prompt, stdin_text)
 
     if should_confirm_piped_input(invocation):
         if not confirm_piped_input(stdin_text):
@@ -116,33 +109,20 @@ def cmd_op(
             raise click.exceptions.Exit(2)
 
     if invocation.base == "?":
-        return dispatch_question_operator(invocation, dry_run=dry_run)
+        return dispatch_question_operator(invocation)
 
     if invocation.base == "@":
-        return dispatch_goal_operator(invocation, prompt, stdin_text, dry_run=dry_run)
+        return dispatch_goal_operator(invocation, prompt, stdin_text)
 
-    return dispatch_default_operator(invocation, dry_run=dry_run)
+    return dispatch_default_operator(invocation)
 
 
 def dispatch_act_operator(
     invocation: OperatorInvocation,
     prompt: str,
     stdin_text: str,
-    *,
-    dry_run: bool,
 ) -> int:
     """Run a `,,`/`,,,` invocation through the Pi act stepper."""
-    if dry_run:
-        status = run_act_stepper(
-            objective=prompt,
-            stdin_text=stdin_text,
-            confirm_step=invocation.depth == 2,
-            glyph=invocation.glyph,
-            dry_run=True,
-        )
-        if status:
-            raise click.exceptions.Exit(status)
-        return 0
     if should_confirm_piped_input(invocation):
         if not confirm_piped_input(stdin_text):
             print("sigil op: piped input declined", file=sys.stderr)
@@ -162,15 +142,8 @@ def dispatch_act_operator(
     return 0
 
 
-def dispatch_question_operator(invocation: OperatorInvocation, *, dry_run: bool) -> int:
+def dispatch_question_operator(invocation: OperatorInvocation) -> int:
     """Run a `?`/`??` invocation through the question route."""
-    if dry_run:
-        tools = "read+search+web" if invocation.depth == 2 else "read+search"
-        print(
-            f"sigil op: {invocation.glyph} dry-run: would call {tools} question route",
-            file=sys.stderr,
-        )
-        return 0
     return run_question_operator(invocation)
 
 
@@ -178,8 +151,6 @@ def dispatch_goal_operator(
     invocation: OperatorInvocation,
     prompt: str,
     stdin_text: str,
-    *,
-    dry_run: bool,
 ) -> int:
     """Run an `@`/`@@` invocation through the goal loop."""
     status = run_goal_loop(
@@ -187,27 +158,19 @@ def dispatch_goal_operator(
         stdin_text=stdin_text,
         confirm_steps=invocation.depth == 1,
         glyph=invocation.glyph,
-        dry_run=dry_run,
     )
     if status:
         raise click.exceptions.Exit(status)
     return 0
 
 
-def dispatch_default_operator(invocation: OperatorInvocation, *, dry_run: bool) -> int:
+def dispatch_default_operator(invocation: OperatorInvocation) -> int:
     """Run a `,`/`?` stdout-only invocation through the operator runtime."""
     try:
-        result = run_invocation(
-            invocation,
-            policy=ExecutionPolicy(
-                dry_run=dry_run,
-            ),
-        )
+        result = run_invocation(invocation)
     except RuntimeError as exc:
         print(f"sigil op: {exc}", file=sys.stderr)
         raise click.exceptions.Exit(1) from exc
-    if dry_run:
-        print(f"sigil op: {result.decision.message}", file=sys.stderr)
     if result.stderr:
         print(result.stderr, file=sys.stderr, end="")
     if result.output:

@@ -18,7 +18,6 @@ from sigil.operators import (
     proposal_user_prompt,
 )
 from sigil.goals import parse_step_status, run_goal_loop
-from sigil.policy import ExecutionPolicy, classify_output, evaluate_policy
 from sigil.session import record_turn
 from sigil.state import append_jsonl, read_jsonl
 
@@ -139,7 +138,6 @@ def test_op_cli_routes_at_to_confirmed_goal_loop() -> None:
                 "stdin_text": "",
                 "confirm_steps": True,
                 "glyph": "@",
-                "dry_run": False,
             },
         )
     ]
@@ -331,57 +329,6 @@ def test_double_comma_runs_confirmed_agent_step() -> None:
     ]
 
 
-def test_policy_classifies_destructive_shell_output() -> None:
-    classification = classify_output("sudo rm -rf build\ncurl https://example.com\n")
-
-    assert "execute" in classification.classes
-    assert "delete" in classification.classes
-    assert "network" in classification.classes
-    assert "privileged" in classification.classes
-    assert classification.labels == ("network", "delete", "privileged")
-
-
-@pytest.mark.parametrize(
-    ("command", "labels"),
-    [
-        ("uv run pytest tests/test_status.py", ()),
-        ("touch fixed.txt", ()),
-        ("curl https://example.com", ("network",)),
-        ("git push origin main", ("network", "publish")),
-        ("rm -rf build", ("delete",)),
-        ("sudo chmod 600 secret.txt", ("privileged",)),
-    ],
-)
-def test_policy_maps_commands_to_trust_labels(
-    command: str,
-    labels: tuple[str, ...],
-) -> None:
-    assert classify_output(command).labels == labels
-
-
-def test_policy_classifies_stdout_only_preview() -> None:
-    decision = evaluate_policy(
-        glyph=",",
-        depth=1,
-        output="rm -rf build",
-        policy=ExecutionPolicy(),
-    )
-
-    assert decision.message == "stdout-only preview"
-    assert "delete" in decision.classification.classes
-
-
-def test_dry_run_policy_previews_without_execution() -> None:
-    decision = evaluate_policy(
-        glyph=",",
-        depth=1,
-        output="git status --short",
-        policy=ExecutionPolicy(dry_run=True),
-    )
-
-    assert "dry-run" in decision.message
-
-
 def test_op_cli_routes_double_comma_to_agent_stepper() -> None:
     calls = []
 
@@ -423,31 +370,6 @@ def test_op_cli_returns_agent_stepper_status() -> None:
     assert result.exit_code == 7
     assert result.stdout == ""
     assert result.stderr == ""
-
-
-def test_op_cli_dry_run_double_comma_does_not_execute() -> None:
-    calls = []
-
-    def fake_run_act_stepper(*args: object, **kwargs: object) -> int:
-        calls.append((args, kwargs))
-        return 0
-
-    with patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper):
-        result = CliRunner().invoke(cli, ["op", "--dry-run", ",,", "status"])
-
-    assert result.exit_code == 0
-    assert result.stdout == ""
-    assert calls[0][1]["dry_run"] is True
-    assert calls[0][1]["confirm_step"] is True
-    assert calls[0][1]["glyph"] == ",,"
-
-
-def test_op_cli_dry_run_question_does_not_call_web_route() -> None:
-    with patch("sigil.cli.operators.ask", side_effect=AssertionError("no web")):
-        result = CliRunner().invoke(cli, ["op", "--dry-run", "?", "status"])
-
-    assert result.exit_code == 0
-    assert "read+search question route" in result.output
 
 
 def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
@@ -651,11 +573,6 @@ def test_act_pi_step_uses_staged_command_extension() -> None:
 
                 result = run_pi_agent_step(
                     {"objective": "repair"},
-                    {"id": "1"},
-                    {
-                        "id": "decision",
-                        "mode": "propose",
-                    },
                 )
 
     assert result == 0
@@ -689,11 +606,6 @@ def test_act_pi_step_streams_in_full_mode() -> None:
 
                 result = run_pi_agent_step(
                     {"objective": "repair"},
-                    {"id": "1"},
-                    {
-                        "id": "decision",
-                        "mode": "propose",
-                    },
                 )
 
     assert result == 0
@@ -1123,7 +1035,6 @@ def test_command_verb_json_emits_proposal_envelope() -> None:
     assert json.loads(result.output) == {
         "prompt": "ship it",
         "command": "git push origin main",
-        "labels": ["network", "publish"],
         "explanation": "Publishes the branch.",
     }
 

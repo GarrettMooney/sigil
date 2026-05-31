@@ -32,7 +32,7 @@ GIFs are written to `docs/demos/gifs/`.
 `PATH`. The `sigil` command in that bin invokes `python3 -m sigil.cli` from the
 checkout. The fake model server, `pi`, and `uv` commands are small Python
 programs in this directory. They make model output stable while Sigil itself
-still owns routing, shell glyphs, state, act state, and event lineage.
+still owns routing, shell glyphs, state, act state, and the event log.
 
 This keeps the recordings focused on the workflow:
 
@@ -40,4 +40,4 @@ This keeps the recordings focused on the workflow:
 - normal Git and lazygit in the middle of the flow
 - read-only question routes
 - explicit proposal, execution, and act boundaries
-- inspectable event history and alpha trust labels
+- inspectable event history

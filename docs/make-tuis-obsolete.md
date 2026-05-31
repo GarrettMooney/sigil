@@ -83,32 +83,7 @@ Add secret hygiene before capturing command output:
 Definition of done: after `uv run pytest` fails, `, fix` produces a focused next
 command or concise explanation without extra user context.
 
-## Ladder 3: Command Trust Labels
-
-Goal: every proposal says what kind of action it is.
-
-Examples:
-
-```text
-uv run pytest tests/test_status.py
-no risk labels
-```
-
-```text
-git push origin main
-network · publish
-```
-
-Implementation direction:
-
-- Extend policy classification into user-facing labels.
-- Keep labels terse.
-- Make `,,` confirmation conditional on risk.
-- Record labels into events.
-
-Definition of done: users can judge a proposed command in one glance.
-
-## Ladder 4: `sigil why`
+## Ladder 3: `sigil why`
 
 Goal: inline audit context for the last meaningful Sigil output.
 
@@ -121,10 +96,7 @@ It should explain:
 - what command, answer, or action it refers to
 - what context was used
 - model route used
-- trust mode and risk labels
-- inherited inputs
 - why this action was selected
-- exact lineage command for deeper audit
 
 This is not a verbose trace dump. It should be a readable explanation over
 existing events.
@@ -132,7 +104,7 @@ existing events.
 Definition of done: after `,`, `,,`, `?`, or `,,,`, `sigil why` explains the
 last meaningful Sigil output.
 
-## Ladder 5: First-Run Clarity
+## Ladder 4: First-Run Clarity
 
 Goal: setup failures are actionable.
 
@@ -148,10 +120,9 @@ reading docs first.
 1. Prompt marker over `sigil status`.
 2. Capture bounded stdout and stderr for recent turns.
 3. Improve `, fix` and failure-context prompting.
-4. Add risk labels to proposals and events.
-5. Add `sigil why`.
-6. Polish first-run and doctor output with exact fix commands.
-7. Record a killer demo flow and use it as regression material.
+4. Add `sigil why`.
+5. Polish first-run and doctor output with exact fix commands.
+6. Record a killer demo flow and use it as regression material.
 
 ## TODO
 
@@ -184,24 +155,11 @@ reading docs first.
       hook point.
 - [x] Add a deterministic demo for `, fix` and `? why failed`.
 
-### Command Trust Labels
-
-- [x] Define a small risk label vocabulary: network, publish, delete,
-      privileged.
-- [x] Map existing policy classifications to labels.
-- [x] Print labels under `,` proposals.
-- [x] Record labels in operator events.
-- [x] Make `,,` require explicit confirmation before generated commands become
-      actions.
-- [x] Add tests for read-only, write, network, delete, and privileged commands.
-
 ### `sigil why`
 
 - [ ] Add a `sigil why [EVENT_ID] [--json]` command.
 - [ ] Default to the latest meaningful Sigil event in the current session.
-- [ ] Explain the selected output, context inputs, trust label, route, and model
-      source.
-- [ ] Include the exact `sigil events lineage ...` command for deeper audit.
+- [ ] Explain the selected output, context inputs, route, and model source.
 - [ ] Keep human output short and non-trace-like.
 - [ ] Add tests for `,`, `,,`, `?`, and `,,,` audit context.
 

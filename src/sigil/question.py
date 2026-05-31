@@ -10,7 +10,6 @@ from __future__ import annotations
 import sys
 
 from .ansi import MUTED, RESET
-from .security import create_trust_metadata
 from .model import ensure_model_for_pi
 from .pi_stream import run_pi_stream
 from .session import recent_turns_context
@@ -109,18 +108,13 @@ def ask(
         return 1
 
     prompt = question if append_transcript else prepend_recent_turns(question)
-    security = create_trust_metadata(
-        glyph=glyph,
-        mode="read-only",
-        labels=["network"] if use_web else [],
-    )
     question_event = append_event(
         {
             "type": "question",
             "question": question,
             "prompt": prompt,
             "follow_up": append_transcript,
-            **security,
+            "glyph": glyph,
         }
     )
     question_turn = {
@@ -129,7 +123,7 @@ def ask(
         "prompt": prompt,
         "follow_up": append_transcript,
         "event_id": question_event["id"],
-        **security,
+        "glyph": glyph,
     }
     if append_transcript:
         append_jsonl("last-question.jsonl", question_turn)
@@ -158,15 +152,8 @@ def ask(
             prompt,
         ]
     )
-    stream_security = {
-        **security,
-        "inputs": [question_event["id"]]
-        if question_event["id"]
-        else security["inputs"],
-    }
     exit_code = run_pi_stream(
         pi_cmd,
-        security=stream_security,
         question=question,
         prompt=prompt,
         follow_up=append_transcript,

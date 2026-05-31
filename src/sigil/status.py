@@ -83,12 +83,11 @@ def current_status() -> Status:
     failed = latest_failed_sigil_execution()
     if failed is not None:
         event_id = str(failed.get("id") or "")
-        lineage = f"sigil events lineage {event_id}" if event_id else "sigil events"
         return attention(
             "last Sigil action failed",
             session=current_session,
             cwd=cwd,
-            actions=(lineage,),
+            actions=("sigil events",),
             details={
                 "event_id": event_id,
                 "type": failed.get("type"),

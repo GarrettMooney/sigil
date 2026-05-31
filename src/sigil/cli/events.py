@@ -9,10 +9,10 @@ import click
 
 from ._base import cli
 from ._shared import pretty_print_json
-from ..session import event_lineage, read_event_log
+from ..session import read_event_log
 from ..staged_command import consume_latest_staged_command, latest_staged_command
 
-EVENT_LIST_COLUMNS = ("time", "id", "action", "trust", "session", "summary")
+EVENT_LIST_COLUMNS = ("time", "id", "action", "session", "summary")
 
 
 @cli.command("staged", hidden=True)
@@ -96,7 +96,6 @@ def print_events_table(summaries: list[dict[str, object]]) -> None:
             "time": str(summary["time_label"]),
             "id": str(summary["short_id"]),
             "action": str(summary["action"]),
-            "trust": str(summary["trust"]),
             "session": str(summary["short_session"]),
             "summary": str(summary["summary"]),
         }
@@ -129,14 +128,6 @@ def event_summary(event: dict[str, object]) -> dict[str, object]:
     session = str(event.get("session") or "")
     event_type = str(event.get("type") or "event")
     glyph = event_glyph(event)
-    mode = str(event.get("mode") or "propose")
-    labels = event.get("labels")
-    label_text = (
-        ",".join(str(item) for item in labels)
-        if isinstance(labels, list) and labels
-        else ""
-    )
-    trust = f"{mode}:{label_text}" if label_text else mode
     return {
         "id": event_id or "-",
         "short_id": short_token(event_id),
@@ -145,12 +136,10 @@ def event_summary(event: dict[str, object]) -> dict[str, object]:
         "type": event_type,
         "glyph": glyph,
         "action": event_action(event, glyph, event_type),
-        "trust": trust,
         "session": session or "-",
         "short_session": short_token(session),
         "cwd": str(event.get("cwd") or "-"),
         "summary": event_detail(event, event_type),
-        "lineage": f"sigil events lineage {event_id}" if event_id else "",
     }
 
 
@@ -285,35 +274,3 @@ def clean_summary_text(value: object, *, limit: int = 96) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
-
-
-@cmd_events.command("lineage")
-@click.argument("event_id", required=False)
-@click.option("--json", "json_output", is_flag=True)
-def cmd_events_lineage(event_id: str | None, json_output: bool) -> int:
-    """Show the short audit trail for an event."""
-    lineage = event_lineage(event_id)
-    if json_output:
-        pretty_print_json(lineage)
-        return 0 if lineage["nodes"] else 1
-
-    if not lineage["nodes"]:
-        print(
-            "no events recorded" if event_id is None else f"event not found: {event_id}"
-        )
-        return 1
-    for node in lineage["nodes"]:
-        event = node["event"]
-        indent = "  " * int(node["depth"])
-        event_type = event.get("type", "event")
-        glyph = event.get("glyph", "?")
-        mode = event.get("mode", "propose")
-        labels = ",".join(event.get("labels", [])) or "none"
-        inputs = ",".join(event.get("inputs", [])) or "-"
-        print(
-            f"{indent}{node['id']} {event_type} "
-            f"{glyph} mode={mode} labels={labels} inputs={inputs}"
-        )
-    for missing in lineage["missing_inputs"]:
-        print(f"missing input: {missing}")
-    return 0

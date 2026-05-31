@@ -13,7 +13,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .security import create_trust_metadata, normalize_trust_record
 from .state import session_dir, session_id, state_dir
 
 SESSION_FILES = (
@@ -117,51 +116,8 @@ def read_event_log() -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         if isinstance(event, dict):
-            events.append(normalize_trust_record(event))
+            events.append(event)
     return events
-
-
-def latest_event_id(events: list[dict[str, Any]]) -> str | None:
-    """Return the latest event id for the current session, falling back globally."""
-    current_session = session_id()
-    for event in reversed(events):
-        event_id = event.get("id")
-        if event.get("session") == current_session and isinstance(event_id, str):
-            return event_id
-    for event in reversed(events):
-        event_id = event.get("id")
-        if isinstance(event_id, str):
-            return event_id
-    return None
-
-
-def event_lineage(event_id: str | None = None) -> dict[str, Any]:
-    """Return an event and the transitive inputs it inherited from."""
-    events = read_event_log()
-    selected = event_id or latest_event_id(events)
-    by_id = {str(event["id"]): event for event in events if event.get("id")}
-    if not selected:
-        return {"event_id": None, "nodes": [], "missing_inputs": []}
-
-    nodes = []
-    missing = []
-    seen = set()
-    queue = [(selected, 0)]
-    while queue:
-        current, depth = queue.pop(0)
-        if current in seen:
-            continue
-        seen.add(current)
-        event = by_id.get(current)
-        if event is None:
-            missing.append(current)
-            continue
-        nodes.append({"id": current, "depth": depth, "event": event})
-        for input_id in event.get("inputs", []):
-            if isinstance(input_id, str) and input_id:
-                queue.append((input_id, depth + 1))
-
-    return {"event_id": selected, "nodes": nodes, "missing_inputs": missing}
 
 
 def current_session_snapshot() -> dict[str, Any]:
@@ -205,7 +161,7 @@ def recent_turns(limit: int = RECENT_TURNS_LIMIT) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         if isinstance(event, dict):
-            rows.append(normalize_trust_record(event))
+            rows.append(event)
     if limit < len(rows):
         return rows[-limit:]
     return rows
@@ -270,10 +226,6 @@ def record_turn(
 
     stdout_text = truncate_snippet(stdout_snippet)
     stderr_text = truncate_snippet(stderr_snippet)
-    security = create_trust_metadata(
-        glyph="turn",
-        mode="read-only",
-    )
     entry = {
         "id": _new_event_id(),
         "time": time.time(),
@@ -281,7 +233,7 @@ def record_turn(
         "command": command,
         "status": status,
         "turn_cwd": turn_cwd,
-        **security,
+        "glyph": "turn",
     }
     if stdout_text:
         entry["stdout_snippet"] = stdout_text

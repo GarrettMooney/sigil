@@ -11,7 +11,6 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from .security import create_trust_metadata, normalize_labels
 from .state import append_event, read_jsonl, session_dir, write_jsonl
 
 PENDING_STAGED_COMMANDS_FILE = "pending-staged-commands.jsonl"
@@ -40,33 +39,21 @@ def prepare_staged_commands() -> Path:
 
 def record_staged_commands(
     *,
-    source_event: dict[str, Any],
-    source_security: dict[str, Any],
+    glyph: str,
 ) -> list[dict[str, Any]]:
-    """Promote raw staged commands into trusted Sigil session state."""
+    """Promote raw staged commands into Sigil session state."""
     records = []
-    source_event_id = str(source_event.get("id") or "")
-    glyph = str(source_security.get("glyph") or "?")
-    labels = normalize_labels(source_security.get("labels"))
-
     for raw in read_jsonl(PENDING_STAGED_COMMANDS_FILE):
         command = str(raw.get("command") or "").strip()
         if not command:
             continue
-        security = create_trust_metadata(
-            glyph=glyph,
-            mode="propose",
-            labels=labels,
-            inputs=[source_event_id] if source_event_id else [],
-            input_records=[source_event],
-        )
         event = append_event(
             {
                 "type": "staged_command",
                 "command": command,
                 "tool_call_id": raw.get("toolCallId"),
                 "source": "pi_tool_call",
-                **security,
+                "glyph": glyph,
             }
         )
         records.append(
@@ -75,7 +62,7 @@ def record_staged_commands(
                 "command": command,
                 "tool_call_id": raw.get("toolCallId"),
                 "source": "pi_tool_call",
-                **security,
+                "glyph": glyph,
             }
         )
 

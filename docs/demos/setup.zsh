@@ -93,12 +93,6 @@ def test_parse_value():
 EOF
 }
 
-sigil_demo_last_lineage() {
-  local event_id
-  event_id="$(sigil events --json | python3 -c 'import json, sys; print(json.load(sys.stdin)[-1]["id"])')"
-  sigil events lineage "$event_id" --json
-}
-
 cd "$_sigil_demo_repo" || return 1
 git init -q
 git config user.email demo@dottxt.ai
