@@ -53,6 +53,7 @@ def run_pi_stream(
         pi_cmd,
         stdout=subprocess.PIPE,
         env=pi_env,
+        pass_fds=inherited_terminal_fds(pi_env),
         text=True,
         encoding="utf-8",
         errors="replace",
@@ -73,6 +74,24 @@ def run_pi_stream(
     finally:
         pi_proc.stdout.close()
     return pi_proc.wait()
+
+
+def inherited_terminal_fds(env: dict[str, str] | None = None) -> tuple[int, ...]:
+    """Return terminal fds that Pi extensions need Python to keep open."""
+    raw = (env or os.environ).get("SIGIL_TTY_FD")
+    if not raw:
+        return ()
+    try:
+        fd = int(raw)
+    except ValueError:
+        return ()
+    if fd < 0:
+        return ()
+    try:
+        os.fstat(fd)
+    except OSError:
+        return ()
+    return (fd,)
 
 
 def render_answer(answer: str, stdout: TextIO) -> None:
