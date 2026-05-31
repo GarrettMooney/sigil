@@ -18,6 +18,7 @@ agent step, or pursue a bounded goal without leaving your prompt.
 ,, run the relevant tests
 ? what changed in this repo?
 ?? what changed upstream in the latest release?
++ cargo test
 @ fix the failing parser test
 ```
 
@@ -37,6 +38,7 @@ suggesting, executing, and explaining. Sigil keeps those routes separate.
 | "Do one routine turn." | `,,,` | Runs one Pi invocation without per-step confirmation. |
 | "Answer from local context." | `?` | Read-only answer with the read and search tools. No shell is exposed. |
 | "Answer with web." | `??` | Read-only answer with the read, search, and web search tools. |
+| "Run and capture this command." | `+` | Runs one explicit command, streams output, and records stdout/stderr snippets. |
 | "Work toward a goal." | `@` | Runs a bounded goal loop with checkpoints. |
 | "Continue routinely." | `@@` | Runs a bounded goal loop with steps auto-approved. |
 
@@ -105,7 +107,7 @@ SIGIL_MODEL_URL=http://127.0.0.1:8080/v1/chat/completions
 SIGIL_MODEL_NAME=local-model
 SIGIL_MODEL_PATH=/path/to/model.gguf
 SIGIL_STATE_DIR=$HOME/.sigil
-SIGIL_ENABLE_TURN_CAPTURE=0
+SIGIL_RUN_CAPTURE_BYTES=6000
 SIGIL_GLOW_STYLE=notty
 SIGIL_GLOW_WIDTH=88
 ```
@@ -126,6 +128,9 @@ Once the shell binding is installed, use the glyphs directly:
 
 # Ask with web search authorized.
 ?? what changed in the latest release?
+
+# Run one command through Sigil's explicit capture path.
++ cargo test
 
 # Pursue a goal with checkpoints.
 @ fix the failing parser test
@@ -172,6 +177,7 @@ Installed zsh and Bash bindings expose these shortcuts:
 | `,,,` | auto step | Run one agent turn, auto-approving routine effects. |
 | `?` | answer | Answer from local read-only context. |
 | `??` | web answer | Answer from local context plus web search. |
+| `+` | run | Run one explicit command and capture stdout/stderr snippets. |
 | `@` | goal | Run a bounded goal loop with checkpoints. |
 | `@@` | auto goal | Run a bounded goal loop with routine auto-approval. |
 
@@ -183,6 +189,7 @@ Examples:
 ,,, fix the failing parser test
 ? why does git say this branch diverged?
 ?? what does the remote branch contain?
++ cargo test
 @ fix the failing parser test
 @@ update docs and run checks
 ```
@@ -203,6 +210,11 @@ Agent steps always stream Pi's raw tool calls and prose through `glow` or
 Question routes do not expose Bash. If an answer recommends a command, it is
 plain answer text, not a tool call or terminal handoff.
 
+`+` runs the command you provide through `sigil run`, streams stdout/stderr live,
+preserves the exit status, and records bounded stdout/stderr snippets for later
+failure context. It does not use a shell parser; use `sh -c` for pipelines,
+redirection, and shell-only syntax.
+
 To install the CLI without punctuation shortcuts:
 
 ```sh
@@ -222,6 +234,7 @@ Each route has a fixed effect on your system:
 | `@@` | execute-write | Bounded goal loop with routine auto-approval. |
 | `?` | read-only | Local answer route with no Bash tool. |
 | `??` | read-only | Read, search, plus web answer route with no Bash tool. |
+| `+` | execute | Explicit local command execution with stdout/stderr capture. |
 
 Every route records what it did to the event log. Inspect it with:
 
@@ -235,6 +248,7 @@ The glyphs are thin shell functions over a regular CLI:
 
 ```text
 sigil command [--json] [PROMPT]
+sigil run COMMAND [ARGS...]
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|list|clear] [--json]
 sigil status [--json]
@@ -248,6 +262,7 @@ Copy-pasteable examples:
 sigil command "find files over 10 MB in this repo excluding .git"
 sigil command "show the largest directories"
 git diff --name-only | sigil command "run the relevant tests"
+sigil run cargo test
 sigil status
 sigil events
 ```
@@ -287,6 +302,16 @@ Sigil is not:
 - A public Python library. The Python package does not expose a supported API.
 - A background autonomous agent.
 - A replacement for reviewing commands and model output.
+
+## Roadmap
+
+`sigil sh` is the likely next shell-shaped surface once explicit command
+execution proves itself. The shell hooks are intentionally lightweight: they can
+record command metadata, but they should not invisibly interpose on every
+program's terminal output. A future shell frontend would own the prompt and
+transcript boundary, delegate command semantics to the user's real shell, and
+decide deliberately when a command runs as structured captured output versus an
+interactive terminal session.
 
 ## Development
 

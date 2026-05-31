@@ -1,4 +1,4 @@
-"""Failure context captured by shell hooks for later comma proposals."""
+"""Failure context recorded by shell hooks and explicit Sigil command runs."""
 
 from __future__ import annotations
 

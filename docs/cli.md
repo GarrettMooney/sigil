@@ -11,6 +11,7 @@ written to stdout.
 
 ```text
 sigil command [--json] [PROMPT]
+sigil run COMMAND [ARGS...]
 sigil ask [--follow-up] [--json] [QUESTION]
 sigil act [show|resume|abort] [--json] [--verbose]
 sigil events [--limit N] [--json] [--raw]
@@ -26,6 +27,7 @@ Examples:
 ```sh
 sigil command "find large files"
 sigil command "show modified Python files"
+sigil run cargo test
 sigil ask "what changed in this repo?"
 sigil ask --follow-up "what should I test?"
 git diff | sigil ask "review risky changes"
@@ -141,6 +143,23 @@ printf 'hello\n' | sigil ask --json "summarize"
 }
 ```
 
+## `sigil run`
+
+Runs one explicit command, streams stdout/stderr live, preserves the command's
+exit status, and records bounded stdout/stderr snippets in the current Sigil
+session.
+
+```sh
+sigil run cargo test
+sigil run python -m pytest tests/test_parser.py
+sigil run sh -c 'git diff --check && cargo test'
+```
+
+`sigil run` executes the argv you pass it directly; it does not parse pipelines,
+redirection, globbing, aliases, or shell functions. Use `sh -c` when you want
+shell syntax. The snippet byte limit defaults to `6000` and can be adjusted with
+`SIGIL_RUN_CAPTURE_BYTES`.
+
 ## Shell Glyphs
 
 Glyphs are installed shell functions over the CLI runtime. Install them with
@@ -152,6 +171,7 @@ Glyphs are installed shell functions over the CLI runtime. Install them with
 ,,,  run one agent turn, auto-approving routine effects
 ?    answer from local read-only context
 ??   answer from local context plus web search
++    run one explicit command and capture stdout/stderr snippets
 @    run a bounded goal loop with checkpoints
 @@   run a bounded goal loop with routine auto-approval
 ```
@@ -164,6 +184,7 @@ Examples:
 ,,, fix the failing parser test
 ? why does git say this branch diverged?
 ?? what changed upstream in the latest release?
++ cargo test
 @ fix the failing parser test
 @@ update docs and run checks
 ```
@@ -176,6 +197,7 @@ may include zero or more tool calls. `,,,` runs the same one-turn route without
 routine confirmation. `@` and `@@` repeat bounded turns toward a
 durable goal, stopping on completion, blockage, budget exhaustion, or
 interruption. Bash tool execution is blocked and staged as a command for review.
+`+` is a shortcut for `sigil run`.
 
 To install bindings without glyphs:
 
@@ -332,10 +354,8 @@ clean
 When attention is needed, it exits with status `1` and prints the highest
 priority condition plus exact next commands. Priority is active act, pending
 staged command, latest failed shell turn, then latest failed Sigil execution.
-
-The bindings also capture bounded stdout and stderr snippets for ordinary
-interactive shell turns so recovery prompts can use the actual failure output.
-Disable capture with `SIGIL_ENABLE_TURN_CAPTURE=0`.
+Ordinary shell turns record command metadata only; `sigil run` is the explicit
+path for stdout/stderr snippets.
 
 JSON output:
 
@@ -438,8 +458,7 @@ SIGIL_STATE_DIR=/custom/state/root
 SIGIL_SESSION_ID=my-shell-session
 SIGIL_SESSION_DIR=/custom/session/root
 SIGIL_ENABLE_GLYPHS=0
-SIGIL_ENABLE_TURN_CAPTURE=0
-SIGIL_TURN_CAPTURE_BYTES=6000
+SIGIL_RUN_CAPTURE_BYTES=6000
 SIGIL_BIN=/path/to/sigil
 SIGIL_GLOW_STYLE=notty
 SIGIL_GLOW_WIDTH=88

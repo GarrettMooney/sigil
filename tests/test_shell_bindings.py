@@ -1,28 +1,13 @@
 from __future__ import annotations
 import pytest
 import os
-import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def make_real_sigil(tmp: Path) -> Path:
-    """Write a wrapper that runs the real Sigil CLI for delegated subcommands."""
-    real = tmp / "sigil-real"
-    real.write_text(
-        "#!/usr/bin/env bash\n"
-        f"exec {shlex.quote(sys.executable)} -c "
-        "'import sys; from sigil.cli import main; sys.exit(main())' \"$@\"\n",
-        encoding="utf-8",
-    )
-    real.chmod(0o755)
-    return real
 
 
 def make_stub(tmp: Path) -> Path:
@@ -44,9 +29,6 @@ def make_stub(tmp: Path) -> Path:
               printf '%s\n' "$SIGIL_STUB_STAGED"
               exit 0
             fi
-            if [ "${1:-}" = "capture-relay" ]; then
-              exec "${SIGIL_REAL_BIN:?}" "$@"
-            fi
             printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
             case "$*" in
               "command draft executive summary") printf '%s\n' "stream command" ;;
@@ -54,6 +36,7 @@ def make_stub(tmp: Path) -> Path:
               "op , hello") printf '%s\n%s\n' "echo recommended" "because it is safe" ;;
               "op , draft executive summary") printf '%s\n%s\n' "echo stream recommended" "because stdin matters" ;;
               op*) printf '%s\n' "op:$*" ;;
+              run*) printf '%s\n' "ran:${*:2}" ;;
               record-failure*) printf '%s\n' "recorded" ;;
               record-turn*) printf '%s\n' "turn-recorded" ;;
               *) printf '%s\n' "unexpected:$*" >&2; exit 64 ;;
@@ -71,7 +54,6 @@ def run_shell(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["SIGIL_BIN"] = str(stub)
-    env["SIGIL_REAL_BIN"] = str(make_real_sigil(tmp))
     env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
     env["SIGIL_SESSION_ID"] = "shell-test"
     env["ZLE_LOG"] = str(tmp / "zle.log")
@@ -92,7 +74,6 @@ def run_shell_args(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["SIGIL_BIN"] = str(stub)
-    env["SIGIL_REAL_BIN"] = str(make_real_sigil(tmp))
     env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
     env["SIGIL_SESSION_ID"] = "shell-test"
     env["ZLE_LOG"] = str(tmp / "zle.log")
@@ -126,7 +107,7 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_agent_step hello\n                    sigil_question hello\n                    sigil_web_question hello\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
@@ -208,7 +189,7 @@ def test_bash_act_staged_command_adds_to_history() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_STUB_STAGED='uv run pytest'\n                    sigil_command_loop repair\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_STUB_STAGED='uv run pytest'\n                    sigil_agent_step_auto repair\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
@@ -258,7 +239,7 @@ def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    printf 'diff\\n' | sigil_web_question review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_agent_step run it\n                    "
             ),
             tmp,
             stub,
@@ -345,14 +326,14 @@ def test_bash_does_not_record_sigil_commands() -> None:
         assert read_log(tmp) == []
 
 
-def test_bash_does_not_capture_or_record_sigil_wrapper_commands() -> None:
+def test_bash_does_not_record_sigil_wrapper_commands() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"sigil_command hello\"; }\n                    sigil_command hello\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"sigil_command hello\"; }\n                    sigil_command hello\n                    __sigil_precmd\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -360,6 +341,23 @@ def test_bash_does_not_capture_or_record_sigil_wrapper_commands() -> None:
         assert_success(result)
         assert result.stdout == "echo recommended\nbecause it is safe\n"
         assert read_log(tmp) == ["op , hello"]
+
+
+def test_bash_run_glyph_dispatches_to_sigil_run() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source src/sigil/shell/bash/sigil.bash\n                    + echo captured\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "ran:echo captured\n"
+        assert read_log(tmp) == ["run echo captured"]
 
 
 def test_bash_passes_failure_snippet_env_to_record_turn() -> None:
@@ -380,42 +378,6 @@ def test_bash_passes_failure_snippet_env_to_record_turn() -> None:
         ]
 
 
-def test_bash_captures_turn_output_for_record_turn() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "bash",
-            textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    export SIGIL_TURN_CAPTURE_BYTES=200\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"bad command\"; }\n                    __sigil_capture_start \"bad command\"\n                    printf 'stdout line\\n'\n                    printf 'stderr line\\n' >&2\n                    __sigil_capture_stop\n                    false\n                    __sigil_precmd\n                    wait\n                    "
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert result.stdout == "stdout line\n"
-        assert result.stderr == "stderr line\n"
-        assert read_log(tmp) == [
-            f"record-turn --status 1 --cwd {ROOT} --stdout-snippet stdout line --stderr-snippet stderr line bad command"
-        ]
-
-
-def test_bash_skips_capture_for_tty_oriented_commands() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "bash",
-            textwrap.dedent(
-                '                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_capture_start "codex"\n                    printf \'active=%s\\n\' "$__sigil_capture_active"\n                    __sigil_capture_stop\n                    '
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert result.stdout == "active=0\n"
-
-
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_wrappers_call_current_cli_contract() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -424,7 +386,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_command hello\n                    sigil_agent_step hello\n                    sigil_question hello\n                    sigil_web_question hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -469,7 +431,7 @@ def test_zsh_act_staged_command_adds_to_history() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_STUB_STAGED="uv run pytest"\n                    sigil_command_loop repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_STUB_STAGED="uv run pytest"\n                    sigil_agent_step_auto repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -509,7 +471,7 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    "
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    printf 'diff\\n' | sigil_web_question review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_agent_step run it\n                    "
             ),
             tmp,
             stub,
@@ -565,14 +527,14 @@ def test_zsh_does_not_record_sigil_commands() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_does_not_capture_or_record_sigil_wrapper_commands() -> None:
+def test_zsh_does_not_record_sigil_wrapper_commands() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_preexec "noglob sigil_command hello"\n                    sigil_command hello\n                    __sigil_precmd\n                    wait\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_preexec "noglob sigil_command hello"\n                    sigil_command hello\n                    __sigil_precmd\n                    wait\n                    '
             ),
             tmp,
             stub,
@@ -580,6 +542,24 @@ def test_zsh_does_not_capture_or_record_sigil_wrapper_commands() -> None:
         assert_success(result)
         assert result.stdout == "echo recommended\nbecause it is safe\n"
         assert read_log(tmp) == ["op , hello"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_run_glyph_dispatches_to_sigil_run() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    + echo captured\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "ran:echo captured\n"
+        assert read_log(tmp) == ["run echo captured"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -605,80 +585,6 @@ def test_zsh_records_every_non_sigil_turn_via_record_turn() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_captures_turn_output_for_record_turn() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "zsh",
-            textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    export SIGIL_TURN_CAPTURE_BYTES=200\n                    __sigil_preexec \"bad command\"\n                    printf 'stdout line\\n'\n                    printf 'stderr line\\n' >&2\n                    false\n                    __sigil_precmd\n                    wait\n                    "
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert result.stdout == "stdout line\n"
-        assert result.stderr == "stderr line\n"
-        assert read_log(tmp) == [
-            f"record-turn --status 1 --cwd {ROOT} --stdout-snippet stdout line --stderr-snippet stderr line bad command"
-        ]
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_skips_capture_for_tty_oriented_commands() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "zsh",
-            textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_ENABLE_TURN_CAPTURE=1\n                    __sigil_preexec "codex"\n                    print -- "active=$__sigil_capture_active"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert result.stdout == "active=0\n"
-        assert read_log(tmp) == [f"record-turn --status 1 --cwd {ROOT} codex"]
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_capture_preserves_user_file_descriptors() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        fd7_path = tmp / "fd7.out"
-        fd8_path = tmp / "fd8.out"
-        result = run_shell_args(
-            ["zsh", "-f", "-ic"],
-            textwrap.dedent(
-                f"""\
-                source src/sigil/shell/zsh/sigil.zsh
-                export SIGIL_ENABLE_TURN_CAPTURE=1
-                exec 7>{shlex.quote(str(fd7_path))}
-                exec 8>{shlex.quote(str(fd8_path))}
-                __sigil_capture_start "bad command"
-                print -- "stdout line"
-                print -- "stderr line" >&2
-                __sigil_capture_stop
-                print -- "fd7 after" >&7
-                print -- "fd8 after" >&8
-                exec 7>&-
-                exec 8>&-
-                """
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert result.stdout == "stdout line\n"
-        assert result.stderr == "stderr line\n"
-        assert fd7_path.read_text(encoding="utf-8") == "fd7 after\n"
-        assert fd8_path.read_text(encoding="utf-8") == "fd8 after\n"
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -686,7 +592,7 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/sigil/shell/zsh/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
+                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/sigil/shell/zsh/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "+ echo"; print -- "run=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
             ),
             tmp,
             stub,
@@ -696,6 +602,7 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         assert "comma=1" in result.stdout
         assert "question=1" in result.stdout
         assert "escaped_question=1" in result.stdout
+        assert "run=1" in result.stdout
         assert "at=1" in result.stdout
         assert "echo=0" in result.stdout
         assert (tmp / "zle.log").read_text(encoding="utf-8") == "user:echo hello\n"

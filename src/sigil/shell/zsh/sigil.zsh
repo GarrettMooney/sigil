@@ -1,5 +1,13 @@
 # Sigil zsh bindings. Core behavior lives in the `sigil` executable.
+#
+# This file should stay boring: it wires zsh lifecycle hooks and punctuation
+# functions to the CLI, but it should not implement model logic or command
+# execution policy itself. In particular, ordinary shell commands are not
+# wrapped or redirected here.
 
+# Resolve the CLI once at source time. SIGIL_BIN lets tests, local checkouts, and
+# packaged installs point the binding at a specific executable without changing
+# the user's PATH.
 if [[ -n "${SIGIL_BIN:-}" ]]; then
   typeset -g __sigil_bin="$SIGIL_BIN"
 elif command -v sigil >/dev/null 2>&1; then
@@ -7,24 +15,24 @@ elif command -v sigil >/dev/null 2>&1; then
 else
   typeset -g __sigil_bin="sigil"
 fi
-typeset -g __sigil_muted=$'\e[38;2;110;106;134m'
-typeset -g __sigil_reset=$'\e[0m'
-typeset -g __sigil_capture_active=0
-typeset -g __sigil_capture_stdout_file=""
-typeset -g __sigil_capture_stderr_file=""
-typeset -g __sigil_capture_stdout_fd=""
-typeset -g __sigil_capture_stderr_fd=""
-typeset -g __sigil_capture_stdout_pid=""
-typeset -g __sigil_capture_stderr_pid=""
 
+
+# A session id scopes continuity files such as recent-turns.jsonl. The id is
+# generated once per shell process and inherited by subprocesses so CLI calls from
+# the same terminal window write to the same session directory.
 if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   if command -v uuidgen >/dev/null 2>&1; then
     export SIGIL_SESSION_ID="$(uuidgen)"
   else
-    export SIGIL_SESSION_ID="${TTY:t:-tty}-$$"
+    __sigil_session_tty="${TTY:-tty}"
+    export SIGIL_SESSION_ID="${__sigil_session_tty:t}-$$"
+    unset __sigil_session_tty
   fi
 fi
 
+# Keep a stable terminal path/fd around for CLI prompts that need to ask the user
+# even when stdin/stdout are part of a pipeline. These are not used to capture
+# command output.
 if [[ -z "${SIGIL_TTY:-}" ]]; then
   if [[ -n "${TTY:-}" ]]; then
     export SIGIL_TTY="$TTY"
@@ -40,240 +48,39 @@ if [[ -z "${SIGIL_TTY_FD:-}" && ( -t 0 || -t 1 || -t 2 ) ]]; then
   fi
 fi
 
-__sigil_stdin_is_pipe() {
-  [[ -p /dev/stdin ]]
-}
-
 __sigil_history_insert() {
+  # Add a command to zsh history without executing it. Used when Sigil proposes
+  # or stages a command so normal history search can find it later.
   [[ -n "${1:-}" ]] || return 0
   print -s -- "$1" 2>/dev/null || true
 }
 
 __sigil_prompt_insert() {
+  # zsh can preload editable text into the prompt buffer with print -z. This is
+  # what makes comma recommendations inspectable instead of immediately run.
   [[ -n "${1:-}" ]] || return 0
   print -z -- "$1" 2>/dev/null || true
   __sigil_history_insert "$1"
 }
 
 __sigil_insert_staged_command() {
+  # Pi-backed agent routes may refuse to run Bash directly and instead stage a
+  # command for user review. Pop the latest staged command and put it at the
+  # prompt, preserving the "human presses enter" boundary.
   local command
   command="$("$__sigil_bin" staged pop 2>/dev/null)" || return 0
   __sigil_prompt_insert "$command"
 }
 
 __sigil_glyphs_enabled() {
+  # `sigil install --no-glyphs` writes SIGIL_ENABLE_GLYPHS=0 before sourcing this
+  # file. The named shell functions remain available either way.
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
 }
 
-__sigil_recordable_command() {
-  local command="${1:-}"
-  [[ -n "$command" ]] || return 1
-  case "$command" in
-    [[:space:]]*|,*|\?*|@*|sigil\ *|sigil_*|noglob\ sigil_*|command\ sigil_*|__sigil_*)
-      return 1
-      ;;
-  esac
-  return 0
-}
-
-__sigil_command_name() {
-  emulate -L zsh
-  local command="${1:-}"
-  local -a words
-  words=("${(z)command}") || return 1
-  local word
-  for word in "${words[@]}"; do
-    case "$word" in
-      command|exec|noglob|time|env|sudo)
-        continue
-        ;;
-      [A-Za-z_][A-Za-z0-9_]*=*)
-        continue
-        ;;
-    esac
-    print -r -- "${word:t}"
-    return 0
-  done
-  return 1
-}
-
-__sigil_capture_skipped_command() {
-  local name
-  name="$(__sigil_command_name "${1:-}")" || return 1
-  local skip_commands="${SIGIL_TURN_CAPTURE_SKIP_COMMANDS:-codex claude cursor-agent vim nvim vi nano emacs less more man top htop btop ssh python python3 ipython node irb psql mysql sqlite3 redis-cli}"
-  case " $skip_commands " in
-    *" $name "*)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-__sigil_turn_capture_enabled() {
-  [[ "${SIGIL_ENABLE_TURN_CAPTURE:-1}" != "0" && "${SIGIL_ENABLE_TURN_CAPTURE:-1}" != "false" ]] || return 1
-  if [[ "${SIGIL_ENABLE_TURN_CAPTURE:-}" != "1" && "${SIGIL_ENABLE_TURN_CAPTURE:-}" != "true" ]]; then
-    [[ -o interactive ]] || return 1
-  fi
-  command -v mktemp >/dev/null 2>&1 || return 1
-  command -v tail >/dev/null 2>&1 || return 1
-  return 0
-}
-
-# Capture redirects fd 1/2 onto pty slaves (real terminals) instead of pipes, so
-# the running command still passes isatty(). Sigil opens each pty and forks a
-# detached reader that mirrors the pty master to the terminal and a sink file.
-__sigil_capture_start() {
-  local command="${1:-}"
-  __sigil_turn_capture_enabled || return 0
-  __sigil_recordable_command "$command" || return 0
-  __sigil_capture_skipped_command "$command" && return 0
-  [[ $__sigil_capture_active -eq 0 ]] || return 0
-
-  local tmp_root="${TMPDIR:-/tmp}"
-  __sigil_capture_stdout_file="$(mktemp "${tmp_root%/}/sigil-stdout.XXXXXX")" || return 0
-  __sigil_capture_stderr_file="$(mktemp "${tmp_root%/}/sigil-stderr.XXXXXX")" || {
-    rm -f "$__sigil_capture_stdout_file"
-    __sigil_capture_stdout_file=""
-    return 0
-  }
-
-  exec {__sigil_capture_stdout_fd}>&1 || {
-    __sigil_capture_cleanup
-    return 0
-  }
-  exec {__sigil_capture_stderr_fd}>&2 || {
-    __sigil_capture_close_saved_fds
-    __sigil_capture_cleanup
-    return 0
-  }
-
-  local out_relay err_relay out_slave err_slave
-  out_relay="$("$__sigil_bin" capture-relay --sink "$__sigil_capture_stdout_file" --mirror-fd 4 4>&$__sigil_capture_stdout_fd 2>/dev/null)" || {
-    __sigil_capture_close_saved_fds
-    __sigil_capture_cleanup
-    return 0
-  }
-  err_relay="$("$__sigil_bin" capture-relay --sink "$__sigil_capture_stderr_file" --mirror-fd 4 4>&$__sigil_capture_stderr_fd 2>/dev/null)" || {
-    __sigil_capture_stop_reader "${out_relay##* }"
-    __sigil_capture_close_saved_fds
-    __sigil_capture_cleanup
-    return 0
-  }
-  out_slave="${out_relay%% *}"
-  __sigil_capture_stdout_pid="${out_relay##* }"
-  err_slave="${err_relay%% *}"
-  __sigil_capture_stderr_pid="${err_relay##* }"
-  if [[ -z "$out_slave" || -z "$err_slave" ]]; then
-    __sigil_capture_stop_readers
-    __sigil_capture_close_saved_fds
-    __sigil_capture_cleanup
-    return 0
-  fi
-
-  if ! exec > "$out_slave"; then
-    __sigil_capture_stop_readers
-    __sigil_capture_close_saved_fds
-    __sigil_capture_cleanup
-    return 0
-  fi
-  if ! exec 2> "$err_slave"; then
-    __sigil_capture_restore_stdout
-    __sigil_capture_stop_readers
-    __sigil_capture_close_saved_fds
-    __sigil_capture_cleanup
-    return 0
-  fi
-  __sigil_capture_active=1
-}
-
-__sigil_capture_stop() {
-  [[ $__sigil_capture_active -eq 1 ]] || return 0
-  # Drain and stop the readers while the slaves are still open, then restore: on
-  # some platforms closing a pty slave discards output the reader has not read.
-  __sigil_capture_stop_readers
-  __sigil_capture_restore_stdout
-  __sigil_capture_restore_stderr
-  __sigil_capture_close_saved_fds
-  __sigil_capture_active=0
-}
-
-# Tell a relay reader to flush and exit, then wait for it so the sink is complete.
-__sigil_capture_stop_reader() {
-  local pid="${1:-}"
-  [[ -n "$pid" ]] || return 0
-  kill -TERM "$pid" 2>/dev/null || return 0
-  local attempts="${SIGIL_CAPTURE_WAIT_ATTEMPTS:-200}"
-  local i
-  for i in {1..$attempts}; do
-    kill -0 "$pid" 2>/dev/null || return 0
-    sleep 0.01
-  done
-}
-
-__sigil_capture_stop_readers() {
-  __sigil_capture_stop_reader "$__sigil_capture_stdout_pid"
-  __sigil_capture_stop_reader "$__sigil_capture_stderr_pid"
-  __sigil_capture_stdout_pid=""
-  __sigil_capture_stderr_pid=""
-}
-
-__sigil_capture_restore_stdout() {
-  [[ -n "$__sigil_capture_stdout_fd" ]] || return 0
-  exec 1>&$__sigil_capture_stdout_fd
-}
-
-__sigil_capture_restore_stderr() {
-  [[ -n "$__sigil_capture_stderr_fd" ]] || return 0
-  exec 2>&$__sigil_capture_stderr_fd
-}
-
-__sigil_capture_close_saved_fds() {
-  if [[ -n "$__sigil_capture_stdout_fd" ]]; then
-    exec {__sigil_capture_stdout_fd}>&-
-    __sigil_capture_stdout_fd=""
-  fi
-  if [[ -n "$__sigil_capture_stderr_fd" ]]; then
-    exec {__sigil_capture_stderr_fd}>&-
-    __sigil_capture_stderr_fd=""
-  fi
-}
-
-__sigil_capture_file_snippet() {
-  local snippet_path="${1:-}"
-  local bytes="${SIGIL_TURN_CAPTURE_BYTES:-6000}"
-  [[ -n "$snippet_path" && -s "$snippet_path" ]] || return 0
-  tail -c "$bytes" "$snippet_path" 2>/dev/null || true
-}
-
-__sigil_capture_cleanup() {
-  [[ -n "$__sigil_capture_stdout_file" ]] && rm -f "$__sigil_capture_stdout_file"
-  [[ -n "$__sigil_capture_stderr_file" ]] && rm -f "$__sigil_capture_stderr_file"
-  __sigil_capture_close_saved_fds
-  __sigil_capture_stdout_file=""
-  __sigil_capture_stderr_file=""
-}
-
-__sigil_record_turn() {
-  local exit_status="$1"
-  local command="$2"
-  local stdout_snippet stderr_snippet
-  stdout_snippet="${SIGIL_FAILURE_STDOUT:-}"
-  stderr_snippet="${SIGIL_FAILURE_STDERR:-}"
-  [[ -n "$stdout_snippet" ]] || stdout_snippet="$(__sigil_capture_file_snippet "$__sigil_capture_stdout_file")"
-  [[ -n "$stderr_snippet" ]] || stderr_snippet="$(__sigil_capture_file_snippet "$__sigil_capture_stderr_file")"
-  local record_args=(record-turn --status "$exit_status" --cwd "$PWD")
-  [[ -n "$stdout_snippet" ]] && record_args+=(--stdout-snippet "$stdout_snippet")
-  [[ -n "$stderr_snippet" ]] && record_args+=(--stderr-snippet "$stderr_snippet")
-  "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
-}
-
-__sigil_precmd_done() {
-  local exit_status="$1"
-  __sigil_capture_cleanup
-  return "$exit_status"
-}
-
 sigil_command() {
+  # `, prompt`: ask the model for one command, print the response, and insert the
+  # first line back into the editable prompt buffer.
   local response command
   response="$("$__sigil_bin" op "," "$@")" || return $?
   print -r -- "$response"
@@ -282,6 +89,8 @@ sigil_command() {
 }
 
 __sigil_op_with_staged_command() {
+  # Shared helper for agent/goal routes. They run through the generic operator
+  # CLI, then look for any command Pi staged for explicit user approval.
   local op="$1"
   shift
   "$__sigil_bin" op "$op" "$@"
@@ -298,14 +107,6 @@ sigil_agent_step_auto() {
   __sigil_op_with_staged_command ",,," "$@"
 }
 
-sigil_execute_command() {
-  sigil_agent_step "$@"
-}
-
-sigil_command_loop() {
-  sigil_agent_step_auto "$@"
-}
-
 sigil_question() {
   "$__sigil_bin" op "?" "$@"
 }
@@ -314,8 +115,10 @@ sigil_web_question() {
   "$__sigil_bin" op "??" "$@"
 }
 
-sigil_follow_up() {
-  sigil_web_question "$@"
+sigil_run() {
+  # Explicit capture path: run exactly the argv the user provided, stream output
+  # live, and let the CLI persist bounded stdout/stderr snippets.
+  "$__sigil_bin" run "$@"
 }
 
 sigil_goal() {
@@ -327,19 +130,25 @@ sigil_goal_auto() {
 }
 
 if __sigil_glyphs_enabled; then
+  # Function definitions make the punctuation usable in non-alias contexts.
   function ',' { sigil_command "$@" }
   function ',,' { sigil_agent_step "$@" }
   function ',,,' { sigil_agent_step_auto "$@" }
   function '?' { sigil_question "$@" }
   function '??' { sigil_web_question "$@" }
+  function '+' { sigil_run "$@" }
   function '@' { sigil_goal "$@" }
   function '@@' { sigil_goal_auto "$@" }
 
+  # Aliases keep zsh from treating user prompts as glob patterns before our
+  # functions receive them. `alias --` is required for `+` because zsh otherwise
+  # parses the alias name as an option.
   alias ','='noglob sigil_command'
   alias ',,'='noglob sigil_agent_step'
   alias ',,,'='noglob sigil_agent_step_auto'
   alias '?'='noglob sigil_question'
   alias '??'='noglob sigil_web_question'
+  alias -- '+'='noglob sigil_run'
   alias '@'='noglob sigil_goal'
   alias '@@'='noglob sigil_goal_auto'
 fi
@@ -348,38 +157,84 @@ autoload -Uz add-zsh-hook
 typeset -g __sigil_preexec_command=""
 
 __sigil_preexec() {
+  # preexec runs before the command executes.
+  # zsh gives us the command line before execution. 
   __sigil_preexec_command="$1"
-  __sigil_capture_start "$1"
-}
-
-__sigil_precmd() {
-  local exit_status=$?
-  local command="$__sigil_preexec_command"
-  __sigil_capture_stop
-  __sigil_preexec_command=""
-  if [[ -z "$command" ]]; then
-    __sigil_precmd_done "$exit_status"
-    return $?
-  fi
-  if ! __sigil_recordable_command "$command"; then
-    __sigil_precmd_done "$exit_status"
-    return $?
-  fi
-  __sigil_record_turn "$exit_status" "$command"
-  unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
-  __sigil_precmd_done "$exit_status"
-  return $?
 }
 
 add-zsh-hook preexec __sigil_preexec
+
+__sigil_recordable_command() {
+  local command="${1:-}"
+  [[ -n "$command" ]] || return 1
+
+  case "$command" in
+    # Match shell history convention: leading-space commands are private.
+    [[:space:]]*)
+      return 1
+      ;;
+    # Sigil glyph routes are prompts/instructions, not ordinary shell commands.
+    # The CLI paths they call record their own structured events.
+    ,*|\?*|+*|@*)
+      return 1
+      ;;
+    # Avoid recursive bookkeeping for direct Sigil calls and internal wrappers.
+    sigil\ *|sigil_*|noglob\ sigil_*|command\ sigil_*|__sigil_*)
+      return 1
+      ;;
+  esac
+
+  return 0
+}
+
+
+__sigil_record_turn() {
+  local exit_status="$1"
+  local command="$2"
+  local stdout_snippet stderr_snippet
+  # Snippets come from explicit paths such as `sigil run` used to record the
+  # output of commands.
+  stdout_snippet="${SIGIL_FAILURE_STDOUT:-}"
+  stderr_snippet="${SIGIL_FAILURE_STDERR:-}"
+  local record_args=(record-turn --status "$exit_status" --cwd "$PWD")
+  [[ -n "$stdout_snippet" ]] && record_args+=(--stdout-snippet "$stdout_snippet")
+  [[ -n "$stderr_snippet" ]] && record_args+=(--stderr-snippet "$stderr_snippet")
+  # Recording must never perturb the user's shell. All CLI output is silenced and
+  # failures are ignored; losing a telemetry event is preferable to breaking the
+  # prompt after every command.
+  "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
+}
+
+__sigil_precmd() {
+  # precmd runs after the command finishes and before the next prompt. At this
+  # point `$?` is the command's exit status and `$PWD` is the final cwd. We pair
+  # those with the command line captured in preexec.
+  local exit_status=$?
+  local command="$__sigil_preexec_command"
+  __sigil_preexec_command=""
+  if [[ -z "$command" ]]; then
+    # No preceding command, e.g. first prompt in a new shell.
+    return "$exit_status"
+  fi
+  if ! __sigil_recordable_command "$command"; then
+    # Sigil's own punctuation routes are handled by their explicit CLI paths.
+    return "$exit_status"
+  fi
+  __sigil_record_turn "$exit_status" "$command"
+  unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
+  return "$exit_status"
+}
+
 add-zsh-hook precmd __sigil_precmd
 
+# Shell history should stay a list of things the shell can re-run. Sigil
+# instructions are prompts, not shell commands.
 if __sigil_glyphs_enabled; then
   __sigil_zshaddhistory() {
     emulate -L zsh
     local line="${1%%$'\n'}"
     case "$line" in
-      ,*|\?*|\\\?*|@*) return 1 ;;
+      ,*|\?*|\\\?*|+*|@*) return 1 ;;
     esac
     return 0
   }

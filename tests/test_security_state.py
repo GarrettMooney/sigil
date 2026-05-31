@@ -32,8 +32,6 @@ from sigil.tty import (
     clear_lines_on_tty,
     confirmation_tty_paths,
     confirm_on_tty,
-    open_capture_pty,
-    relay_capture,
 )
 
 
@@ -58,6 +56,7 @@ def test_top_level_help_lists_commands() -> None:
         "doctor",
         "events",
         "install",
+        "run",
         "session",
         "status",
     ]:
@@ -871,6 +870,68 @@ def test_record_turn_cli_command_persists_entry() -> None:
         assert len(rows) == 1
         assert rows[0]["command"] == "ls -la"
         assert rows[0]["status"] == 0
+
+
+def test_run_cli_streams_output_and_records_snippets() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            result = CliRunner().invoke(
+                cli,
+                [
+                    "run",
+                    "python",
+                    "-c",
+                    (
+                        "import sys; "
+                        "print('stdout line'); "
+                        "print('stderr line', file=sys.stderr); "
+                        "sys.exit(7)"
+                    ),
+                ],
+            )
+
+        assert result.exit_code == 7
+        assert result.stdout == "stdout line\n"
+        assert result.stderr == "stderr line\n"
+        rows = read_recent_turns(tmp)
+        command = rows[-1]["command"]
+        assert isinstance(command, str)
+        assert command.startswith("python -c ")
+        assert rows[-1]["status"] == 7
+        assert rows[-1]["stdout_snippet"] == "stdout line\n"
+        assert rows[-1]["stderr_snippet"] == "stderr line\n"
+        failure = json.loads(
+            (Path(tmp) / "sessions" / "test" / "last-failure.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert failure["stdout_snippet"] == "stdout line\n"
+        assert failure["stderr_snippet"] == "stderr line\n"
+
+
+def test_run_cli_requires_a_command() -> None:
+    result = CliRunner().invoke(cli, ["run"])
+    assert result.exit_code == 2
+    assert "missing command to run" in result.output
+
+
+def test_run_cli_records_missing_executable() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            result = CliRunner().invoke(cli, ["run", "definitely-not-a-command"])
+
+        assert result.exit_code == 127
+        assert "missing executable: definitely-not-a-command" in result.stderr
+        rows = read_recent_turns(tmp)
+        assert rows[-1]["command"] == "definitely-not-a-command"
+        assert rows[-1]["status"] == 127
+        assert "missing executable" in str(rows[-1]["stderr_snippet"])
 
 
 def test_recent_turns_returns_empty_when_file_missing() -> None:
@@ -1858,75 +1919,3 @@ def test_no_color_disables_tty_color() -> None:
             os.environ.pop("NO_COLOR", None)
         else:
             os.environ["NO_COLOR"] = saved
-
-
-def test_capture_pty_slave_is_a_real_terminal() -> None:
-    master_fd, slave_fd, slave_path = open_capture_pty()
-    try:
-        assert os.isatty(slave_fd)
-        assert slave_path.startswith("/dev/")
-    finally:
-        os.close(slave_fd)
-        os.close(master_fd)
-
-
-def test_capture_relay_mirrors_master_to_sink_and_original_stream(
-    tmp_path: Path,
-) -> None:
-    import threading
-    import time
-
-    master_fd, slave_fd, _ = open_capture_pty()
-    sink = tmp_path / "sink"
-    mirror = tmp_path / "mirror"
-    mirror_fd = os.open(str(mirror), os.O_WRONLY | os.O_CREAT, 0o600)
-    stop = {"value": False}
-    reader = threading.Thread(
-        target=relay_capture,
-        args=(master_fd, str(sink)),
-        kwargs={
-            "mirror_fd": mirror_fd,
-            "should_stop": lambda: stop["value"],
-            "poll_interval": 0.02,
-        },
-    )
-    reader.start()
-    try:
-        os.write(slave_fd, b"hello from a tty\n")
-        time.sleep(0.1)
-    finally:
-        stop["value"] = True
-        reader.join(timeout=2)
-        os.close(slave_fd)
-        os.close(master_fd)
-        os.close(mirror_fd)
-
-    assert b"hello from a tty" in sink.read_bytes()
-    assert b"hello from a tty" in mirror.read_bytes()
-
-
-def test_capture_relay_drains_output_written_before_stop(tmp_path: Path) -> None:
-    import threading
-
-    master_fd, slave_fd, _ = open_capture_pty()
-    sink = tmp_path / "sink"
-    stop = {"value": False}
-    reader = threading.Thread(
-        target=relay_capture,
-        args=(master_fd, str(sink)),
-        kwargs={
-            "mirror_fd": None,
-            "should_stop": lambda: stop["value"],
-            "poll_interval": 0.05,
-        },
-    )
-    os.write(slave_fd, b"late bytes\n")
-    stop["value"] = True
-    reader.start()
-    try:
-        reader.join(timeout=2)
-    finally:
-        os.close(slave_fd)
-        os.close(master_fd)
-
-    assert b"late bytes" in sink.read_bytes()

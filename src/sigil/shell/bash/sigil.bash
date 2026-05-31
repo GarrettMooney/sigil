@@ -8,14 +8,35 @@ else
   __sigil_bin="sigil"
 fi
 
-__sigil_muted=$'\e[38;2;110;106;134m'
-__sigil_reset=$'\e[0m'
+__sigil_clear_legacy_capture_state() {
+  local legacy_capture_active="${__sigil_capture_active:-0}"
+  local debug_trap
+  debug_trap="$(trap -p DEBUG 2>/dev/null || true)"
+  case "$debug_trap" in
+    *__sigil_debug_trap*)
+      trap - DEBUG
+      ;;
+  esac
+
+  unset -f __sigil_debug_trap __sigil_install_debug_trap \
+    __sigil_turn_capture_enabled __sigil_capture_skipped_command \
+    __sigil_capture_start __sigil_capture_stop __sigil_capture_stop_reader \
+    __sigil_capture_stop_readers __sigil_capture_file_snippet \
+    __sigil_capture_cleanup 2>/dev/null || true
+  unset __sigil_capture_active __sigil_capture_stdout_file \
+    __sigil_capture_stderr_file __sigil_capture_stdout_pipe \
+    __sigil_capture_stderr_pipe __sigil_capture_stdout_pid \
+    __sigil_capture_stderr_pid 2>/dev/null || true
+
+  if [[ $- == *i* && "$legacy_capture_active" == "1" ]]; then
+    exec 1>/dev/tty 2>/dev/tty || true
+  fi
+}
+
+__sigil_clear_legacy_capture_state
+unset -f __sigil_clear_legacy_capture_state 2>/dev/null || true
+
 __sigil_last_recorded_history_id=""
-__sigil_capture_active=0
-__sigil_capture_stdout_file=""
-__sigil_capture_stderr_file=""
-__sigil_capture_stdout_pid=""
-__sigil_capture_stderr_pid=""
 __sigil_in_precmd=0
 
 if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
@@ -53,10 +74,6 @@ __sigil_insert_staged_command() {
   __sigil_history_insert "$command"
 }
 
-__sigil_stdin_is_pipe() {
-  [[ -p /dev/stdin ]]
-}
-
 __sigil_glyphs_enabled() {
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
 }
@@ -65,155 +82,11 @@ __sigil_recordable_command() {
   local command="${1:-}"
   [[ -n "$command" ]] || return 1
   case "$command" in
-    [[:space:]]*|,*|\?*|@*|sigil\ *|sigil_*|noglob\ sigil_*|command\ sigil_*|__sigil_*)
+    [[:space:]]*|,*|\?*|+*|@*|sigil\ *|sigil_*|noglob\ sigil_*|command\ sigil_*|__sigil_*)
       return 1
       ;;
   esac
   return 0
-}
-
-__sigil_command_name() {
-  local command="${1:-}"
-  local -a words
-  read -r -a words <<< "$command" || return 1
-  local word
-  for word in "${words[@]}"; do
-    case "$word" in
-      command|exec|noglob|time|env|sudo)
-        continue
-        ;;
-      [A-Za-z_][A-Za-z0-9_]*=*)
-        continue
-        ;;
-    esac
-    printf '%s\n' "${word##*/}"
-    return 0
-  done
-  return 1
-}
-
-__sigil_capture_skipped_command() {
-  local name
-  name="$(__sigil_command_name "${1:-}")" || return 1
-  local skip_commands="${SIGIL_TURN_CAPTURE_SKIP_COMMANDS:-codex claude cursor-agent vim nvim vi nano emacs less more man top htop btop ssh python python3 ipython node irb psql mysql sqlite3 redis-cli}"
-  case " $skip_commands " in
-    *" $name "*)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-__sigil_turn_capture_enabled() {
-  [[ "${SIGIL_ENABLE_TURN_CAPTURE:-1}" != "0" && "${SIGIL_ENABLE_TURN_CAPTURE:-1}" != "false" ]] || return 1
-  if [[ "${SIGIL_ENABLE_TURN_CAPTURE:-}" != "1" && "${SIGIL_ENABLE_TURN_CAPTURE:-}" != "true" ]]; then
-    [[ $- == *i* ]] || return 1
-  fi
-  command -v mktemp >/dev/null 2>&1 || return 1
-  command -v tail >/dev/null 2>&1 || return 1
-  return 0
-}
-
-# Capture redirects fd 1/2 onto pty slaves (real terminals) instead of pipes, so
-# the running command still passes isatty(). Sigil opens each pty and forks a
-# detached reader that mirrors the pty master to the terminal and a sink file.
-__sigil_capture_start() {
-  local command="${1:-}"
-  __sigil_turn_capture_enabled || return 0
-  __sigil_recordable_command "$command" || return 0
-  __sigil_capture_skipped_command "$command" && return 0
-  [[ $__sigil_capture_active -eq 0 ]] || return 0
-
-  local tmp_root="${TMPDIR:-/tmp}"
-  __sigil_capture_stdout_file="$(mktemp "${tmp_root%/}/sigil-stdout.XXXXXX")" || return 0
-  __sigil_capture_stderr_file="$(mktemp "${tmp_root%/}/sigil-stderr.XXXXXX")" || {
-    rm -f "$__sigil_capture_stdout_file"
-    __sigil_capture_stdout_file=""
-    return 0
-  }
-
-  exec 7>&1 || {
-    __sigil_capture_cleanup
-    return 0
-  }
-  exec 8>&2 || {
-    exec 7>&-
-    __sigil_capture_cleanup
-    return 0
-  }
-
-  local out_relay err_relay out_slave err_slave
-  out_relay="$("$__sigil_bin" capture-relay --sink "$__sigil_capture_stdout_file" --mirror-fd 4 4>&7 2>/dev/null)" || {
-    exec 7>&- 8>&-
-    __sigil_capture_cleanup
-    return 0
-  }
-  err_relay="$("$__sigil_bin" capture-relay --sink "$__sigil_capture_stderr_file" --mirror-fd 4 4>&8 2>/dev/null)" || {
-    __sigil_capture_stop_reader "${out_relay##* }"
-    exec 7>&- 8>&-
-    __sigil_capture_cleanup
-    return 0
-  }
-  out_slave="${out_relay%% *}"
-  __sigil_capture_stdout_pid="${out_relay##* }"
-  err_slave="${err_relay%% *}"
-  __sigil_capture_stderr_pid="${err_relay##* }"
-  if [[ -z "$out_slave" || -z "$err_slave" ]]; then
-    __sigil_capture_stop_readers
-    exec 7>&- 8>&-
-    __sigil_capture_cleanup
-    return 0
-  fi
-
-  exec > "$out_slave"
-  exec 2> "$err_slave"
-  __sigil_capture_active=1
-}
-
-__sigil_capture_stop() {
-  [[ $__sigil_capture_active -eq 1 ]] || return 0
-  # Drain and stop the readers while the slaves are still open, then restore: on
-  # some platforms closing a pty slave discards output the reader has not read.
-  __sigil_capture_stop_readers
-  exec 1>&7
-  exec 2>&8
-  exec 7>&-
-  exec 8>&-
-  __sigil_capture_active=0
-}
-
-# Tell a relay reader to flush and exit, then wait for it so the sink is complete.
-__sigil_capture_stop_reader() {
-  local pid="${1:-}"
-  [[ -n "$pid" ]] || return 0
-  kill -TERM "$pid" 2>/dev/null || return 0
-  local attempts="${SIGIL_CAPTURE_WAIT_ATTEMPTS:-200}"
-  local i
-  for ((i = 0; i < attempts; i++)); do
-    kill -0 "$pid" 2>/dev/null || return 0
-    sleep 0.01
-  done
-}
-
-__sigil_capture_stop_readers() {
-  __sigil_capture_stop_reader "$__sigil_capture_stdout_pid"
-  __sigil_capture_stop_reader "$__sigil_capture_stderr_pid"
-  __sigil_capture_stdout_pid=""
-  __sigil_capture_stderr_pid=""
-}
-
-__sigil_capture_file_snippet() {
-  local snippet_path="${1:-}"
-  local bytes="${SIGIL_TURN_CAPTURE_BYTES:-6000}"
-  [[ -n "$snippet_path" && -s "$snippet_path" ]] || return 0
-  tail -c "$bytes" "$snippet_path" 2>/dev/null || true
-}
-
-__sigil_capture_cleanup() {
-  [[ -n "$__sigil_capture_stdout_file" ]] && rm -f "$__sigil_capture_stdout_file"
-  [[ -n "$__sigil_capture_stderr_file" ]] && rm -f "$__sigil_capture_stderr_file"
-  __sigil_capture_stdout_file=""
-  __sigil_capture_stderr_file=""
 }
 
 __sigil_record_turn() {
@@ -223,8 +96,6 @@ __sigil_record_turn() {
   local -a record_args
   stdout_snippet="${SIGIL_FAILURE_STDOUT:-}"
   stderr_snippet="${SIGIL_FAILURE_STDERR:-}"
-  [[ -n "$stdout_snippet" ]] || stdout_snippet="$(__sigil_capture_file_snippet "$__sigil_capture_stdout_file")"
-  [[ -n "$stderr_snippet" ]] || stderr_snippet="$(__sigil_capture_file_snippet "$__sigil_capture_stderr_file")"
   record_args=(record-turn --status "$exit_status" --cwd "$PWD")
   [[ -n "$stdout_snippet" ]] && record_args+=(--stdout-snippet "$stdout_snippet")
   [[ -n "$stderr_snippet" ]] && record_args+=(--stderr-snippet "$stderr_snippet")
@@ -233,7 +104,6 @@ __sigil_record_turn() {
 
 __sigil_precmd_done() {
   local exit_status="$1"
-  __sigil_capture_cleanup
   __sigil_in_precmd=0
   return "$exit_status"
 }
@@ -265,14 +135,6 @@ sigil_agent_step_auto() {
   __sigil_op_with_staged_command ",,," "$@"
 }
 
-sigil_execute_command() {
-  sigil_agent_step "$@"
-}
-
-sigil_command_loop() {
-  sigil_agent_step_auto "$@"
-}
-
 sigil_question() {
   "$__sigil_bin" op "?" "$@"
 }
@@ -281,8 +143,8 @@ sigil_web_question() {
   "$__sigil_bin" op "??" "$@"
 }
 
-sigil_follow_up() {
-  sigil_web_question "$@"
+sigil_run() {
+  "$__sigil_bin" run "$@"
 }
 
 sigil_goal() {
@@ -301,6 +163,7 @@ if __sigil_glyphs_enabled; then
   function ,,, { sigil_agent_step_auto "$*"; }
   function ? { sigil_question "$*"; }
   function ?? { sigil_web_question "$*"; }
+  function + { sigil_run "$@"; }
   function @ { sigil_goal "$*"; }
   function @@ { sigil_goal_auto "$*"; }
 
@@ -310,6 +173,7 @@ if __sigil_glyphs_enabled; then
     alias ,,,='sigil_agent_step_auto'
     alias '?'='sigil_question'
     alias '??'='sigil_web_question'
+    alias +='sigil_run'
     alias @='sigil_goal'
     alias @@='sigil_goal_auto'
   fi
@@ -339,7 +203,6 @@ __sigil_precmd() {
   local command
 
   __sigil_in_precmd=1
-  __sigil_capture_stop
 
   if ! entry="$(__sigil_history_entry)"; then
     __sigil_precmd_done "$exit_status"
@@ -364,13 +227,6 @@ __sigil_precmd() {
   unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
   __sigil_precmd_done "$exit_status"
   return $?
-}
-
-__sigil_debug_trap() {
-  [[ $- == *i* ]] || return 0
-  [[ $__sigil_in_precmd -eq 0 ]] || return 0
-  [[ $__sigil_capture_active -eq 0 ]] || return 0
-  __sigil_capture_start "$BASH_COMMAND"
 }
 
 # ── Installation ─────────────────────────────────────────────────────────
@@ -413,12 +269,4 @@ __sigil_install_prompt_command() {
   fi
 }
 
-__sigil_install_debug_trap() {
-  [[ $- == *i* ]] || return 0
-  __sigil_turn_capture_enabled || return 0
-  [[ -z "$(trap -p DEBUG)" ]] || return 0
-  trap '__sigil_debug_trap' DEBUG
-}
-
 __sigil_install_prompt_command
-__sigil_install_debug_trap
