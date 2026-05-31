@@ -5,6 +5,8 @@
 # execution policy itself. In particular, ordinary shell commands are not
 # wrapped or redirected here.
 
+# ── CLI Resolution ───────────────────────────────────────────────────────
+
 # Resolve the CLI once at source time. SIGIL_BIN lets tests, local checkouts, and
 # packaged installs point the binding at a specific executable without changing
 # the user's PATH.
@@ -16,6 +18,7 @@ else
   typeset -g __sigil_bin="sigil"
 fi
 
+# ── Session And Terminal Context ─────────────────────────────────────────
 
 # A session id scopes continuity files such as recent-turns.jsonl. The id is
 # generated once per shell process and inherited by subprocesses so CLI calls from
@@ -48,6 +51,8 @@ if [[ -z "${SIGIL_TTY_FD:-}" && ( -t 0 || -t 1 || -t 2 ) ]]; then
   fi
 fi
 
+# ── Prompt And History Helpers ───────────────────────────────────────────
+
 __sigil_history_insert() {
   # Add a command to zsh history without executing it. Used when Sigil proposes
   # or stages a command so normal history search can find it later.
@@ -77,6 +82,8 @@ __sigil_glyphs_enabled() {
   # file. The named shell functions remain available either way.
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
 }
+
+# ── Command Wrappers ─────────────────────────────────────────────────────
 
 sigil_command() {
   # `, prompt`: ask the model for one command, print the response, and insert the
@@ -129,6 +136,8 @@ sigil_goal_auto() {
   __sigil_op_with_staged_command "@@" "$@"
 }
 
+# ── Glyph Bindings ───────────────────────────────────────────────────────
+
 if __sigil_glyphs_enabled; then
   # Function definitions make the punctuation usable in non-alias contexts.
   function ',' { sigil_command "$@" }
@@ -153,16 +162,18 @@ if __sigil_glyphs_enabled; then
   alias '@@'='noglob sigil_goal_auto'
 fi
 
-autoload -Uz add-zsh-hook
-typeset -g __sigil_preexec_command=""
+# ── zsh Command Lifecycle Hooks ──────────────────────────────────────────
 
-__sigil_preexec() {
+autoload -Uz add-zsh-hook
+typeset -g __sigil_current_command=""
+
+__sigil_before_command() {
   # preexec runs before the command executes.
-  # zsh gives us the command line before execution. 
-  __sigil_preexec_command="$1"
+  # zsh gives us the command line before execution.
+  __sigil_current_command="$1"
 }
 
-add-zsh-hook preexec __sigil_preexec
+add-zsh-hook preexec __sigil_before_command
 
 __sigil_recordable_command() {
   local command="${1:-}"
@@ -205,13 +216,13 @@ __sigil_record_turn() {
   "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
 }
 
-__sigil_precmd() {
+__sigil_after_command_before_prompt() {
   # precmd runs after the command finishes and before the next prompt. At this
   # point `$?` is the command's exit status and `$PWD` is the final cwd. We pair
   # those with the command line captured in preexec.
   local exit_status=$?
-  local command="$__sigil_preexec_command"
-  __sigil_preexec_command=""
+  local command="$__sigil_current_command"
+  __sigil_current_command=""
   if [[ -z "$command" ]]; then
     # No preceding command, e.g. first prompt in a new shell.
     return "$exit_status"
@@ -225,7 +236,9 @@ __sigil_precmd() {
   return "$exit_status"
 }
 
-add-zsh-hook precmd __sigil_precmd
+add-zsh-hook precmd __sigil_after_command_before_prompt
+
+# ── History Filtering ────────────────────────────────────────────────────
 
 # Shell history should stay a list of things the shell can re-run. Sigil
 # instructions are prompts, not shell commands.

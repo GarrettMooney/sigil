@@ -517,7 +517,7 @@ def test_zsh_does_not_record_sigil_commands() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_preexec "sigil bad"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_before_command "sigil bad"\n                    false\n                    __sigil_after_command_before_prompt\n                    wait\n                    '
             ),
             tmp,
             stub,
@@ -534,7 +534,7 @@ def test_zsh_does_not_record_sigil_wrapper_commands() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_preexec "noglob sigil_command hello"\n                    sigil_command hello\n                    __sigil_precmd\n                    wait\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_before_command "noglob sigil_command hello"\n                    sigil_command hello\n                    __sigil_after_command_before_prompt\n                    wait\n                    '
             ),
             tmp,
             stub,
@@ -570,7 +570,7 @@ def test_zsh_records_every_non_sigil_turn_via_record_turn() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_preexec "ls -la"\n                    true\n                    __sigil_precmd\n                    __sigil_preexec "bad command"\n                    false\n                    __sigil_precmd\n                    __sigil_preexec ", should not record"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_before_command "ls -la"\n                    true\n                    __sigil_after_command_before_prompt\n                    __sigil_before_command "bad command"\n                    false\n                    __sigil_after_command_before_prompt\n                    __sigil_before_command ", should not record"\n                    false\n                    __sigil_after_command_before_prompt\n                    wait\n                    '
             ),
             tmp,
             stub,
