@@ -34,8 +34,8 @@ suggesting, executing, and explaining. Sigil keeps those routes separate.
 | Need | Glyph | What happens |
 | --- | --- | --- |
 | "Answer from context." | `,` | Read-only answer with local inspection tools. No shell is exposed. |
-| "Do one agent turn." | `,,` | Runs one Pi invocation after confirmation. |
-| "Do one routine turn." | `,,,` | Runs one Pi invocation without per-step confirmation. |
+| "Do one agent turn." | `,,` | Runs one Zeta invocation after confirmation. |
+| "Do one routine turn." | `,,,` | Runs one Zeta invocation without per-step confirmation. |
 | "Run and capture this command." | `+` | Runs one explicit command, streams output, and records stdout/stderr snippets. |
 
 The result is a shell workflow with small blast radius, durable state, and a
@@ -83,16 +83,10 @@ updates the binding without duplicating the rc block.
 - Python 3.11+
 - zsh or Bash for shell bindings
 - A local OpenAI-compatible chat completions endpoint for command generation
-  and Pi-backed routes (default `http://127.0.0.1:8080/v1/chat/completions`)
-- `pi`, the [pi-mono](https://github.com/earendil-works/pi) coding-agent CLI,
-  for `,`, `,,`, and `,,,`. Install it with:
-
-  ```sh
-  curl -fsSL https://pi.dev/install.sh | sh
-  # or: npm install -g --ignore-scripts @earendil-works/pi-coding-agent
-  ```
-
-  Then point Pi at your model and confirm Sigil can see it with `sigil doctor`.
+  and Zeta-backed answer/action routes (default
+  `http://127.0.0.1:8080/v1/chat/completions`)
+- The `zeta` entrypoint installed with Sigil. `sigil doctor` checks that both
+  `sigil` and `zeta` are visible on PATH.
 - `glow` for Markdown rendering, optional but recommended
 
 Useful environment variables:
@@ -152,7 +146,7 @@ sigil command "run the focused tests for this change"
 sigil events
 ```
 
-Sigil stores command suggestions, question answers, and act steps in an
+Sigil stores command suggestions, answer turns, and act steps in an
 inspectable event log so you can review the route each event came from.
 
 ## Glyph Reference
@@ -179,17 +173,16 @@ sigil command "find wav files"
 `,` prints a read-only answer. It does not stage commands or write to shell
 history.
 
-`,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
-tools, and returns control to the shell after one bounded Pi invocation. At the
+`,,` asks before handing the objective to Zeta, gives Zeta read/search/edit/write
+tools, and returns control to the shell after one bounded Zeta invocation. At the
 confirmation prompt, `e` opens `$VISUAL` or `$EDITOR` with the available tools,
 one per line, so tools can be removed before execution. That invocation may
 include zero or more tool calls. `,,,` runs the same one-turn route without
-routine confirmation. Shell calls inside those turns go through
-Sigil's `sigil_shell` Pi tool: Sigil prints the proposed command, asks whether
-to run or edit it, streams stdout/stderr to the terminal, records the turn, and
-returns the captured output plus exit status back to Pi so the same turn can
-continue.
-Agent steps always stream Pi's raw tool calls and prose through `glow` or
+routine confirmation. Shell calls inside those turns go through Zeta's bash
+handoff tool: Sigil prints the proposed command, asks whether to run or edit it,
+streams stdout/stderr to the terminal, records the turn, and returns the
+captured output plus exit status back to Zeta so the same turn can continue.
+Agent steps always stream Zeta's raw tool calls and prose through `glow` or
 `cat`; they do not replace the final answer with a compact summary.
 
 Read-only routes do not expose Bash. If an answer recommends a command, it is
@@ -213,8 +206,8 @@ Each route has a fixed effect on your system:
 | Route | Effect | Rule |
 | --- | --- | --- |
 | `,` | read-only | Local answer route with no Bash tool. |
-| `,,` | execute-write | One confirmed Pi agent step. |
-| `,,,` | execute-write | One auto-approved Pi agent step. |
+| `,,` | execute-write | One confirmed Zeta agent step. |
+| `,,,` | execute-write | One auto-approved Zeta agent step. |
 | `+` | execute | Explicit local command execution with stdout/stderr capture. |
 
 Every route records what it did to the event log. Inspect it with:
@@ -229,9 +222,11 @@ The glyphs are thin shell functions over a regular CLI:
 
 ```text
 sigil command [--json] [PROMPT]
+sigil ask [--follow-up] [--json] [QUESTION]
 sigil run COMMAND [ARGS...]
+sigil act [show|resume|abort] [--json]
 sigil events [--limit N] [--json] [--raw]
-sigil session [show|list|clear] [--json]
+sigil session [show|path|list|clear] [--json]
 sigil status [--json]
 sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--shell auto|zsh|bash] [--json]
@@ -243,7 +238,9 @@ Copy-pasteable examples:
 sigil command "find files over 10 MB in this repo excluding .git"
 sigil command "show the largest directories"
 git diff --name-only | sigil command "run the relevant tests"
+sigil ask "what changed in this repo?"
 sigil run cargo test
+sigil act show
 sigil status
 sigil events
 ```
@@ -275,7 +272,7 @@ Sigil is:
 
 - A command-line tool and optional shell binding.
 - A local-model command proposal route.
-- A Pi-backed question and one-step edit route.
+- Zeta-backed read-only answer and one-step edit routes.
 - An evented state layer for shell continuity and audit history.
 
 Sigil is not:
@@ -317,7 +314,7 @@ scripts/render-demo-gifs.sh
 
 Demo tapes live in [docs/demos](docs/demos/). They run the real Sigil CLI
 from this checkout while shimming only external dependencies such as the
-model server, `pi`, and `uv`.
+model server and `uv`.
 
 ## License
 
