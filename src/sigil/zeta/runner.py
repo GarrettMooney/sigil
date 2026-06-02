@@ -43,7 +43,7 @@ def run_agent_step(
             "content": prompt,
             "glyph": glyph,
             "runtime": "zeta",
-            "system": system or runtime.zeta_system_prompt(),
+            "system": runtime.zeta_system_prompt(system, allowed_tools=enabled_tools),
             "available_tools": list(enabled_tools),
         },
     )

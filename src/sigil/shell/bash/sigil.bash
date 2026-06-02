@@ -176,6 +176,43 @@ __sigil_muted_print() {
   fi
 }
 
+__sigil_zeta_spinner_start() {
+  __sigil_zeta_spinner_pid=""
+  [[ -t 2 ]] || return 0
+  [[ "${ZETA_SPINNER:-1}" != "0" && "${ZETA_SPINNER:-1}" != "false" ]] || return 0
+  (
+    while :; do
+      for frame in thinking thinking. thinking.. thinking...; do
+        if [[ -z "${NO_COLOR:-}" ]]; then
+          printf '\r\033[K\033[38;2;110;106;134m❯ %s\033[0m' "$frame" >&2
+        else
+          printf '\r\033[K❯ %s' "$frame" >&2
+        fi
+        sleep 0.35
+      done
+    done
+  ) &
+  __sigil_zeta_spinner_pid="$!"
+}
+
+__sigil_zeta_spinner_stop() {
+  [[ -n "${__sigil_zeta_spinner_pid:-}" ]] || return 0
+  kill "$__sigil_zeta_spinner_pid" >/dev/null 2>&1 || true
+  wait "$__sigil_zeta_spinner_pid" 2>/dev/null || true
+  printf '\r\033[K' >&2
+  __sigil_zeta_spinner_pid=""
+}
+
+__sigil_zeta_model_stream() {
+  local request="$1"
+  local rc
+  __sigil_zeta_spinner_start
+  printf '%s\n' "$request" | "$__zeta_bin" model stream
+  rc=$?
+  __sigil_zeta_spinner_stop
+  return "$rc"
+}
+
 __sigil_zeta_tool_start() {
   local name="$1"
   local input="$2"
@@ -196,7 +233,7 @@ __sigil_zeta_turn() {
   __sigil_zeta_append "$(printf '{"type":"user_message","content":%s}' "$(__sigil_json_string "$objective")")" >/dev/null
   for step in 1 2 3 4 5 6 7 8; do
     request="$(printf '{"objective":%s}' "$(__sigil_json_string "$objective")")"
-    events="$(printf '%s\n' "$request" | "$__zeta_bin" model stream)" || return $?
+    events="$(__sigil_zeta_model_stream "$request")" || return $?
     while IFS= read -r event; do
       [[ -n "$event" ]] || continue
       event_type="$(printf '%s\n' "$event" | __sigil_json_get type)"

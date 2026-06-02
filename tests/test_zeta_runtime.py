@@ -132,7 +132,20 @@ def test_zeta_next_model_action_accepts_route_specific_system_prompt(
     action = zeta.next_model_action("repair", [], system="custom system")
 
     assert action == {"type": "final", "content": "done"}
-    assert captured["system"] == "custom system"
+    system_prompt = str(captured["system"])
+    assert system_prompt.startswith("custom system")
+    assert "Available tools with input JSON Schemas:" in system_prompt
+    assert '"name":"read"' in system_prompt
+
+
+def test_zeta_system_prompt_is_product_neutral_and_dynamic() -> None:
+    prompt = zeta.zeta_system_prompt(allowed_tools=("read", "ls"))
+
+    assert "Sigil" not in prompt
+    assert "Available tools with input JSON Schemas:" in prompt
+    assert '"name":"read"' in prompt
+    assert '"name":"ls"' in prompt
+    assert '"name":"bash"' not in prompt
 
 
 def test_zeta_next_model_action_filters_available_tools(monkeypatch) -> None:
@@ -141,7 +154,7 @@ def test_zeta_next_model_action_filters_available_tools(monkeypatch) -> None:
     def fake_chat_json(
         system: str, user: str, schema: dict[str, object]
     ) -> dict[str, object]:
-        del system
+        captured["system"] = system
         captured["user"] = user
         captured["schema"] = schema
         return {
@@ -168,13 +181,16 @@ def test_zeta_next_model_action_filters_available_tools(monkeypatch) -> None:
     properties = cast(dict[str, Any], schema["properties"])
     name_schema = cast(dict[str, Any], properties["name"])
     assert name_schema["enum"] == ["grep", "read"]
+    system_prompt = str(captured["system"])
+    assert '"type":"function"' in system_prompt
+    assert '"name":"read"' in system_prompt
+    assert '"name":"grep"' in system_prompt
+    assert '"parameters":{"type":"object"' in system_prompt
+    assert '"schema"' not in system_prompt
+    assert '"name":"bash"' not in system_prompt
     user_prompt = str(captured["user"])
-    assert '"type": "function"' in user_prompt
-    assert '"name": "read"' in user_prompt
-    assert '"name": "grep"' in user_prompt
-    assert '"parameters": {"type": "object"' in user_prompt
-    assert '"schema"' not in user_prompt
-    assert '"name": "bash"' not in user_prompt
+    assert "Available tools" not in user_prompt
+    assert '"name":"read"' not in user_prompt
 
 
 def test_zeta_next_model_action_rejects_disallowed_tool(monkeypatch) -> None:
