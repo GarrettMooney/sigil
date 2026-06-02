@@ -30,9 +30,9 @@ Show
 Type "git diff"
 Enter
 Sleep 1200ms
-Type "? review the risky parser change"
+Type ", review the risky parser change"
 Enter
 Sleep 2600ms
-Type "?? what should I test first?"
+Type "sigil ask --follow-up \"what should I test first?\""
 Enter
 Sleep 3200ms

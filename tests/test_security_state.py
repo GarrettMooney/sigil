@@ -20,7 +20,7 @@ from sigil.staged_command import (
     record_staged_commands,
 )
 from sigil.zeta.stream import renderer_command, should_color, stream_events
-from sigil.question import (
+from sigil.answers import (
     QUESTION_SYSTEM_PROMPT,
     ask,
     continuation_prompt,
@@ -329,15 +329,15 @@ def test_question_routes_record_glyph_and_web_tools() -> None:
                 calls.append((args, kwargs))
                 return 0
 
-            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
                 assert ask("what is sigil?", json_output=True) == 0
             fresh_turn = read_jsonl("last-question.jsonl")[0]
-            assert fresh_turn["glyph"] == "?"
-            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
+            assert fresh_turn["glyph"] == "ask"
+            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
                 assert (
                     ask(
                         "what is sigil on the web?",
-                        glyph="??",
+                        glyph=",",
                         tools="read,grep,ls",
                         use_web=True,
                         json_output=True,
@@ -345,7 +345,7 @@ def test_question_routes_record_glyph_and_web_tools() -> None:
                     == 0
                 )
             web_turn = read_jsonl("last-question.jsonl")[-1]
-            assert web_turn["glyph"] == "??"
+            assert web_turn["glyph"] == ","
             assert len(calls) == 2
             assert calls[0][0][0] == QUESTION_SYSTEM_PROMPT
             assert "available tools are read, grep, and ls only" in calls[0][0][0]
@@ -375,7 +375,7 @@ def test_question_route_requests_tool_calls_on_stdout() -> None:
                 captured_kwargs.update(kwargs)
                 return 0
 
-            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
                 assert ask("inspect pyproject") == 0
 
     assert captured_kwargs["question"] == "inspect pyproject"
@@ -490,10 +490,10 @@ def test_staged_command_records_and_consumes_blocked_command() -> None:
                 + "\n",
                 encoding="utf-8",
             )
-            records = record_staged_commands(glyph="?")
+            records = record_staged_commands(glyph=",,")
 
             assert records[0]["command"] == "git diff --stat"
-            assert records[0]["glyph"] == "?"
+            assert records[0]["glyph"] == ",,"
             assert not (
                 Path(tmp) / "sessions/test" / PENDING_STAGED_COMMANDS_FILE
             ).exists()
@@ -726,7 +726,7 @@ def test_record_turn_skips_leading_whitespace_command() -> None:
         assert read_recent_turns(tmp) == []
 
 
-def test_record_turn_skips_comma_question_and_sigil_commands() -> None:
+def test_record_turn_skips_comma_and_sigil_commands() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
@@ -736,7 +736,9 @@ def test_record_turn_skips_comma_question_and_sigil_commands() -> None:
             record_turn("? what is this", 0, "/repo")
             record_turn("sigil ask hello", 0, "/repo")
             record_turn("__sigil_precmd", 0, "/repo")
-        assert read_recent_turns(tmp) == []
+        rows = read_recent_turns(tmp)
+        assert len(rows) == 1
+        assert rows[0]["command"] == "? what is this"
 
 
 def test_record_turn_records_unsupported_caret_text() -> None:
@@ -954,7 +956,7 @@ def test_fresh_ask_prepends_recent_turns_context_to_zeta_prompt() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
                 assert ask("what should I do next?", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -983,7 +985,7 @@ def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
                 assert ask("what does this repo do", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -1013,7 +1015,7 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
                 assert ask("why failed", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -1041,11 +1043,11 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
                 assert (
                     ask(
                         continuation_prompt("follow up", discussion_turns()),
-                        glyph="??",
+                        glyph="ask",
                         tools="read,grep,ls",
                         use_web=True,
                         append_transcript=True,
@@ -1071,7 +1073,7 @@ def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.question.run_question_answer", side_effect=fake_answer):
+            with patch("sigil.answers.run_question_answer", side_effect=fake_answer):
                 assert ask("hello", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -1355,7 +1357,7 @@ def test_zeta_stream_shows_nested_tool_call_updates() -> None:
                         "assistantMessageEvent": {
                             "type": "tool_call",
                             "toolName": "read",
-                            "input": {"path": "src/sigil/question.py"},
+                            "input": {"path": "src/sigil/answers.py"},
                         },
                     }
                 )
@@ -1373,7 +1375,7 @@ def test_zeta_stream_shows_nested_tool_call_updates() -> None:
             )
 
             assert "read" in stderr.getvalue()
-            assert "src/sigil/question.py" in stderr.getvalue()
+            assert "src/sigil/answers.py" in stderr.getvalue()
             assert read_jsonl("last-tools.jsonl")[0]["tool"] == "read"
         finally:
             for key, value in saved.items():

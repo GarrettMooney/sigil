@@ -22,7 +22,7 @@ def cmd_record_failure(
     stdout_snippet: str,
     stderr_snippet: str,
 ) -> int:
-    """Record a failed shell command for later comma proposal context."""
+    """Record a failed shell command for later answer/proposal context."""
     record_failure(command, status, cwd, stdout_snippet, stderr_snippet)
     return 0
 

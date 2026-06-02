@@ -18,34 +18,6 @@ else
   __zeta_bin="zeta"
 fi
 
-__sigil_clear_legacy_capture_state() {
-  local legacy_capture_active="${__sigil_capture_active:-0}"
-  local debug_trap
-  debug_trap="$(trap -p DEBUG 2>/dev/null || true)"
-  case "$debug_trap" in
-    *__sigil_debug_trap*)
-      trap - DEBUG
-      ;;
-  esac
-
-  unset -f __sigil_debug_trap __sigil_install_debug_trap \
-    __sigil_turn_capture_enabled __sigil_capture_skipped_command \
-    __sigil_capture_start __sigil_capture_stop __sigil_capture_stop_reader \
-    __sigil_capture_stop_readers __sigil_capture_file_snippet \
-    __sigil_capture_cleanup 2>/dev/null || true
-  unset __sigil_capture_active __sigil_capture_stdout_file \
-    __sigil_capture_stderr_file __sigil_capture_stdout_pipe \
-    __sigil_capture_stderr_pipe __sigil_capture_stdout_pid \
-    __sigil_capture_stderr_pid 2>/dev/null || true
-
-  if [[ $- == *i* && "$legacy_capture_active" == "1" ]]; then
-    exec 1>/dev/tty 2>/dev/tty || true
-  fi
-}
-
-__sigil_clear_legacy_capture_state
-unset -f __sigil_clear_legacy_capture_state 2>/dev/null || true
-
 __sigil_last_recorded_history_id=""
 __sigil_in_precmd=0
 
@@ -110,7 +82,7 @@ __sigil_recordable_command() {
   local command="${1:-}"
   [[ -n "$command" ]] || return 1
   case "$command" in
-    [[:space:]]*|,*|\?*|+*|@*|sigil\ *|sigil_*|noglob\ sigil_*|command\ sigil_*|__sigil_*)
+    [[:space:]]*|,*|+*|sigil\ *|sigil_*|noglob\ sigil_*|command\ sigil_*|__sigil_*)
       return 1
       ;;
   esac
@@ -139,11 +111,7 @@ __sigil_precmd_done() {
 # ── Command wrappers ─────────────────────────────────────────────────────
 
 sigil_command() {
-  local response command
-  response="$("$__sigil_bin" op "," "$@")" || return $?
-  printf '%s\n' "$response"
-  command="${response%%$'\n'*}"
-  __sigil_history_insert "$command"
+  "$__sigil_bin" op "," "$@"
 }
 
 __sigil_zeta_append() {
@@ -285,12 +253,6 @@ __sigil_zeta_turn() {
   return 1
 }
 
-__sigil_op() {
-  local op="$1"
-  shift
-  "$__sigil_bin" op "$op" "$@"
-}
-
 sigil_agent_step() {
   __sigil_zeta_turn "$@"
 }
@@ -299,24 +261,8 @@ sigil_agent_step_auto() {
   __sigil_zeta_turn "$@"
 }
 
-sigil_question() {
-  "$__sigil_bin" op "?" "$@"
-}
-
-sigil_web_question() {
-  "$__sigil_bin" op "??" "$@"
-}
-
 sigil_run() {
   "$__sigil_bin" run "$@"
-}
-
-sigil_goal() {
-  __sigil_op "@" "$@"
-}
-
-sigil_goal_auto() {
-  __sigil_op "@@" "$@"
 }
 
 # ── Optional glyph functions ─────────────────────────────────────────────
@@ -325,21 +271,13 @@ if __sigil_glyphs_enabled; then
   function , { sigil_command "$*"; }
   function ,, { sigil_agent_step "$*"; }
   function ,,, { sigil_agent_step_auto "$*"; }
-  function ? { sigil_question "$*"; }
-  function ?? { sigil_web_question "$*"; }
   function + { sigil_run "$@"; }
-  function @ { sigil_goal "$*"; }
-  function @@ { sigil_goal_auto "$*"; }
 
   if [[ $- == *i* ]]; then
     alias ,='sigil_command'
     alias ,,='sigil_agent_step'
     alias ,,,='sigil_agent_step_auto'
-    alias '?'='sigil_question'
-    alias '??'='sigil_web_question'
     alias +='sigil_run'
-    alias @='sigil_goal'
-    alias @@='sigil_goal_auto'
   fi
 fi
 

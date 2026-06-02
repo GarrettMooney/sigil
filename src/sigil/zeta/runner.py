@@ -22,14 +22,13 @@ def run_agent_step(
     glyph: str,
     system: str | None = None,
     stdin_text: str = "",
-    goal: bool = False,
     max_steps: int = 8,
     allowed_tools: Iterable[str] | None = None,
 ) -> int:
     """Run a bounded Zeta agent step for CLI routes."""
     if not ensure_server():
         return 1
-    prompt = agent_prompt(objective, stdin_text=stdin_text, goal=goal)
+    prompt = agent_prompt(objective, stdin_text=stdin_text)
     enabled_tools = enabled_tool_tuple(allowed_tools)
     tool_label = "+".join(enabled_tools) if enabled_tools else "no tools"
     print(
@@ -125,18 +124,12 @@ def append_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
     return append_jsonl(runtime.TRANSCRIPT, {"type": event_type, **fields})
 
 
-def agent_prompt(objective: str, *, stdin_text: str, goal: bool) -> str:
+def agent_prompt(objective: str, *, stdin_text: str) -> str:
     sections = [
-        "Run one bounded goal step." if goal else "Run one bounded edit step.",
+        "Run one bounded edit step.",
         f"Objective: {objective}",
     ]
     if stdin_text:
         sections.append(f"Confirmed piped input:\n{stdin_text}")
-    if goal:
-        sections.append(
-            "After the step, stop. End with exactly one ZETA_STATUS line set "
-            "to continue, complete, or blocked, followed by one ZETA_NEXT line."
-        )
-    else:
-        sections.append("After the step, stop. Do not commit.")
+    sections.append("After the step, stop. Do not commit.")
     return "\n\n".join(sections)

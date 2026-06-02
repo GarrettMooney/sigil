@@ -67,8 +67,8 @@ def make_stub(tmp: Path) -> Path:
                 ;;
               "command draft executive summary") printf '%s\n' "stream command" ;;
               "ask hello") printf '%s\n' "answer" ;;
-              "op , hello") printf '%s\n%s\n' "echo recommended" "because it is safe" ;;
-              "op , draft executive summary") printf '%s\n%s\n' "echo stream recommended" "because stdin matters" ;;
+              "op , hello") printf '%s\n' "readonly answer" ;;
+              "op , draft executive summary") printf '%s\n' "readonly stream answer" ;;
               op*) printf '%s\n' "op:$*" ;;
               run*) printf '%s\n' "ran:${*:2}" ;;
               record-failure*) printf '%s\n' "recorded" ;;
@@ -147,7 +147,7 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_agent_step hello\n                    sigil_question hello\n                    sigil_web_question hello\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_agent_step hello\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
@@ -156,25 +156,21 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         assert read_log(tmp) == [
             "op , hello",
             *zeta_bash_turn_calls(),
-            "op ? hello",
-            "op ?? hello",
         ]
-        assert "echo recommended" in result.stdout
-        assert "because it is safe" in result.stdout
+        assert "readonly answer" in result.stdout
         assert "❯ bash   echo zeta" in result.stdout
         assert "Run zeta handoff." in result.stdout
-        assert "op:op ?? hello" in result.stdout
         assert "history=echo zeta" in result.stdout
 
 
-def test_bash_agent_and_goal_wrappers_call_operator_contract() -> None:
+def test_bash_agent_wrappers_call_zeta_loop() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    sigil_goal hello\n                    sigil_goal_auto hello\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    "
             ),
             tmp,
             stub,
@@ -183,12 +179,10 @@ def test_bash_agent_and_goal_wrappers_call_operator_contract() -> None:
         assert read_log(tmp) == [
             *zeta_bash_turn_calls(),
             *zeta_bash_turn_calls(),
-            "op @ hello",
-            "op @@ hello",
         ]
 
 
-def test_bash_recommendations_print_stdout_and_command_to_history() -> None:
+def test_bash_comma_prints_readonly_answer_without_history_insert() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -201,26 +195,7 @@ def test_bash_recommendations_print_stdout_and_command_to_history() -> None:
             stub,
         )
         assert_success(result)
-        assert result.stdout == (
-            "echo recommended\nbecause it is safe\nhistory=echo recommended\n"
-        )
-
-
-def test_bash_question_does_not_consume_staged_command() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "bash",
-            textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_command hello\n                    export SIGIL_STUB_STAGED='git diff --stat'\n                    sigil_question review\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert "op:op ? review" in result.stdout
-        assert "history=echo recommended" in result.stdout
+        assert result.stdout == "readonly answer\nhistory=\n"
 
 
 def test_bash_agent_step_does_not_consume_staged_command() -> None:
@@ -298,19 +273,17 @@ def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    printf 'diff\\n' | sigil_web_question review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_agent_step run it\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_agent_step run it\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op ?? review risky changes",
             "op , draft executive summary",
             *zeta_bash_turn_calls(),
         ]
-        assert "echo stream recommended" in result.stdout
-        assert "because stdin matters" in result.stdout
+        assert "readonly stream answer" in result.stdout
 
 
 def test_bash_records_every_non_sigil_turn_via_record_turn() -> None:
@@ -398,7 +371,7 @@ def test_bash_does_not_record_sigil_wrapper_commands() -> None:
             stub,
         )
         assert_success(result)
-        assert result.stdout == "echo recommended\nbecause it is safe\n"
+        assert result.stdout == "readonly answer\n"
         assert read_log(tmp) == ["op , hello"]
 
 
@@ -445,7 +418,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_command hello\n                    sigil_agent_step hello\n                    sigil_question hello\n                    sigil_web_question hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_command hello\n                    sigil_agent_step hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -454,33 +427,11 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         assert read_log(tmp) == [
             "op , hello",
             *zeta_bash_turn_calls(),
-            "op ? hello",
-            "op ?? hello",
         ]
-        assert "echo recommended" in result.stdout
-        assert "because it is safe" in result.stdout
+        assert "readonly answer" in result.stdout
         assert "❯ bash   echo zeta" in result.stdout
         assert "Run zeta handoff." in result.stdout
-        assert "op:op ?? hello" in result.stdout
         assert "history=echo zeta" in result.stdout
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_question_does_not_consume_staged_command() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "zsh",
-            textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_command hello\n                    export SIGIL_STUB_STAGED="git diff --stat"\n                    sigil_question review\n                    print -- "history=${history[$HISTCMD]}"\n                    '
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert "op:op ? review" in result.stdout
-        assert "history=echo recommended" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -521,14 +472,14 @@ def test_zsh_bare_agent_step_continues_after_shell_handoff() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_agent_and_goal_wrappers_call_operator_contract() -> None:
+def test_zsh_agent_wrappers_call_zeta_loop() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    sigil_goal hello\n                    sigil_goal_auto hello\n                    "
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    "
             ),
             tmp,
             stub,
@@ -537,8 +488,6 @@ def test_zsh_agent_and_goal_wrappers_call_operator_contract() -> None:
         assert read_log(tmp) == [
             *zeta_bash_turn_calls(),
             *zeta_bash_turn_calls(),
-            "op @ hello",
-            "op @@ hello",
         ]
 
 
@@ -550,20 +499,17 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    printf 'diff\\n' | sigil_web_question review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_agent_step run it\n                    "
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_agent_step run it\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op ?? review risky changes",
             "op , draft executive summary",
             *zeta_bash_turn_calls(),
         ]
-        assert "op:op ?? review risky changes" in result.stdout
-        assert "echo stream recommended" in result.stdout
-        assert "because stdin matters" in result.stdout
+        assert "readonly stream answer" in result.stdout
         assert "Run piped handoff." in result.stdout
 
 
@@ -575,14 +521,13 @@ def test_zsh_glyph_aliases_dispatch_piped_stdin_before_globbing() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    eval \"printf 'diff\\\\n' | ?? review risky changes\"\n                    eval \"printf 'notes\\\\n' | , draft executive summary\"\n                    eval \"printf 'cmd\\\\n' | ,, run it\"\n                    "
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    eval \"printf 'notes\\\\n' | , draft executive summary\"\n                    eval \"printf 'cmd\\\\n' | ,, run it\"\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op ?? review risky changes",
             "op , draft executive summary",
             *zeta_bash_turn_calls(),
         ]
@@ -619,7 +564,7 @@ def test_zsh_does_not_record_sigil_wrapper_commands() -> None:
             stub,
         )
         assert_success(result)
-        assert result.stdout == "echo recommended\nbecause it is safe\n"
+        assert result.stdout == "readonly answer\n"
         assert read_log(tmp) == ["op , hello"]
 
 
@@ -679,9 +624,9 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         assert_success(result)
         assert "__sigil_zshaddhistory" in result.stdout
         assert "comma=1" in result.stdout
-        assert "question=1" in result.stdout
-        assert "escaped_question=1" in result.stdout
+        assert "question=0" in result.stdout
+        assert "escaped_question=0" in result.stdout
         assert "run=1" in result.stdout
-        assert "at=1" in result.stdout
+        assert "at=0" in result.stdout
         assert "echo=0" in result.stdout
         assert (tmp / "zle.log").read_text(encoding="utf-8") == "user:echo hello\n"

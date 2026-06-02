@@ -28,7 +28,7 @@ SESSION_FILES = (
 
 RECENT_TURNS_FILE = "recent-turns.jsonl"
 RECENT_TURNS_LIMIT = 50
-TURN_SKIP_PREFIXES = (",", "?", "sigil ", "__sigil_")
+TURN_SKIP_PREFIXES = (",", "sigil ", "__sigil_")
 
 
 def session_paths() -> dict[str, str]:

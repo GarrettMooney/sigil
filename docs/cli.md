@@ -40,8 +40,8 @@ sigil status
 
 ## `sigil command`
 
-Generates one command proposal from a prompt, using the same comma (`,`)
-proposal route as the glyph.
+Generates one command proposal from a prompt. This is the explicit proposal
+route; the comma glyph is read-only.
 
 ```sh
 sigil command "find files over 10 MB"
@@ -52,8 +52,7 @@ git diff --name-only | sigil command "run the relevant tests"
 Sigil prints the proposed command to stdout, followed by a short explanation on
 its own line when present.
 
-When stdin is piped, Sigil asks before using the piped text (except with
-`--json`, which is treated as a machine-mode call and skips the prompt).
+When stdin is piped, Sigil uses the piped text as proposal context.
 
 JSON output:
 
@@ -166,39 +165,30 @@ Glyphs are installed shell functions over the CLI runtime. Install them with
 `sigil install zsh` or `sigil install bash`.
 
 ```text
-,    recommend one command
+,    answer from read-only context
 ,,   run one agent turn, confirming effects
 ,,,  run one agent turn, auto-approving routine effects
-?    answer from local read-only context
-??   answer from local context plus web search
 +    run one explicit command and capture stdout/stderr snippets
-@    run a bounded goal loop with checkpoints
-@@   run a bounded goal loop with routine auto-approval
 ```
 
 Examples:
 
 ```sh
-, find files larger than 10 MB
+, what changed in this repo?
+sigil command "find files larger than 10 MB"
 ,, run the relevant tests
 ,,, fix the failing parser test
-? why does git say this branch diverged?
-?? what changed upstream in the latest release?
 + cargo test
-@ fix the failing parser test
-@@ update docs and run checks
 ```
 
-`,` prints a command proposal. The zsh binding inserts it into the editable
-prompt buffer and adds it to shell history; the Bash binding adds it to history.
+`,` prints a read-only answer. It does not stage commands or write to shell
+history.
 `,,` asks before running one Zeta
 agent turn with read/search/edit/write tools. At the confirmation prompt, `e`
 opens `$VISUAL` or `$EDITOR` with the available tools, one per line, so tools
 can be removed before execution. A turn is one Zeta invocation and may include
 zero or more tool calls. `,,,` runs the same one-turn route without
-routine confirmation. `@` and `@@` repeat bounded turns toward a
-durable goal, stopping on completion, blockage, budget exhaustion, or
-interruption. Bash tool execution is blocked and staged as a command for review.
+routine confirmation. Bash tool execution is blocked and staged as a command for review.
 `+` is a shortcut for `sigil run`.
 
 To install bindings without glyphs:
@@ -446,7 +436,6 @@ By default, Sigil writes state under `~/.sigil/`.
 events.jsonl                              global event log
 sessions/<session-id>/last-failure.json   latest failed shell command
 sessions/<session-id>/last-act.jsonl      one-step Zeta agent action snapshots
-sessions/<session-id>/last-goal.jsonl     bounded goal loop snapshots
 sessions/<session-id>/last-question.jsonl same-session question transcript
 sessions/<session-id>/last-staged-command.jsonl latest blocked command staged for review
 sessions/<session-id>/last-tools.jsonl    latest Zeta tool trace

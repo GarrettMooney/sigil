@@ -54,7 +54,7 @@ Make these work reliably:
 
 ```sh
 , fix
-? why failed
+, why failed
 ```
 
 They should consume:
@@ -136,12 +136,12 @@ reading docs first.
       and permission errors.
 - [x] Attach the last failure to `,` and `?` whenever it is the latest shell
       turn, regardless of how the prompt is phrased.
-- [x] Make `? why failed` explain the last failure without asking for more
+- [x] Make `, why failed` explain the last failure without asking for more
       context.
 - [x] Capture bounded stdout and stderr automatically for ordinary shell turns,
       beyond the existing `SIGIL_FAILURE_STDOUT` and `SIGIL_FAILURE_STDERR`
       hook point.
-- [x] Add a deterministic demo for `, fix` and `? why failed`.
+- [x] Add a deterministic demo for `, fix` and `, why failed`.
 
 ### `sigil why`
 

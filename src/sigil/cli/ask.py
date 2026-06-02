@@ -6,8 +6,7 @@ import click
 
 from ._base import cli
 from ._shared import piped_stdin_text, question_with_stdin
-from .operators import run_stream_operator
-from ..question import (
+from ..answers import (
     ZETA_QUESTION_TOOLS,
     ZETA_QUESTION_TOOLS_WITH_WEB,
     ask,
@@ -28,24 +27,26 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
         prompt = continuation_prompt(prompt, discussion_turns())
         return ask(
             prompt,
-            glyph="??",
+            glyph="ask",
             tools=ZETA_QUESTION_TOOLS_WITH_WEB,
             use_web=True,
             append_transcript=True,
             json_output=json_output,
         )
     if stdin_text is not None:
-        return run_stream_operator(
-            "?",
-            prompt=question or "",
-            stdin_text=stdin_text,
+        prompt = question_with_stdin(question or "", stdin_text)
+        return ask(
+            prompt,
+            glyph="ask",
+            tools=ZETA_QUESTION_TOOLS,
+            use_web=False,
             json_output=json_output,
         )
     if question is None:
         raise click.UsageError("QUESTION is required unless stdin is piped.")
     return ask(
         question,
-        glyph="?",
+        glyph="ask",
         tools=ZETA_QUESTION_TOOLS,
         use_web=False,
         json_output=json_output,

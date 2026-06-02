@@ -401,7 +401,6 @@ def run_zeta_agent_step(
         glyph=route_glyph,
         system=ZETA_AGENT_SYSTEM_PROMPT,
         stdin_text=str(act.get("stdin") or ""),
-        goal=act.get("kind") == "goal",
         allowed_tools=enabled_tools,
     )
     print()
@@ -429,27 +428,17 @@ def compact_tool_label(tool: str) -> str:
 
 def zeta_agent_prompt(act: dict[str, Any]) -> str:
     """Build the prompt for one Zeta edit step."""
-    is_goal = act.get("kind") == "goal"
     sections = [
-        "Run one bounded Zeta goal step."
-        if is_goal
-        else "Run one bounded Zeta edit step.",
+        "Run one bounded Zeta edit step.",
         f"Working directory: {os.getcwd()}",
         f"Objective: {act.get('objective')}",
     ]
     stdin_text = str(act.get("stdin") or "")
     if stdin_text:
         sections.append(f"Confirmed piped input:\n{stdin_text}")
-    if is_goal:
-        sections.append(
-            "After the step, stop. Do not commit. End with exactly one "
-            "ZETA_STATUS line set to continue, complete, or blocked, followed "
-            "by one ZETA_NEXT line with the next checkpoint or blocker."
-        )
-    else:
-        sections.append(
-            "After the step, stop. Do not commit. Leave review to the user in Git/lazygit."
-        )
+    sections.append(
+        "After the step, stop. Do not commit. Leave review to the user in Git/lazygit."
+    )
     return "\n\n".join(sections)
 
 

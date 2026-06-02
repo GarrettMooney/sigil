@@ -8,20 +8,18 @@
 Natural-language shell assistant.
 
 Sigil turns short terminal intents into explicit, inspectable shell actions.
-Ask from local context, authorize web search, propose one command, delegate one
-agent step, or pursue a bounded goal without leaving your prompt.
+Ask from local context, propose one command with an explicit verb, run one
+command, or delegate one agent step without leaving your prompt.
 Sigil is inspired by IRC-style bot commands: lightweight punctuation prefixes
 that let you address an assistant inline without leaving the conversation.
 
 ![15-second Sigil terminal demo](docs/demo.gif)
 
 ```sh
-, find files over 10 MB in this repo excluding .git
+, what changed in this repo?
+sigil command "find files over 10 MB in this repo excluding .git"
 ,, run the relevant tests
-? what changed in this repo?
-?? what changed upstream in the latest release?
 + cargo test
-@ fix the failing parser test
 ```
 
 Sigil is alpha software. It is ready for early shell users who are comfortable
@@ -35,14 +33,10 @@ suggesting, executing, and explaining. Sigil keeps those routes separate.
 
 | Need | Glyph | What happens |
 | --- | --- | --- |
-| "Give me the command." | `,` | Proposes one command. Nothing runs. |
+| "Answer from context." | `,` | Read-only answer with local inspection tools. No shell is exposed. |
 | "Do one agent turn." | `,,` | Runs one Pi invocation after confirmation. |
 | "Do one routine turn." | `,,,` | Runs one Pi invocation without per-step confirmation. |
-| "Answer from local context." | `?` | Read-only answer with the read and search tools. No shell is exposed. |
-| "Answer with web." | `??` | Read-only answer with the read, search, and web search tools. |
 | "Run and capture this command." | `+` | Runs one explicit command, streams output, and records stdout/stderr snippets. |
-| "Work toward a goal." | `@` | Runs a bounded goal loop with checkpoints. |
-| "Continue routinely." | `@@` | Runs a bounded goal loop with steps auto-approved. |
 
 The result is a shell workflow with small blast radius, durable state, and a
 plain CLI underneath the punctuation.
@@ -91,8 +85,7 @@ updates the binding without duplicating the rc block.
 - A local OpenAI-compatible chat completions endpoint for command generation
   and Pi-backed routes (default `http://127.0.0.1:8080/v1/chat/completions`)
 - `pi`, the [pi-mono](https://github.com/earendil-works/pi) coding-agent CLI,
-  for `?`, `??`, `,,`, `,,,`, `@`, and `@@`. Only `,` works without it. Install
-  it with:
+  for `,`, `,,`, and `,,,`. Install it with:
 
   ```sh
   curl -fsSL https://pi.dev/install.sh | sh
@@ -119,44 +112,38 @@ SIGIL_GLOW_WIDTH=88
 Once the shell binding is installed, use the glyphs directly:
 
 ```sh
-# Propose one command. In zsh, the command is inserted into the prompt buffer.
-, find wav files larger than 50 MB
+# Ask from read-only context.
+, why did the last command fail?
+
+# Propose one command through the explicit CLI verb.
+sigil command "find wav files larger than 50 MB"
 
 # Run one confirmed agent step.
 ,, run the relevant tests
 
-# Ask from local read-only context.
-? why did the last command fail?
-
-# Ask with web search authorized.
-?? what changed in the latest release?
-
 # Run one command through Sigil's explicit capture path.
 + cargo test
 
-# Pursue a goal with checkpoints.
-@ fix the failing parser test
 ```
 
 Use stdin as context:
 
 ```sh
-git diff | ? review risky changes
+git diff | , review risky changes
 git diff --name-only | , run the relevant tests
 ```
 
-When stdin is piped into comma routes, Sigil previews the input and asks
-before using it. Question routes use piped input directly because they have
-no execute path.
+Read-only comma uses piped input directly because it has no execute path.
+Agent-step comma routes preview piped input and ask before using it.
 
 ## A Typical Flow
 
 ```sh
 # 1. Ask what changed.
-? summarize this repo state
+, summarize this repo state
 
 # 2. Ask for the smallest useful command.
-, run the focused tests for this change
+sigil command "run the focused tests for this change"
 
 # 3. Let Sigil run exactly one action.
 ,, run the focused tests
@@ -174,30 +161,22 @@ Installed zsh and Bash bindings expose these shortcuts:
 
 | Glyph | Name | Behavior |
 | --- | --- | --- |
-| `,` | recommend | Recommend one command. |
+| `,` | read | Answer from read-only context. |
 | `,,` | step | Run one agent turn, confirming effects. |
 | `,,,` | auto step | Run one agent turn, auto-approving routine effects. |
-| `?` | answer | Answer from local read-only context. |
-| `??` | web answer | Answer from local context plus web search. |
 | `+` | run | Run one explicit command and capture stdout/stderr snippets. |
-| `@` | goal | Run a bounded goal loop with checkpoints. |
-| `@@` | auto goal | Run a bounded goal loop with routine auto-approval. |
 
 Examples:
 
 ```sh
-, find wav files
+, summarize this repo state
+sigil command "find wav files"
 ,, run the relevant tests
 ,,, fix the failing parser test
-? why does git say this branch diverged?
-?? what does the remote branch contain?
 + cargo test
-@ fix the failing parser test
-@@ update docs and run checks
 ```
 
-`,` prints a command proposal. The zsh binding puts it in the editable prompt
-buffer with `print -z` and records it in shell history. Bash records it in
+`,` prints a read-only answer. It does not stage commands or write to shell
 history.
 
 `,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
@@ -209,12 +188,11 @@ routine confirmation. Shell calls inside those turns go through
 Sigil's `sigil_shell` Pi tool: Sigil prints the proposed command, asks whether
 to run or edit it, streams stdout/stderr to the terminal, records the turn, and
 returns the captured output plus exit status back to Pi so the same turn can
-continue. `@` and `@@` repeat bounded Pi turns toward a
-durable goal until completion, blockage, budget exhaustion, or interruption.
+continue.
 Agent steps always stream Pi's raw tool calls and prose through `glow` or
 `cat`; they do not replace the final answer with a compact summary.
 
-Question routes do not expose Bash. If an answer recommends a command, it is
+Read-only routes do not expose Bash. If an answer recommends a command, it is
 plain answer text, not a tool call or terminal handoff.
 
 `+` runs the command you provide through `sigil run`, streams stdout/stderr live,
@@ -234,13 +212,9 @@ Each route has a fixed effect on your system:
 
 | Route | Effect | Rule |
 | --- | --- | --- |
-| `,` | propose | Model-authored proposal only. |
+| `,` | read-only | Local answer route with no Bash tool. |
 | `,,` | execute-write | One confirmed Pi agent step. |
 | `,,,` | execute-write | One auto-approved Pi agent step. |
-| `@` | execute-write | Bounded goal loop with checkpoints. |
-| `@@` | execute-write | Bounded goal loop with routine auto-approval. |
-| `?` | read-only | Local answer route with no Bash tool. |
-| `??` | read-only | Read, search, plus web answer route with no Bash tool. |
 | `+` | execute | Explicit local command execution with stdout/stderr capture. |
 
 Every route records what it did to the event log. Inspect it with:

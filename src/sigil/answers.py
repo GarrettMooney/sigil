@@ -1,8 +1,8 @@
-"""Question flow for read-only shell answer routes.
+"""Read-only shell answer routes.
 
 This module owns discussion continuity. A fresh `sigil ask` resets the session
-question transcript. Glyph routes use explicit source authorization: `?` can
-read local context, and `??` can also search the web.
+answer transcript. Comma glyphs and named ask routes use explicit source
+authorization.
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ def recent_question_context(
     limit: int = RECENT_QUESTION_TURNS_LIMIT,
     per_turn_chars: int = RECENT_QUESTION_TURN_CHARS,
 ) -> str:
-    """Return a compact summary of the most recent ? / ?? exchange, if any."""
+    """Return a compact summary of the most recent question exchange, if any."""
     turns = discussion_turns()
     if not turns:
         return ""
@@ -105,7 +105,7 @@ def recent_question_context(
 def ask(
     question: str,
     *,
-    glyph: str = "?",
+    glyph: str = "ask",
     tools: str = ZETA_QUESTION_TOOLS,
     use_web: bool = False,
     append_transcript: bool = False,

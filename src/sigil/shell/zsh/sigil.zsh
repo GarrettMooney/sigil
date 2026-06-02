@@ -110,13 +110,9 @@ __sigil_glyphs_enabled() {
 # ── Command Wrappers ─────────────────────────────────────────────────────
 
 sigil_command() {
-  # `, prompt`: ask the model for one command, print the response, and insert the
-  # first line back into the editable prompt buffer.
-  local response command
-  response="$("$__sigil_bin" op "," "$@")" || return $?
-  print -r -- "$response"
-  command="${response%%$'\n'*}"
-  __sigil_prompt_insert "$command"
+  # `, prompt`: read-only assistant answer. It does not stage commands or mutate
+  # history; `,,` and `,,,` are the routes that can hand a command back to zsh.
+  "$__sigil_bin" op "," "$@"
 }
 
 __sigil_zeta_append() {
@@ -258,14 +254,6 @@ __sigil_zeta_turn() {
   return 1
 }
 
-__sigil_op() {
-  # Shared helper for agent/goal routes. They run through the generic operator
-  # CLI.
-  local op="$1"
-  shift
-  "$__sigil_bin" op "$op" "$@"
-}
-
 sigil_agent_step() {
   __sigil_zeta_turn "$@"
 }
@@ -274,26 +262,10 @@ sigil_agent_step_auto() {
   __sigil_zeta_turn "$@"
 }
 
-sigil_question() {
-  "$__sigil_bin" op "?" "$@"
-}
-
-sigil_web_question() {
-  "$__sigil_bin" op "??" "$@"
-}
-
 sigil_run() {
   # Explicit capture path: run exactly the argv the user provided, stream output
   # live, and let the CLI persist bounded stdout/stderr snippets.
   "$__sigil_bin" run "$@"
-}
-
-sigil_goal() {
-  __sigil_op "@" "$@"
-}
-
-sigil_goal_auto() {
-  __sigil_op "@@" "$@"
 }
 
 # ── Glyph Bindings ───────────────────────────────────────────────────────
@@ -303,11 +275,7 @@ if __sigil_glyphs_enabled; then
   function ',' { sigil_command "$@" }
   function ',,' { sigil_agent_step "$@" }
   function ',,,' { sigil_agent_step_auto "$@" }
-  function '?' { sigil_question "$@" }
-  function '??' { sigil_web_question "$@" }
   function '+' { sigil_run "$@" }
-  function '@' { sigil_goal "$@" }
-  function '@@' { sigil_goal_auto "$@" }
 
   # Aliases keep zsh from treating user prompts as glob patterns before our
   # functions receive them. `alias --` is required for `+` because zsh otherwise
@@ -315,11 +283,7 @@ if __sigil_glyphs_enabled; then
   alias ','='noglob sigil_command'
   alias ',,'='noglob sigil_agent_step'
   alias ',,,'='noglob sigil_agent_step_auto'
-  alias '?'='noglob sigil_question'
-  alias '??'='noglob sigil_web_question'
   alias -- '+'='noglob sigil_run'
-  alias '@'='noglob sigil_goal'
-  alias '@@'='noglob sigil_goal_auto'
 fi
 
 # ── zsh Command Lifecycle Hooks ──────────────────────────────────────────
@@ -346,7 +310,7 @@ __sigil_recordable_command() {
       ;;
     # Sigil glyph routes are prompts/instructions, not ordinary shell commands.
     # The CLI paths they call record their own structured events.
-    ,*|\?*|+*|@*)
+    ,*|+*)
       return 1
       ;;
     # Avoid recursive bookkeeping for direct Sigil calls and internal wrappers.
@@ -407,7 +371,7 @@ if __sigil_glyphs_enabled; then
     emulate -L zsh
     local line="${1%%$'\n'}"
     case "$line" in
-      ,*|\?*|\\\?*|+*|@*) return 1 ;;
+      ,*|+*) return 1 ;;
     esac
     return 0
   }

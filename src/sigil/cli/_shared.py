@@ -29,7 +29,8 @@ def question_with_stdin(question: str, stdin_text: str) -> str:
 def should_confirm_piped_input(invocation: object) -> bool:
     """Return whether an operator needs piped-input confirmation."""
     return (
-        getattr(invocation, "base", None) in {",", "@"}
+        getattr(invocation, "base", None) == ","
+        and getattr(invocation, "depth", 0) > 1
         and getattr(invocation, "mode", None) == "pipeline"
         and bool(getattr(invocation, "stdin", ""))
     )

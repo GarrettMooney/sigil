@@ -16,7 +16,6 @@ from sigil.operators import (
     parse_operator_token,
     proposal_user_prompt,
 )
-from sigil.goals import latest_step_status, parse_step_status, run_goal_loop
 from sigil.session import record_turn
 from sigil.state import append_jsonl, read_jsonl
 
@@ -33,13 +32,9 @@ def read_global_events(root: Path) -> list[dict[str, object]]:
 @pytest.mark.parametrize(
     ("token", "base", "depth"),
     [
-        ("?", "?", 1),
-        ("??", "?", 2),
         (",", ",", 1),
         (",,", ",", 2),
         (",,,", ",", 3),
-        ("@", "@", 1),
-        ("@@", "@", 2),
     ],
 )
 def test_parse_operator_token_repetition(
@@ -54,6 +49,8 @@ def test_parse_operator_token_repetition(
     "token",
     [
         "",
+        "?",
+        "??",
         "?^",
         "?:",
         "abc",
@@ -64,6 +61,8 @@ def test_parse_operator_token_repetition(
         "???",
         "????",
         ",,,,",
+        "@",
+        "@@",
         "@@@",
         "@@@@",
         "^^^^",
@@ -76,14 +75,14 @@ def test_parse_operator_token_rejects_invalid_tokens(token: str) -> None:
 
 def test_create_invocation_names_operator() -> None:
     invocation = create_invocation(
-        "??",
+        ",",
         prompt="review risky changes",
         stdin="diff",
         mode="pipeline",
     )
-    assert invocation.base == "?"
-    assert invocation.depth == 2
-    assert invocation.name == "answer"
+    assert invocation.base == ","
+    assert invocation.depth == 1
+    assert invocation.name == "read"
     assert invocation.prompt == "review risky changes"
     assert invocation.stdin == "diff"
     assert invocation.mode == "pipeline"
@@ -92,16 +91,16 @@ def test_create_invocation_names_operator() -> None:
 def test_op_cli_json_reports_parsed_invocation() -> None:
     result = CliRunner().invoke(
         cli,
-        ["op", "--json", "??", "review", "risky", "changes"],
+        ["op", "--json", ",", "review", "risky", "changes"],
         input="diff --git a/file b/file\n",
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload == {
-        "glyph": "??",
-        "base": "?",
-        "depth": 2,
-        "name": "answer",
+        "glyph": ",",
+        "base": ",",
+        "depth": 1,
+        "name": "read",
         "prompt": "review risky changes",
         "stdin": "diff --git a/file b/file\n",
         "mode": "pipeline",
@@ -112,71 +111,13 @@ def test_op_cli_json_does_not_run_operator() -> None:
     with patch("sigil.operators.chat_text", side_effect=AssertionError("no model")):
         result = CliRunner().invoke(
             cli,
-            ["op", "--json", "??", "review"],
+            ["op", "--json", ",", "review"],
             input="diff\n",
         )
     assert result.exit_code == 0, result.output
 
 
-def test_op_cli_routes_at_to_confirmed_goal_loop() -> None:
-    calls = []
-
-    def fake_run_goal_loop(*args: object, **kwargs: object) -> int:
-        calls.append((args, kwargs))
-        return 0
-
-    with patch("sigil.cli.operators.run_goal_loop", side_effect=fake_run_goal_loop):
-        result = CliRunner().invoke(cli, ["op", "@", "fix", "tests"])
-
-    assert result.exit_code == 0
-    assert calls == [
-        (
-            (),
-            {
-                "objective": "fix tests",
-                "stdin_text": "",
-                "confirm_steps": True,
-                "glyph": "@",
-            },
-        )
-    ]
-
-
-def test_op_cli_routes_double_at_to_auto_goal_loop() -> None:
-    calls = []
-
-    def fake_run_goal_loop(*args: object, **kwargs: object) -> int:
-        calls.append((args, kwargs))
-        return 0
-
-    with patch("sigil.cli.operators.run_goal_loop", side_effect=fake_run_goal_loop):
-        result = CliRunner().invoke(cli, ["op", "@@", "fix", "tests"])
-
-    assert result.exit_code == 0
-    assert calls[0][1]["objective"] == "fix tests"
-    assert calls[0][1]["confirm_steps"] is False
-    assert calls[0][1]["glyph"] == "@@"
-
-
-def test_op_cli_confirms_piped_at_before_goal_loop() -> None:
-    calls = []
-
-    def fake_run_goal_loop(*args: object, **kwargs: object) -> int:
-        calls.append((args, kwargs))
-        return 0
-
-    with (
-        patch("sigil.cli.operators.confirm_piped_input", return_value=True),
-        patch("sigil.cli.operators.run_goal_loop", side_effect=fake_run_goal_loop),
-    ):
-        result = CliRunner().invoke(cli, ["op", "@", "fix"], input="diff\n")
-
-    assert result.exit_code == 0
-    assert calls[0][1]["stdin_text"] == "diff\n"
-    assert calls[0][1]["confirm_steps"] is True
-
-
-def test_op_cli_runs_piped_double_question_operator_through_web_route() -> None:
+def test_op_cli_runs_piped_comma_through_readonly_route() -> None:
     calls = []
 
     def fake_ask(*args: object, **kwargs: object) -> int:
@@ -192,7 +133,7 @@ def test_op_cli_runs_piped_double_question_operator_through_web_route() -> None:
     ):
         result = CliRunner().invoke(
             cli,
-            ["op", "??", "review", "risky", "changes"],
+            ["op", ",", "review", "risky", "changes"],
             input="diff --git a/file b/file\n",
         )
     assert result.exit_code == 0, result.output
@@ -200,15 +141,16 @@ def test_op_cli_runs_piped_double_question_operator_through_web_route() -> None:
         (
             ("review risky changes\n\nPiped input:\ndiff --git a/file b/file\n",),
             {
-                "glyph": "??",
+                "glyph": ",",
                 "tools": "read,grep,ls",
                 "use_web": True,
+                "json_output": False,
             },
         )
     ]
 
 
-def test_question_operators_use_source_specific_routes() -> None:
+def test_comma_operator_uses_readonly_route() -> None:
     calls = []
 
     def fake_ask(*args: object, **kwargs: object) -> int:
@@ -216,42 +158,38 @@ def test_question_operators_use_source_specific_routes() -> None:
         return 0
 
     with patch("sigil.cli.operators.ask", side_effect=fake_ask):
-        first = CliRunner().invoke(cli, ["op", "?", "first", "question"])
-        second = CliRunner().invoke(cli, ["op", "??", "second", "question"])
+        result = CliRunner().invoke(cli, ["op", ",", "first", "question"])
 
-    assert first.exit_code == 0, first.output
-    assert second.exit_code == 0, second.output
+    assert result.exit_code == 0, result.output
     assert calls == [
         (
             ("first question",),
-            {"glyph": "?", "tools": "read,grep,ls", "use_web": False},
-        ),
-        (
-            ("second question",),
-            {"glyph": "??", "tools": "read,grep,ls", "use_web": True},
+            {
+                "glyph": ",",
+                "tools": "read,grep,ls",
+                "use_web": True,
+                "json_output": False,
+            },
         ),
     ]
 
 
-def test_triple_question_is_rejected() -> None:
+def test_question_operator_is_rejected() -> None:
     with patch("sigil.cli.operators.ask", side_effect=AssertionError("no ask")):
-        result = CliRunner().invoke(cli, ["op", "???", "explain", "this"])
+        result = CliRunner().invoke(cli, ["op", "?", "explain", "this"])
 
     assert result.exit_code == 2
-    assert "? operator depth must be 1 or 2" in result.output
+    assert "unsupported operator: ?" in result.output
 
 
-def test_triple_at_is_rejected() -> None:
-    with patch(
-        "sigil.cli.operators.run_goal_loop", side_effect=AssertionError("no goal")
-    ):
-        result = CliRunner().invoke(cli, ["op", "@@@", "fix"])
+def test_at_operator_is_rejected() -> None:
+    result = CliRunner().invoke(cli, ["op", "@", "fix"])
 
     assert result.exit_code == 2
-    assert "@ operator depth must be 1 or 2" in result.output
+    assert "unsupported operator: @" in result.output
 
 
-def test_op_cli_runs_piped_recommend_operator() -> None:
+def test_command_verb_runs_piped_proposal_operator() -> None:
     calls = {}
 
     def fake_chat_json(
@@ -269,12 +207,11 @@ def test_op_cli_runs_piped_recommend_operator() -> None:
     with (
         patch("sigil.operators.ensure_server", return_value=True),
         patch("sigil.operators.chat_json", side_effect=fake_chat_json),
-        patch("sigil.cli.operators.confirm_piped_input", return_value=True),
         patch("sigil.operators.append_event", return_value={}),
     ):
         result = CliRunner().invoke(
             cli,
-            ["op", ",", "draft", "an", "executive", "summary"],
+            ["command", "draft an executive summary"],
             input="meeting notes\n",
         )
     assert result.exit_code == 0, result.output
@@ -289,16 +226,12 @@ def test_op_cli_runs_piped_recommend_operator() -> None:
     assert "explanation" in schema["properties"]
 
 
-def test_op_cli_rejects_non_command_proposals() -> None:
-    with (
-        patch("sigil.operators.ensure_server", return_value=True),
-        patch(
-            "sigil.operators.chat_json",
-            return_value={"kind": "file_update", "body": "change example.py"},
-        ),
-        patch("sigil.operators.append_event", side_effect=AssertionError("no event")),
+def test_command_verb_rejects_non_command_proposals() -> None:
+    with patch(
+        "sigil.cli.command.run_command_proposal",
+        side_effect=RuntimeError("command route did not produce a proposal"),
     ):
-        result = CliRunner().invoke(cli, ["op", ",", "update", "example"])
+        result = CliRunner().invoke(cli, ["command", "update example"])
 
     assert result.exit_code == 1
     assert "did not produce a proposal" in result.stderr
@@ -520,161 +453,6 @@ def test_piped_triple_comma_denies_input_before_act_generation() -> None:
     assert "piped input declined" in result.stderr
 
 
-def test_parse_goal_step_status_lines() -> None:
-    assert parse_step_status("done\nZETA_STATUS: complete\nZETA_NEXT: review") == (
-        "complete",
-        "review",
-    )
-    assert parse_step_status("ZETA_STATUS: continue") == ("continue", "")
-    assert parse_step_status("SIGIL_STATUS: complete\nSIGIL_NEXT: legacy") == (
-        "complete",
-        "legacy",
-    )
-    assert parse_step_status("no status") is None
-
-
-def test_latest_goal_step_status_prefers_zeta_transcript() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "goal-session"},
-        ):
-            append_jsonl(
-                "last-question.jsonl",
-                {
-                    "role": "assistant",
-                    "content": "old\nZETA_STATUS: blocked\nZETA_NEXT: old",
-                },
-            )
-            append_jsonl(
-                "zeta-transcript.jsonl",
-                {
-                    "type": "assistant_message",
-                    "content": "done\nZETA_STATUS: complete\nZETA_NEXT: review",
-                },
-            )
-
-            assert latest_step_status() == ("complete", "review")
-
-
-def test_goal_loop_runs_until_complete() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "goal-session"},
-        ):
-            zeta_calls = []
-
-            def fake_run_pi(*args: object, **kwargs: object) -> int:
-                zeta_calls.append((args, kwargs))
-                append_jsonl(
-                    "last-question.jsonl",
-                    {
-                        "role": "assistant",
-                        "content": "done\nZETA_STATUS: complete\nZETA_NEXT: review",
-                    },
-                )
-                return 0
-
-            with (
-                patch("sigil.goals.prompt_on_tty", return_value="y\n"),
-                patch("sigil.goals.run_zeta_agent_step", side_effect=fake_run_pi),
-            ):
-                result = run_goal_loop(
-                    objective="fix tests",
-                    confirm_steps=True,
-                    glyph="@",
-                )
-            goal_events = read_jsonl("last-goal.jsonl")
-
-    assert result == 0
-    assert len(zeta_calls) == 1
-    assert zeta_calls[0][1]["glyph"] == "@"
-    assert goal_events[-1]["type"] == "goal_completed"
-    assert goal_events[-1]["goal"]["status"] == "completed"
-    assert goal_events[-1]["goal"]["last_status"] == "complete"
-
-
-def test_goal_loop_can_edit_tools_before_execution() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "goal-session"},
-        ):
-            zeta_calls = []
-
-            def fake_run_pi(*args: object, **kwargs: object) -> int:
-                zeta_calls.append((args, kwargs))
-                append_jsonl(
-                    "last-question.jsonl",
-                    {
-                        "role": "assistant",
-                        "content": "done\nZETA_STATUS: complete\nZETA_NEXT: review",
-                    },
-                )
-                return 0
-
-            prompts = iter(["e\n", "y\n"])
-
-            def fake_prompt(*args: object, **kwargs: object) -> str:
-                del args, kwargs
-                return next(prompts)
-
-            with (
-                patch("sigil.goals.prompt_on_tty", side_effect=fake_prompt),
-                patch("sigil.acts.edit_tools", return_value=["read", "bash"]),
-                patch("sigil.goals.run_zeta_agent_step", side_effect=fake_run_pi),
-            ):
-                result = run_goal_loop(
-                    objective="fix tests",
-                    confirm_steps=True,
-                    glyph="@",
-                )
-            goal_events = read_jsonl("last-goal.jsonl")
-
-    assert result == 0
-    assert len(zeta_calls) == 1
-    assert zeta_calls[0][1]["tools"] == "read,bash"
-    step = goal_events[-1]["goal"]["steps"][0]
-    assert step["tools"] == ["read", "bash"]
-    assert step["command"] == "zeta --tools read,bash"
-
-
-def test_auto_goal_loop_stops_on_unclear_status_without_prompting() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "goal-session"},
-        ):
-
-            def fake_run_pi(*args: object, **kwargs: object) -> int:
-                del args, kwargs
-                append_jsonl(
-                    "last-question.jsonl",
-                    {"role": "assistant", "content": "no structured status"},
-                )
-                return 0
-
-            with (
-                patch(
-                    "sigil.goals.prompt_on_tty",
-                    side_effect=AssertionError("no prompt"),
-                ),
-                patch("sigil.goals.run_zeta_agent_step", side_effect=fake_run_pi),
-            ):
-                result = run_goal_loop(
-                    objective="fix tests",
-                    confirm_steps=False,
-                    glyph="@@",
-                )
-            goal_events = read_jsonl("last-goal.jsonl")
-
-    assert result == 0
-    assert goal_events[-1]["type"] == "goal_blocked"
-    assert goal_events[-1]["goal"]["status"] == "blocked"
-    assert goal_events[-1]["goal"]["approval"] == "auto"
-
-
 def test_act_zeta_step_invokes_zeta_runner() -> None:
     captured: dict[str, object] = {}
 
@@ -698,7 +476,6 @@ def test_act_zeta_step_invokes_zeta_runner() -> None:
     assert isinstance(kwargs["system"], str)
     assert "bounded shell-native edit route" in kwargs["system"]
     assert kwargs["stdin_text"] == "notes"
-    assert kwargs["goal"] is False
     assert kwargs["allowed_tools"] == ["read", "grep", "edit"]
 
 
@@ -865,18 +642,37 @@ def test_act_show_and_abort_use_last_act_state() -> None:
     assert act_events[-1]["act"]["status"] == "aborted"
 
 
-def test_op_cli_denies_piped_comma_before_model_call() -> None:
+def test_op_cli_does_not_confirm_piped_comma_before_readonly_route() -> None:
+    calls = []
+
+    def fake_ask(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
     with (
-        patch("sigil.cli.operators.confirm_piped_input", return_value=False),
-        patch("sigil.operators.chat_json", side_effect=AssertionError("no model")),
+        patch(
+            "sigil.cli.operators.confirm_piped_input",
+            side_effect=AssertionError("no prompt"),
+        ),
+        patch("sigil.cli.operators.ask", side_effect=fake_ask),
     ):
         result = CliRunner().invoke(cli, ["op", ",", "summarize"], input="notes\n")
 
-    assert result.exit_code == 2
-    assert "piped input declined" in result.stderr
+    assert result.exit_code == 0
+    assert calls == [
+        (
+            ("summarize\n\nPiped input:\nnotes\n",),
+            {
+                "glyph": ",",
+                "tools": "read,grep,ls",
+                "use_web": True,
+                "json_output": False,
+            },
+        )
+    ]
 
 
-def test_op_cli_sends_piped_question_without_confirmation() -> None:
+def test_op_cli_rejects_piped_question_operator() -> None:
     calls = []
 
     def fake_ask(*args: object, **kwargs: object) -> int:
@@ -892,13 +688,9 @@ def test_op_cli_sends_piped_question_without_confirmation() -> None:
     ):
         result = CliRunner().invoke(cli, ["op", "?", "review"], input="diff\n")
 
-    assert result.exit_code == 0
-    assert calls == [
-        (
-            ("review\n\nPiped input:\ndiff\n",),
-            {"glyph": "?", "tools": "read,grep,ls", "use_web": False},
-        ),
-    ]
+    assert result.exit_code == 2
+    assert calls == []
+    assert "unsupported operator: ?" in result.output
 
 
 def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
@@ -926,7 +718,7 @@ def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
         (
             ("review\n\nPiped input:\ndiff\n",),
             {
-                "glyph": "??",
+                "glyph": "ask",
                 "tools": "read,grep,ls",
                 "use_web": True,
                 "append_transcript": True,
@@ -936,24 +728,34 @@ def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
     ]
 
 
-def test_op_cli_confirms_piped_comma_before_model_call() -> None:
+def test_op_cli_routes_piped_comma_to_readonly_answer() -> None:
+    calls = []
+
+    def fake_ask(*args: object, **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
     with (
-        patch("sigil.cli.operators.confirm_piped_input", return_value=True),
-        patch("sigil.operators.ensure_server", return_value=True),
         patch(
-            "sigil.operators.chat_json",
-            return_value={
-                "kind": "command",
-                "body": "cat notes",
-                "explanation": "uses stdin",
-            },
+            "sigil.cli.operators.confirm_piped_input",
+            side_effect=AssertionError("no prompt"),
         ),
-        patch("sigil.operators.append_event", return_value={}),
+        patch("sigil.cli.operators.ask", side_effect=fake_ask),
     ):
         result = CliRunner().invoke(cli, ["op", ",", "summarize"], input="notes\n")
 
     assert result.exit_code == 0
-    assert result.stdout == "cat notes\nuses stdin\n"
+    assert calls == [
+        (
+            ("summarize\n\nPiped input:\nnotes\n",),
+            {
+                "glyph": ",",
+                "tools": "read,grep,ls",
+                "use_web": True,
+                "json_output": False,
+            },
+        )
+    ]
 
 
 def test_op_cli_confirms_piped_double_comma_before_agent_step() -> None:
@@ -1019,8 +821,7 @@ def test_verb_commands_run_piped_stream_operators() -> None:
     with (
         patch("sigil.operators.ensure_server", return_value=True),
         patch("sigil.operators.chat_json", side_effect=fake_chat_json),
-        patch("sigil.cli.operators.ask", side_effect=fake_ask),
-        patch("sigil.cli.operators.confirm_piped_input", return_value=True),
+        patch("sigil.cli.ask.ask", side_effect=fake_ask),
         patch("sigil.operators.append_event", return_value={}),
     ):
         ask_result = CliRunner().invoke(
@@ -1041,10 +842,15 @@ def test_verb_commands_run_piped_stream_operators() -> None:
     assert ask_calls == [
         (
             ("review\n\nPiped input:\ndiff\n",),
-            {"glyph": "?", "tools": "read,grep,ls", "use_web": False},
+            {
+                "glyph": "ask",
+                "tools": "read,grep,ls",
+                "use_web": False,
+                "json_output": False,
+            },
         )
     ]
-    assert "Operator: , (propose)" in json_calls[0][1]
+    assert "Operator: command (command)" in json_calls[0][1]
 
 
 def test_command_verb_generates_proposal_without_stdin() -> None:
@@ -1092,7 +898,7 @@ def test_command_verb_json_emits_proposal_envelope() -> None:
 def test_op_cli_rejects_mixed_glyphs() -> None:
     result = CliRunner().invoke(cli, ["op", "?^"])
     assert result.exit_code == 2
-    assert "operator token must repeat one glyph" in result.output
+    assert "unsupported operator: ?" in result.output
 
 
 def test_op_cli_rejects_transform_until_colon_operator_exists() -> None:

@@ -11,7 +11,6 @@ Generate commands:
 ```sh
 sigil command "find large files"
 sigil command "show modified Python files"
-, run the relevant tests
 ```
 
 Ask questions:
@@ -19,8 +18,7 @@ Ask questions:
 ```sh
 sigil ask "what changed in this repo?"
 sigil ask --follow-up "what should I test?"
-? why did that command fail?
-?? what changed in the latest release notes?
+, why did that command fail?
 ```
 
 Work from stdin:
@@ -28,7 +26,7 @@ Work from stdin:
 ```sh
 git diff | sigil ask "review risky changes"
 git diff --name-only | sigil command "choose a focused test command"
-git diff | ? explain the riskiest part
+git diff | , explain the riskiest part
 ```
 
 Run one agent step:
@@ -44,24 +42,13 @@ Let Zeta take one routine bounded step:
 sigil act show
 ```
 
-Pursue a bounded goal:
-
-```sh
-@ fix the failing parser test
-@@ update docs and run checks
-```
-
 ## Review Points
 
 The shell remains the review boundary:
 
-- `,` proposes and does not execute.
+- `,` answers from read-only context.
 - `,,` runs one Zeta agent step after confirming effects.
 - `,,,` runs one Zeta agent step without routine confirmation.
-- `@` runs a bounded goal loop with checkpoints.
-- `@@` runs a bounded goal loop with routine auto-approval.
-- `?` answers from local read-only context.
-- `??` answers from local context plus web search.
 
 ## Session Continuity
 

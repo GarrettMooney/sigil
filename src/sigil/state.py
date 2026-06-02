@@ -1,8 +1,8 @@
 """Persistent state for Sigil sessions.
 
 Global state captures audit/debug events. Session state captures continuity for
-one shell, so multiple terminal windows do not overwrite each other's `??` or
-`,,` context.
+one shell, so multiple terminal windows do not overwrite each other's comma
+context.
 """
 
 from __future__ import annotations

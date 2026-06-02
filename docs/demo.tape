@@ -33,10 +33,10 @@ Type ",, find files over 10 MB in this repo excluding .git"
 Enter
 Sleep 3500ms
 
-Type "? Do not use tools. In one sentence, why skip .git in a find command?"
+Type ", Do not use tools. In one sentence, why skip .git in a find command?"
 Enter
 Sleep 12s
 
-Type "?? Even shorter. Do not use tools."
+Type "sigil ask --follow-up \"Even shorter. Do not use tools.\""
 Enter
 Sleep 18s

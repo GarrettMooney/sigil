@@ -38,6 +38,6 @@ This keeps the recordings focused on the workflow:
 
 - shell glyphs over a boring CLI
 - normal Git and lazygit in the middle of the flow
-- read-only question routes
+- read-only answer routes
 - explicit proposal, execution, and act boundaries
 - inspectable event history

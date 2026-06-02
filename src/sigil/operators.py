@@ -8,22 +8,18 @@ from typing import Literal, cast
 from .model import chat_json, chat_text, ensure_server
 from .state import append_event, append_jsonl, read_jsonl
 from .failure import active_failure_context
-from .question import recent_question_context
+from .answers import recent_question_context
 from .session import recent_turns_context
 
-OperatorBase = Literal["?", ",", "@"]
+OperatorBase = Literal[","]
 
 OPERATOR_NAMES: dict[OperatorBase, str] = {
-    "?": "answer",
-    ",": "propose",
-    "@": "goal",
+    ",": "read",
 }
 
 SUPPORTED_OPERATORS = frozenset(OPERATOR_NAMES)
 OPERATOR_MAX_DEPTHS: dict[OperatorBase, int] = {
-    "?": 2,
     ",": 3,
-    "@": 2,
 }
 MAX_STDIN_CHARS = 120_000
 MAX_EVENT_OUTPUT_CHARS = 4000
@@ -116,8 +112,7 @@ def parse_operator_token(token: str) -> tuple[OperatorBase, int]:
     Examples:
 
     ```text
-    ?   -> ("?", 1)
-    ??  -> ("?", 2)
+    ,   -> (",", 1)
     ,,, -> (",", 3)
     ```
     """
@@ -164,18 +159,9 @@ def run_invocation(invocation: OperatorInvocation) -> OperatorResult:
         )
     if not ensure_server():
         raise SystemExit(1)
-
     system = operator_system_prompt(invocation)
     user = operator_user_prompt(invocation)
-    proposal = run_proposal_model(invocation, system, user)
-    model_output = (
-        proposal.body if proposal is not None else run_model(invocation, system, user)
-    )
-    output = (
-        proposal.display()
-        if proposal is not None and invocation.depth == 1
-        else model_output
-    )
+    output = run_model(invocation, system, user)
     event = append_event(
         {
             "type": "operator_completed",
@@ -184,19 +170,56 @@ def run_invocation(invocation: OperatorInvocation) -> OperatorResult:
             "glyph": invocation.glyph,
         }
     )
-    if invocation.base == "?":
-        append_inspect_turns(invocation, output, event)
+    append_inspect_turns(invocation, output, event)
     return OperatorResult(
         output=output,
-        command=proposal.body if proposal is not None else None,
-        explanation=proposal.explanation if proposal is not None else "",
     )
 
 
 def operator_system_prompt(invocation: OperatorInvocation) -> str:
     """Return the system prompt for an operator invocation."""
-    base = INSPECT_SYSTEM if invocation.base == "?" else RECOMMEND_SYSTEM
-    return f"{base}\n\nDepth: {invocation.depth}. {depth_guidance(invocation)}"
+    return (
+        f"{INSPECT_SYSTEM}\n\nDepth: {invocation.depth}. {depth_guidance(invocation)}"
+    )
+
+
+def run_command_proposal(
+    *,
+    prompt: str,
+    stdin: str,
+    mode: str = "interactive",
+) -> OperatorResult:
+    """Run the named command-proposal route."""
+    if not ensure_server():
+        raise SystemExit(1)
+    invocation = OperatorInvocation(
+        glyph="command",
+        base=",",
+        depth=1,
+        name="command",
+        prompt=prompt,
+        stdin=stdin,
+        mode=mode,
+    )
+    system = f"{RECOMMEND_SYSTEM}\n\nDepth: 1. Return one concrete shell command."
+    user = proposal_user_prompt(invocation)
+    proposal = run_proposal_model(invocation, system, user)
+    if proposal is None:
+        raise RuntimeError("command route did not produce a proposal")
+    output = proposal.display()
+    append_event(
+        {
+            "type": "operator_completed",
+            "operator": invocation.to_dict(),
+            "output_snippet": output[:MAX_EVENT_OUTPUT_CHARS],
+            "glyph": invocation.glyph,
+        }
+    )
+    return OperatorResult(
+        output=output,
+        command=proposal.body,
+        explanation=proposal.explanation,
+    )
 
 
 def run_proposal_model(
@@ -204,12 +227,12 @@ def run_proposal_model(
     system: str,
     user: str,
 ) -> TypedProposal | None:
-    """Run the model for typed comma proposals."""
-    if invocation.base == "," and invocation.depth == 1:
+    """Run the model for typed command proposals."""
+    if invocation.name == "command":
         data = chat_json(system, user, PROPOSAL_SCHEMA)
         proposal = proposal_from_json(data, explanation_required=True)
         if not proposal:
-            raise RuntimeError(", did not produce a proposal")
+            raise RuntimeError("command route did not produce a proposal")
         return proposal
     return None
 
@@ -246,19 +269,15 @@ def run_model(invocation: OperatorInvocation, system: str, user: str) -> str:
 
 def depth_guidance(invocation: OperatorInvocation) -> str:
     """Return operator-specific guidance for repeated glyph depth."""
-    if invocation.base == ",":
-        return "Comma means recommend one concrete next action."
-    return {
-        1: "Use a quick pass.",
-        2: "Use a deeper pass and call out important caveats.",
-    }.get(invocation.depth, "Use a thorough pass and be explicit about uncertainty.")
+    return (
+        "Use read-only local context and answer directly. "
+        "Do not stage or propose commands as an action."
+    )
 
 
 def operator_user_prompt(invocation: OperatorInvocation) -> str:
     """Return the user prompt sent to the model."""
-    if invocation.base == "?":
-        return inspect_user_prompt(invocation)
-    return proposal_user_prompt(invocation)
+    return inspect_user_prompt(invocation)
 
 
 def proposal_user_prompt(invocation: OperatorInvocation) -> str:
@@ -301,7 +320,7 @@ def bounded_stdin(stdin: str) -> tuple[str, str]:
 
 
 def proposal_instruction() -> str:
-    """Return proposal guidance for a comma proposal."""
+    """Return proposal guidance for a command proposal."""
     return "Return exactly one command proposal. Use kind=command."
 
 
@@ -362,9 +381,7 @@ def append_inspect_turns(
 
 def default_prompt(invocation: OperatorInvocation) -> str:
     """Return a fallback prompt for bare operator invocations."""
-    if invocation.base == "?":
-        return "Inspect and summarize the input."
-    return "Recommend the best next action."
+    return "Inspect and summarize the current context."
 
 
 def readable_target_files(lines: list[str]) -> list[tuple[Path, str]]:

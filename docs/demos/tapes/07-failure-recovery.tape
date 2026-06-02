@@ -28,7 +28,7 @@ Show
 Type "uv run pytest"
 Enter
 Sleep 900ms
-Type "? why failed"
+Type ", why failed"
 Enter
 Sleep 1700ms
 Type ", fix"
