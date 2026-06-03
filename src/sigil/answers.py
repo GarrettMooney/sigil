@@ -21,7 +21,7 @@ from .state import (
     write_jsonl,
 )
 from .zeta import runtime
-from .zeta.display import render_tool_start
+from .display import render_tool_start
 
 
 ANSWER_ROUTE = "answer"
@@ -30,7 +30,8 @@ ANSWER_REQUEST_EVENT = "answer_requested"
 ANSWER_SYSTEM_PROMPT = (
     "Answer concisely. You are responding to a quick question typed at a shell "
     "prompt. The available tools are read, grep, and ls only. Use read for "
-    "files, ls for directory contents, and grep to search local text. Do not "
+    "files, ls for directory contents, file sizes, and recursive size-filtered "
+    "listings, and grep to search local text. Do not "
     "propose shell commands just to inspect files or directories; inspect them "
     "through the available tools. If a 'Recent shell activity' block appears "
     "in the user message, it already shows the last few commands. For older "

@@ -65,8 +65,41 @@ def test_zeta_tool_ls_lists_directory_contents(tmp_path: Path) -> None:
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["content"][0]["text"].splitlines() == ["src/", "pyproject.toml"]
+    assert data["content"][0]["text"].splitlines() == [
+        "-\tdir\tsrc/",
+        "10\tfile\tpyproject.toml",
+    ]
     assert data["metadata"]["entries"] == 2
+
+
+def test_zeta_tool_ls_can_filter_large_files_without_shelling_out(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "large-object").write_bytes(b"x" * 12)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "large.bin").write_bytes(b"x" * 12)
+    (tmp_path / "small.txt").write_bytes(b"x" * 4)
+
+    result = CliRunner().invoke(
+        cli,
+        ["tool", "ls"],
+        input=json.dumps(
+            {
+                "path": str(tmp_path),
+                "recursive": True,
+                "min_size_bytes": 10,
+                "exclude": [".git"],
+            }
+        ),
+    )
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["content"][0]["text"].splitlines() == ["12\tfile\tsrc/large.bin"]
+    assert data["metadata"]["entries"] == 1
+    assert data["metadata"]["exclude"] == [".git"]
 
 
 def test_zeta_tool_edit_writes_patch_artifact() -> None:
