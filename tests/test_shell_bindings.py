@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import pytest
 import os
 import shutil
@@ -24,6 +25,12 @@ def make_stub(tmp: Path) -> Path:
             if [ "$*" = "transcript shell-result" ]; then
               printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
               printf '%s\n' '{"id":"shell-result"}'
+              exit 0
+            fi
+            if [ "$*" = "transcript shell-turn" ]; then
+              payload="$(cat)"
+              printf '%s\t%s\n' "$*" "$payload" >> "$SIGIL_STUB_LOG"
+              printf '%s\n' '{"ok":true}'
               exit 0
             fi
             printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
@@ -121,6 +128,15 @@ def read_log(tmp: Path) -> list[str]:
 
 def zeta_bash_turn_calls() -> list[str]:
     return ["model stream", "tool bash --analyze", "tool bash"]
+
+
+def shell_turn_payloads(tmp: Path) -> list[dict[str, object]]:
+    payloads = []
+    for line in read_log(tmp):
+        if not line.startswith("transcript shell-turn\t"):
+            continue
+        payloads.append(json.loads(line.split("\t", 1)[1]))
+    return payloads
 
 
 def test_bash_wrappers_call_current_cli_contract() -> None:
@@ -285,6 +301,26 @@ def test_bash_does_not_record_ordinary_turns_ambiently() -> None:
         assert read_log(tmp) == []
 
 
+def test_bash_records_turns_only_after_zeta_handoff() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_agent_step hello >/dev/null\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"echo edited\"; }\n                    true\n                    __sigil_zeta_prompt_capture\n                    wait\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        payloads = shell_turn_payloads(tmp)
+        assert len(payloads) == 1
+        assert payloads[0]["command"] == "echo edited"
+        assert payloads[0]["status"] == 0
+        assert payloads[0]["cwd"] == str(ROOT)
+
+
 def test_bash_does_not_install_prompt_recording_hook() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -383,6 +419,27 @@ def test_bash_failure_snippet_env_is_not_ambiently_recorded() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == []
+
+
+def test_bash_passes_failure_snippets_during_zeta_handoff_capture() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                '                    source src/sigil/shell/bash/sigil.bash\n                    sigil_agent_step hello >/dev/null\n                    __sigil_history_entry() { printf \'1\\t%s\\n\' "bad command"; }\n                    export SIGIL_FAILURE_STDOUT="stdout line"\n                    export SIGIL_FAILURE_STDERR="stderr line"\n                    false\n                    __sigil_zeta_prompt_capture || true\n                    wait\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        payloads = shell_turn_payloads(tmp)
+        assert len(payloads) == 1
+        assert payloads[0]["command"] == "bad command"
+        assert payloads[0]["status"] == 1
+        assert payloads[0]["stdout_snippet"] == "stdout line"
+        assert payloads[0]["stderr_snippet"] == "stderr line"
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -576,6 +633,27 @@ def test_zsh_does_not_record_ordinary_turns_ambiently() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == []
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_records_turns_only_after_zeta_handoff() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_agent_step hello >/dev/null\n                    __sigil_zeta_before_command "echo edited"\n                    true\n                    __sigil_zeta_after_command_before_prompt\n                    wait\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        payloads = shell_turn_payloads(tmp)
+        assert len(payloads) == 1
+        assert payloads[0]["command"] == "echo edited"
+        assert payloads[0]["status"] == 0
+        assert payloads[0]["cwd"] == str(ROOT)
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

@@ -137,13 +137,13 @@ __sigil_zeta_recordable_command() {
 
 __sigil_zeta_record_shell_turn() {
   local command="$1"
-  local status="$2"
+  local exit_status="$2"
   local payload stdout_snippet stderr_snippet
   stdout_snippet="${SIGIL_FAILURE_STDOUT:-}"
   stderr_snippet="${SIGIL_FAILURE_STDERR:-}"
   payload="$(printf '{"command":%s,"status":%s,"cwd":%s,"stdout_snippet":%s,"stderr_snippet":%s}' \
     "$(__sigil_json_string "$command")" \
-    "$status" \
+    "$exit_status" \
     "$(__sigil_json_string "$PWD")" \
     "$(__sigil_json_string "$stdout_snippet")" \
     "$(__sigil_json_string "$stderr_snippet")")"
@@ -156,13 +156,13 @@ __sigil_zeta_before_command() {
 }
 
 __sigil_zeta_after_command_before_prompt() {
-  local status=$?
+  local exit_status=$?
   local command="$__sigil_zeta_current_command"
   __sigil_zeta_current_command=""
   if [[ "$__sigil_zeta_capture_active" == "1" ]] && __sigil_zeta_recordable_command "$command"; then
-    __sigil_zeta_record_shell_turn "$command" "$status"
+    __sigil_zeta_record_shell_turn "$command" "$exit_status"
   fi
-  return "$status"
+  return "$exit_status"
 }
 
 # ── Command Wrappers ─────────────────────────────────────────────────────

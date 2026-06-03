@@ -7,7 +7,7 @@ from typing import Any, cast
 from click.testing import CliRunner
 
 from sigil import answers as answers_runner
-from sigil.session import record_turn
+from sigil.session import recent_turns, record_turn
 from sigil.zeta import runtime as zeta
 from sigil.zeta.cli import cli
 
@@ -101,6 +101,38 @@ def test_zeta_transcript_append_and_tail(tmp_path: Path, monkeypatch) -> None:
     data = json.loads(tail.output)
     assert data["events"][0]["type"] == "tool_call"
     assert data["events"][0]["name"] == "read"
+
+
+def test_zeta_transcript_shell_turn_records_recent_turn(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+
+    result = CliRunner().invoke(
+        cli,
+        ["transcript", "shell-turn"],
+        input=json.dumps(
+            {
+                "command": "uv run pytest",
+                "status": 1,
+                "cwd": "/repo",
+                "stderr_snippet": "test failed",
+            }
+        ),
+    )
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["type"] == "shell_turn_recorded"
+    assert data["command"] == "uv run pytest"
+    turns = recent_turns()
+    assert len(turns) == 1
+    assert turns[0]["command"] == "uv run pytest"
+    assert turns[0]["status"] == 1
+    assert turns[0]["turn_cwd"] == "/repo"
+    assert turns[0]["stderr_snippet"] == "test failed"
 
 
 def test_zeta_patch_analysis_extracts_paths() -> None:
