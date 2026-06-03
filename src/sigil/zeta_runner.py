@@ -9,10 +9,9 @@ from __future__ import annotations
 import sys
 from typing import Any, Iterable
 
-from .display import render_tool_start
+from .display import render_handoff_lines, render_tool_start, render_zeta_status
 from .model import ensure_server
 from .state import append_jsonl
-from .tty import MUTED, RESET
 from .zeta import runtime
 
 
@@ -30,10 +29,12 @@ def run_agent_step(
         return 1
     prompt = agent_prompt(objective, stdin_text=stdin_text)
     enabled_tools = enabled_tool_tuple(allowed_tools)
-    tool_label = "+".join(enabled_tools) if enabled_tools else "no tools"
-    print(
-        f"{MUTED}❯ zeta {glyph:<5} · {tool_label} · one step{RESET}",
-        file=sys.stderr,
+    render_zeta_status(
+        glyph,
+        enabled_tools,
+        "one step",
+        output=sys.stderr,
+        color_enabled=True,
     )
     append_jsonl(
         runtime.TRANSCRIPT,
@@ -109,15 +110,8 @@ def run_agent_tool_action(action: dict[str, Any], *, glyph: str) -> int | None:
 
 
 def print_handoff(handoff: dict[str, Any]) -> None:
-    reason = str(handoff.get("reason") or "")
-    command = str(handoff.get("command") or "")
-    artifact = str(handoff.get("artifact") or "")
-    if reason:
-        print(reason)
-    if artifact:
-        print(f"artifact: {artifact}")
-    if command:
-        print(command)
+    for line in render_handoff_lines(handoff):
+        print(line)
 
 
 def append_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:

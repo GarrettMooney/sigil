@@ -10,13 +10,17 @@ import tempfile
 import uuid
 from typing import Any
 
+from .display import (
+    render_act_objective_line,
+    render_act_tools_line,
+    render_zeta_status,
+)
 from .state import append_event, append_jsonl, read_jsonl
-from .tty import MUTED, RESET, clear_lines_on_tty, open_tty_fd, prompt_on_tty
+from .tty import clear_lines_on_tty, open_tty_fd, prompt_on_tty
 from .zeta_runner import run_agent_step
 
 LAST_ACT = "last-act.jsonl"
 MAX_EVENT_OUTPUT_CHARS = 4000
-TRACE_LABEL_WIDTH = 5
 ZETA_AGENT_TOOLS = "read,grep,bash,edit,write"
 
 ZETA_AGENT_SYSTEM_PROMPT = (
@@ -242,13 +246,12 @@ def next_pending_step(act: dict[str, Any]) -> dict[str, Any] | None:
 
 def print_act(act: dict[str, Any]) -> None:
     """Print a compact act overview."""
-    print(f"objective: {act.get('objective')}")
+    print(render_act_objective_line(act))
 
 
 def print_next_step(step: dict[str, Any]) -> None:
     """Print the tools available for the next Zeta step."""
-    tools = tools_from_step(step)
-    print(f"❯ {'tools':<{TRACE_LABEL_WIDTH}}  {tools}")
+    print(render_act_tools_line(tools_from_step(step)))
 
 
 def read_step_decision(prompt: str = "run? [y/N/e] ") -> str:
@@ -385,16 +388,16 @@ def run_zeta_agent_step(
     """Run one non-interactive Zeta edit step."""
     route_glyph = glyph or str(act.get("glyph") or ",,,")
     enabled_tools = effective_zeta_tools(tools)
-    tool_label = "+".join(compact_tool_label(tool) for tool in enabled_tools)
-    if not tool_label:
-        tool_label = "no tools"
     approval = str(act.get("approval") or "confirm")
     step_label = (
         "one auto-approved step" if approval == "auto" else "one confirmed step"
     )
-    print(
-        f"{MUTED}❯ zeta {route_glyph:<5} · {tool_label} · {step_label}{RESET}",
-        file=sys.stderr,
+    render_zeta_status(
+        route_glyph,
+        enabled_tools,
+        step_label,
+        output=sys.stderr,
+        color_enabled=True,
     )
     exit_code = run_agent_step(
         str(act.get("objective") or ""),
@@ -419,11 +422,6 @@ def effective_zeta_tools(
         names = tools
     enabled = normalize_tool_names([str(name) for name in names])
     return enabled
-
-
-def compact_tool_label(tool: str) -> str:
-    """Return a compact label for a tool shown in the step banner."""
-    return tool
 
 
 def zeta_agent_prompt(act: dict[str, Any]) -> str:

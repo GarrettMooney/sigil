@@ -10,29 +10,22 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
-import threading
-import time
 from dataclasses import dataclass
 from typing import TextIO, cast
 
+from .display import (
+    Spinner,
+    compact_answer_summary,
+    is_interactive,
+    open_terminal_output,
+    render_answer,
+    render_stream_tool_start,
+    should_color,
+    summarize,
+)
 from .state import ANSWER_TRANSCRIPT, append_event, append_jsonl
-from .tty import MUTED, RESET
-
-DEFAULT_GLOW_STYLE = "notty"
-DEFAULT_GLOW_WIDTH = "88"
-TRACE_LABEL_WIDTH = 5
-
-
-def renderer_command() -> list[str]:
-    """Return the Markdown renderer command for interactive Zeta answers."""
-    if not shutil.which("glow"):
-        return ["cat"]
-    style = os.environ.get("ZETA_GLOW_STYLE") or DEFAULT_GLOW_STYLE
-    width = os.environ.get("ZETA_GLOW_WIDTH") or DEFAULT_GLOW_WIDTH
-    return ["glow", "--style", style, "--width", width, "-"]
 
 
 def run_zeta_stream(
@@ -94,23 +87,6 @@ def inherited_terminal_fds(env: dict[str, str] | None = None) -> tuple[int, ...]
     return (fd,)
 
 
-def render_answer(answer: str, stdout: TextIO) -> None:
-    """Render the finished answer once, through the Markdown renderer when on a tty."""
-    if not answer:
-        return
-    cmd = renderer_command()
-    if cmd[0] != "cat" and is_interactive(stdout):
-        try:
-            stdout.write("\n")
-            stdout.flush()
-            subprocess.run(cmd, input=answer, text=True, stdout=stdout, check=False)
-            return
-        except OSError:
-            pass
-    stdout.write(f"\n{answer}\n")
-    stdout.flush()
-
-
 TOOL_START_EVENT_TYPES = {
     "tool_execution_start",
     "tool_call",
@@ -123,63 +99,6 @@ TOOL_END_EVENT_TYPES = {
     "tool_call_result",
     "function_call_result",
 }
-
-
-def is_interactive(stream: TextIO) -> bool:
-    """Return whether a stream is attached to an interactive terminal."""
-    return bool(getattr(stream, "isatty", lambda: False)())
-
-
-def should_color(stream: TextIO) -> bool:
-    """Return whether terminal color should be emitted to a stream."""
-    return is_interactive(stream) and "NO_COLOR" not in os.environ
-
-
-def open_terminal_output() -> TextIO | None:
-    """Open the controlling terminal for live-only output when available."""
-    try:
-        return open("/dev/tty", "w", encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-
-
-def muted(text: str, *, enabled: bool) -> str:
-    """Apply muted terminal styling when color is enabled."""
-    if not enabled:
-        return text
-    return f"{MUTED}{text}{RESET}"
-
-
-def clear_status(stderr: TextIO) -> None:
-    """Erase the transient spinner/status line before printing durable output."""
-    stderr.write("\r\033[K")
-    stderr.flush()
-
-
-def summarize(tool: str, args: object) -> str:
-    """Extract a short human-readable label for a tool call."""
-    if not isinstance(args, dict):
-        return ""
-    tool_args = cast(dict[str, object], args)
-    if tool == "read":
-        return str(tool_args.get("path") or tool_args.get("file_path") or "")
-    if tool in {"edit", "write"}:
-        return str(tool_args.get("path") or tool_args.get("file_path") or "")
-    if tool == "bash":
-        return str(tool_args.get("command") or tool_args.get("cmd") or "")
-    if tool in {"grep", "find", "ls"}:
-        return str(
-            tool_args.get("pattern")
-            or tool_args.get("query")
-            or tool_args.get("path")
-            or tool_args.get("glob")
-            or ""
-        )
-    return " ".join(
-        f"{k}={v}"
-        for k, v in tool_args.items()
-        if isinstance(v, (str, int, float, bool))
-    )
 
 
 def event_payload(event: dict[str, object]) -> dict[str, object]:
@@ -316,133 +235,6 @@ def tool_end_event(event: dict[str, object]) -> str | None:
     return tool_name(payload)
 
 
-def compact_tool_label(tool: object) -> str:
-    """Return the short label used in compact act traces."""
-    if tool == "bash":
-        return "check"
-    if tool == "grep":
-        return "search"
-    if tool == "ls":
-        return "list"
-    return str(tool or "tool")
-
-
-def compact_detail(detail: str, *, limit: int = 120) -> str:
-    """Shorten paths and commands for compact terminal display."""
-    text = " ".join(detail.split())
-    if not text:
-        return ""
-    try:
-        path = os.path.relpath(text, os.getcwd())
-    except ValueError:
-        path = text
-    if not path.startswith(".."):
-        text = path
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3] + "..."
-
-
-def compact_answer_summary(answer: str, *, limit: int = 180) -> str:
-    """Return a one-line completion summary from Zeta's final answer."""
-    lines = []
-    in_fence = False
-    for raw_line in answer.splitlines():
-        line = raw_line.strip()
-        if line.startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence or not line:
-            continue
-        line = line.strip("*`- ")
-        if line.lower().startswith("verification command"):
-            break
-        lines.append(line)
-    start = None
-    for index in range(len(lines) - 1, -1, -1):
-        lower = lines[index].lower()
-        if "all tests pass" in lower or "what changed" in lower:
-            start = index
-            break
-    if start is None:
-        for index in range(len(lines) - 1, -1, -1):
-            lower = lines[index].lower()
-            if lower.startswith(("updated", "changed", "done")):
-                start = index
-                break
-    if start is None:
-        selected = lines[-2:]
-    else:
-        selected = lines[start : start + 3]
-    text = " ".join(selected) or "completed"
-    text = " ".join(text.split())
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3] + "..."
-
-
-class Spinner:
-    """Transient `thinking` status line driven by a background thread."""
-
-    def __init__(self, stderr: TextIO, *, enabled: bool, color: bool) -> None:
-        self._stderr = stderr
-        self._color = color
-        self._running = enabled
-        self._paused = False
-        self._lock = threading.Lock()
-        self._thread: threading.Thread | None = None
-
-    @property
-    def running(self) -> bool:
-        """Return whether the spinner is still active."""
-        return self._running
-
-    def start(self) -> None:
-        """Start the background thread when the spinner is enabled."""
-        if not self._running:
-            return
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def pause(self) -> None:
-        """Pause animation and clear the current status line."""
-        with self._lock:
-            self._paused = True
-        clear_status(self._stderr)
-
-    def resume(self) -> None:
-        """Resume animation if the spinner is still running."""
-        with self._lock:
-            if self._running:
-                self._paused = False
-
-    def stop(self) -> None:
-        """Stop the background thread and clear the status line."""
-        if self._thread is None:
-            return
-        with self._lock:
-            self._running = False
-            self._paused = False
-        self._thread.join()
-
-    def _run(self) -> None:
-        frames = ["thinking", "thinking.", "thinking..", "thinking..."]
-        i = 0
-        while True:
-            with self._lock:
-                if not self._running:
-                    clear_status(self._stderr)
-                    return
-                paused = self._paused
-            if not paused:
-                self._stderr.write(
-                    f"\r\033[K{muted(f'❯ {frames[i % len(frames)]}', enabled=self._color)}"
-                )
-                self._stderr.flush()
-                i += 1
-            time.sleep(0.35)
-
-
 @dataclass
 class _StreamContext:
     """Output destinations and rendering flags for one Zeta stream."""
@@ -466,21 +258,6 @@ def _record_tool_trace(ctx: _StreamContext, trace_event: dict[str, object]) -> N
     if ctx.capture_trace:
         append_jsonl("last-tools.jsonl", trace_event)
     append_event(trace_event)
-
-
-def _render_tool_start(ctx: _StreamContext, tool: str, detail: str) -> None:
-    """Print a tool-start status line to stderr."""
-    output = ctx.stderr
-    if ctx.tool_output_stdout:
-        output = ctx.tool_output_terminal if ctx.tool_output_terminal else ctx.stdout
-    if ctx.compact:
-        label = compact_tool_label(tool)
-        short_detail = compact_detail(detail)
-        status = f"  {label:<6} {short_detail}" if short_detail else f"  {label}"
-        print(status, file=output, flush=True)
-        return
-    status = f"❯ {tool:<{TRACE_LABEL_WIDTH}}  {detail}" if detail else f"❯ {tool}"
-    print(muted(status, enabled=ctx.color_enabled), file=output, flush=True)
 
 
 def _handle_tool_start(
@@ -513,7 +290,18 @@ def _handle_tool_start(
     tool_events.append(trace_event)
     _record_tool_trace(ctx, trace_event)
     if not ctx.json_output:
-        _render_tool_start(ctx, tool, detail)
+        output = ctx.stderr
+        if ctx.tool_output_stdout:
+            output = (
+                ctx.tool_output_terminal if ctx.tool_output_terminal else ctx.stdout
+            )
+        render_stream_tool_start(
+            output,
+            tool,
+            detail,
+            compact=ctx.compact,
+            color_enabled=ctx.color_enabled,
+        )
     return True
 
 

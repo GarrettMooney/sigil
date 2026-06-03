@@ -22,7 +22,7 @@ from .state import (
 )
 from .zeta.model import chat_text
 from .zeta import runtime
-from .display import render_tool_start
+from .display import render_tool_start, render_zeta_status
 
 
 ANSWER_ROUTE = "answer"
@@ -146,8 +146,13 @@ def ask(
         write_jsonl(ANSWER_TRANSCRIPT, [user_turn])
     write_jsonl("last-tools.jsonl", [])
     enabled_tools = parse_tools(tools)
-    tool_note = "+".join(enabled_tools) if enabled_tools else "no tools"
-    print(f"❯ zeta {glyph:<5} · {tool_note} · no execute path", file=sys.stderr)
+    render_zeta_status(
+        glyph,
+        enabled_tools,
+        "no execute path",
+        output=sys.stderr,
+        color_enabled=False,
+    )
     return run_tool_answer(
         ANSWER_SYSTEM_PROMPT,
         prompt,

@@ -12,7 +12,8 @@ from click.testing import CliRunner
 from _patch import patch, patch_dict
 from sigil.cli import cli, main
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
-from sigil.stream import renderer_command, should_color, stream_events
+from sigil.display import renderer_command, should_color
+from sigil.stream import stream_events
 from sigil.answers import (
     ANSWER_SYSTEM_PROMPT,
     ask,
@@ -281,7 +282,7 @@ def test_session_list_includes_last_event_context() -> None:
 
 
 def test_renderer_defaults_to_glow_notty_when_available() -> None:
-    with patch("sigil.stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
+    with patch("sigil.display.shutil.which", return_value="/opt/homebrew/bin/glow"):
         with patch_dict(os.environ, {}, clear=True):
             assert renderer_command() == [
                 "glow",
@@ -294,7 +295,7 @@ def test_renderer_defaults_to_glow_notty_when_available() -> None:
 
 
 def test_renderer_uses_env_overrides() -> None:
-    with patch("sigil.stream.shutil.which", return_value="/opt/homebrew/bin/glow"):
+    with patch("sigil.display.shutil.which", return_value="/opt/homebrew/bin/glow"):
         with patch_dict(
             os.environ,
             {"ZETA_GLOW_STYLE": "tokyo-night", "ZETA_GLOW_WIDTH": "100"},
@@ -311,7 +312,7 @@ def test_renderer_uses_env_overrides() -> None:
 
 
 def test_renderer_falls_back_to_cat_without_glow() -> None:
-    with patch("sigil.stream.shutil.which", return_value=None):
+    with patch("sigil.display.shutil.which", return_value=None):
         assert renderer_command() == ["cat"]
 
 
