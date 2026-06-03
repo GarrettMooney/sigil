@@ -1,4 +1,4 @@
-"""Zeta v1 runtime services used by the shell loop."""
+"""Zeta v1 runtime services used by Sigil step runners."""
 
 from __future__ import annotations
 

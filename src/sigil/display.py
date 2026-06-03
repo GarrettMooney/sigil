@@ -9,6 +9,11 @@ import threading
 import time
 from typing import Any, Iterable, TextIO, cast
 
+from .protocol import (
+    SHELL_HANDOFF_OUTCOME_CANCELLED,
+    SHELL_HANDOFF_OUTCOME_EXECUTED,
+    SHELL_HANDOFF_OUTCOME_NO_PENDING,
+)
 from .tty import MUTED, RESET
 
 DEFAULT_GLOW_STYLE = "notty"
@@ -342,7 +347,7 @@ def shell_result_summary(event: dict[str, Any]) -> list[str]:
     if not isinstance(result, dict):
         return []
     outcome = str(result.get("outcome") or "")
-    if outcome == "executed":
+    if outcome == SHELL_HANDOFF_OUTCOME_EXECUTED:
         command = result.get("executed_command") or result.get("command") or ""
         status = result.get("status")
         turns = result.get("shell_turns")
@@ -353,7 +358,7 @@ def shell_result_summary(event: dict[str, Any]) -> list[str]:
             f"  {truncate(command)}",
             f"  exit {status}{suffix}",
         ]
-    if outcome == "cancelled":
+    if outcome == SHELL_HANDOFF_OUTCOME_CANCELLED:
         expected = result.get("expected_command") or ""
         actual = result.get("actual_command") or ""
         lines = [
@@ -363,7 +368,7 @@ def shell_result_summary(event: dict[str, Any]) -> list[str]:
         if actual:
             lines.append(f"  ran:      {truncate(actual)}")
         return lines
-    if outcome == "no_pending_handoff":
+    if outcome == SHELL_HANDOFF_OUTCOME_NO_PENDING:
         return ["❯ shell  no handoff"]
     return []
 

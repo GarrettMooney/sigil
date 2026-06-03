@@ -10,11 +10,12 @@ import click
 from ._base import cli
 from .. import handoff as sigil_handoff
 from ..display import shell_result_summary
+from ..protocol import SHELL_HANDOFF_RESULT_SCHEMA
 from ..zeta_runner import run_agent_step
 
 CONTINUE_OBJECTIVE = (
     "Continue the active Zeta step. Read the latest "
-    "zeta.shell_handoff_result.v1 transcript event as the source of truth for "
+    f"{SHELL_HANDOFF_RESULT_SCHEMA} transcript event as the source of truth for "
     "what the user ran after the last shell handoff. If the outcome is "
     "cancelled, do not assume the proposed command ran; continue from the "
     "recorded shell_turns and explain the cancellation plainly if it matters. "

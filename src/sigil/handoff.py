@@ -6,9 +6,18 @@ import os
 from typing import Any
 
 from .session import recent_turns, record_turn
+from .protocol import (
+    SHELL_HANDOFF_OUTCOME_CANCELLED,
+    SHELL_HANDOFF_OUTCOME_EXECUTED,
+    SHELL_HANDOFF_OUTCOME_NO_PENDING,
+    SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
+    SHELL_HANDOFF_CANCEL_NO_TURNS,
+    SHELL_HANDOFF_RESULT_SCHEMA,
+    SHELL_HANDOFF_RESULT_TYPE,
+    is_shell_handoff_result as protocol_is_shell_handoff_result,
+    is_shell_prompt_handoff,
+)
 from .zeta import runtime as zeta_runtime
-
-SHELL_HANDOFF_RESULT_SCHEMA = "zeta.shell_handoff_result.v1"
 
 
 def append_shell_turn(turn: dict[str, Any]) -> dict[str, Any]:
@@ -98,8 +107,8 @@ def executed_shell_result(
     return {
         "ok": True,
         "schema": SHELL_HANDOFF_RESULT_SCHEMA,
-        "type": "shell_handoff_result",
-        "outcome": "executed",
+        "type": SHELL_HANDOFF_RESULT_TYPE,
+        "outcome": SHELL_HANDOFF_OUTCOME_EXECUTED,
         "handoff": shell_handoff_summary(handoff),
         "expected_command": str(handoff.get("command") or command),
         "executed_command": command,
@@ -119,10 +128,10 @@ def cancelled_shell_result(
 ) -> dict[str, Any]:
     """Return a tool result that says the staged shell call was not executed."""
     expected = str(handoff.get("command") or "")
-    reason_code = "no_shell_turns_after_handoff"
+    reason_code = SHELL_HANDOFF_CANCEL_NO_TURNS
     reason = "No shell command was recorded after the handoff."
     if actual:
-        reason_code = "expected_command_not_executed"
+        reason_code = SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED
         reason = (
             "The user did not run the proposed command. "
             f"First command after handoff: {actual}"
@@ -130,8 +139,8 @@ def cancelled_shell_result(
     return {
         "ok": False,
         "schema": SHELL_HANDOFF_RESULT_SCHEMA,
-        "type": "shell_handoff_result",
-        "outcome": "cancelled",
+        "type": SHELL_HANDOFF_RESULT_TYPE,
+        "outcome": SHELL_HANDOFF_OUTCOME_CANCELLED,
         "cancelled": True,
         "cancellation_reason": reason_code,
         "handoff": shell_handoff_summary(handoff),
@@ -150,8 +159,8 @@ def no_pending_handoff_result(turns: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "ok": True,
         "schema": SHELL_HANDOFF_RESULT_SCHEMA,
-        "type": "shell_handoff_result",
-        "outcome": "no_pending_handoff",
+        "type": SHELL_HANDOFF_RESULT_TYPE,
+        "outcome": SHELL_HANDOFF_OUTCOME_NO_PENDING,
         "content": [
             {
                 "type": "text",
@@ -186,14 +195,12 @@ def latest_unresolved_shell_handoff(
         if not isinstance(result, dict):
             continue
         tool_call_id = str(event.get("tool_call_id") or "")
-        if is_shell_handoff_result(result):
+        if protocol_is_shell_handoff_result(result):
             if tool_call_id:
                 resolved_call_ids.add(tool_call_id)
             continue
         handoff = result.get("handoff")
-        if not isinstance(handoff, dict):
-            continue
-        if str(handoff.get("type") or "") != "shell_prompt":
+        if not is_shell_prompt_handoff(handoff):
             continue
         if tool_call_id and tool_call_id in resolved_call_ids:
             continue
@@ -210,13 +217,7 @@ def latest_unresolved_shell_handoff(
 
 def is_shell_handoff_result(result: dict[str, Any]) -> bool:
     """Return whether a result resolves a shell handoff."""
-    if result.get("schema") == SHELL_HANDOFF_RESULT_SCHEMA:
-        return True
-    return result.get("type") in {
-        "shell_handoff_result",
-        "shell_command_result",
-        "shell_call_cancelled",
-    }
+    return protocol_is_shell_handoff_result(result)
 
 
 def shell_handoff_summary(handoff: dict[str, Any]) -> dict[str, Any]:

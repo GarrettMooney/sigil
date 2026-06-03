@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
 
+from ...protocol import shell_handoff_tool_result
+
 EffectKind = Literal["read", "write", "delete", "execute", "search"]
 Resource = Literal["path", "process", "session"]
 
@@ -97,14 +99,7 @@ def error_result(code: str, message: str) -> dict[str, Any]:
 def handoff(
     command: str, reason: str, *, artifact: str | None = None
 ) -> dict[str, Any]:
-    data: dict[str, Any] = {
-        "type": "shell_prompt",
-        "command": command,
-        "reason": reason,
-    }
-    if artifact is not None:
-        data["artifact"] = artifact
-    return {"ok": True, "handoff": data}
+    return shell_handoff_tool_result(command, reason, artifact=artifact)
 
 
 def write_temp(prefix: str, suffix: str, content: str) -> Path:

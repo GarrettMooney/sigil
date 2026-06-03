@@ -97,6 +97,8 @@ SIGIL_STATE_DIR=$HOME/.sigil
 SIGIL_RUN_CAPTURE_BYTES=6000
 SIGIL_GLOW_STYLE=notty
 SIGIL_GLOW_WIDTH=88
+# Optional override used by sigil doctor/runtime service discovery.
+ZETA_BIN=/path/to/zeta
 ```
 
 ## Quick Start

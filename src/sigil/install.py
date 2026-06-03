@@ -117,6 +117,7 @@ def source_snippet(
     if sigil_bin:
         lines.append(f"  export SIGIL_BIN={shlex.quote(sigil_bin)}")
     if zeta_bin:
+        lines.append("  # Used by sigil doctor for bundled runtime service discovery.")
         lines.append(f"  export ZETA_BIN={shlex.quote(zeta_bin)}")
     if not enable_glyphs:
         lines.append("  export SIGIL_ENABLE_GLYPHS=0")
@@ -263,7 +264,10 @@ def check_zeta_installed() -> DoctorCheck:
     check = check_configured_executable(
         "zeta",
         "ZETA_BIN",
-        hint="Install Sigil with the zeta entrypoint or set ZETA_BIN.",
+        hint=(
+            "Install Sigil with the zeta entrypoint or set ZETA_BIN as a "
+            "runtime-service override."
+        ),
     )
     return DoctorCheck(
         name="zeta:installed",

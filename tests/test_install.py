@@ -44,7 +44,7 @@ def test_install_shell_can_disable_glyph_aliases_in_rc_snippet() -> None:
         assert "export SIGIL_ENABLE_GLYPHS=0" in rc_text
 
 
-def test_install_shell_bakes_resolved_sigil_and_zeta_bins_into_rc() -> None:
+def test_install_shell_bakes_resolved_runtime_bins_into_rc() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         bins = {"sigil": "/opt/sigil/bin/sigil", "zeta": "/opt/sigil/bin/zeta"}
@@ -57,6 +57,7 @@ def test_install_shell_bakes_resolved_sigil_and_zeta_bins_into_rc() -> None:
 
         rc_text = (root / ".zshrc").read_text(encoding="utf-8")
         assert "export SIGIL_BIN=/opt/sigil/bin/sigil" in rc_text
+        assert "runtime service discovery" in rc_text
         assert "export ZETA_BIN=/opt/sigil/bin/zeta" in rc_text
 
 

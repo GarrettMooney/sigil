@@ -11,6 +11,15 @@ from sigil import display as sigil_display
 from sigil import handoff as sigil_handoff
 from sigil import zeta_runner
 from sigil.cli import cli as sigil_cli
+from sigil.protocol import (
+    SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
+    SHELL_HANDOFF_OUTCOME_CANCELLED,
+    SHELL_HANDOFF_OUTCOME_EXECUTED,
+    SHELL_HANDOFF_OUTCOME_NO_PENDING,
+    SHELL_HANDOFF_RESULT_SCHEMA,
+    SHELL_HANDOFF_RESULT_TYPE,
+    SHELL_PROMPT_HANDOFF_TYPE,
+)
 from sigil.session import recent_turns, record_turn
 from sigil.zeta import runtime as zeta
 from sigil.zeta import model as zeta_model
@@ -83,7 +92,13 @@ def test_zeta_tool_bash_returns_handoff() -> None:
 def test_sigil_display_summarizes_tool_results() -> None:
     assert sigil_display.tool_result_summary(
         "bash",
-        {"ok": True, "handoff": {"type": "shell_prompt", "command": "uv run pytest"}},
+        {
+            "ok": True,
+            "handoff": {
+                "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "command": "uv run pytest",
+            },
+        },
     ) == ["staged in prompt"]
     assert sigil_display.tool_result_summary(
         "read",
@@ -100,7 +115,7 @@ def test_sigil_display_summarizes_shell_results() -> None:
         {
             "type": "tool_result",
             "result": {
-                "outcome": "executed",
+                "outcome": SHELL_HANDOFF_OUTCOME_EXECUTED,
                 "executed_command": "uv run pytest",
                 "status": 0,
                 "shell_turns": [{"command": "uv run pytest"}],
@@ -111,7 +126,7 @@ def test_sigil_display_summarizes_shell_results() -> None:
         {
             "type": "tool_result",
             "result": {
-                "outcome": "cancelled",
+                "outcome": SHELL_HANDOFF_OUTCOME_CANCELLED,
                 "expected_command": "uv run pytest",
                 "actual_command": "uv run pytest -q",
             },
@@ -240,7 +255,7 @@ def test_sigil_zeta_step_writes_handoff_file(
         lambda name, params: {
             "ok": True,
             "handoff": {
-                "type": "shell_prompt",
+                "type": SHELL_PROMPT_HANDOFF_TYPE,
                 "command": "uv run pytest",
                 "reason": "Run tests.",
             },
@@ -256,7 +271,7 @@ def test_sigil_zeta_step_writes_handoff_file(
     assert "❯ bash   uv run pytest" in result.output
     assert "  staged in prompt" in result.output
     assert json.loads(handoff_file.read_text(encoding="utf-8")) == {
-        "type": "shell_prompt",
+        "type": SHELL_PROMPT_HANDOFF_TYPE,
         "command": "uv run pytest",
         "reason": "Run tests.",
     }
@@ -441,7 +456,7 @@ def test_sigil_transcript_shell_result_appends_tool_result(
             "result": {
                 "ok": True,
                 "handoff": {
-                    "type": "shell_prompt",
+                    "type": SHELL_PROMPT_HANDOFF_TYPE,
                     "command": "uv run pytest",
                     "reason": "Run tests.",
                 },
@@ -458,9 +473,9 @@ def test_sigil_transcript_shell_result_appends_tool_result(
     assert event["tool_call_id"] == "call-1"
     assert event["name"] == "bash"
     assert event["result"]["ok"] is True
-    assert event["result"]["schema"] == "zeta.shell_handoff_result.v1"
-    assert event["result"]["type"] == "shell_handoff_result"
-    assert event["result"]["outcome"] == "executed"
+    assert event["result"]["schema"] == SHELL_HANDOFF_RESULT_SCHEMA
+    assert event["result"]["type"] == SHELL_HANDOFF_RESULT_TYPE
+    assert event["result"]["outcome"] == SHELL_HANDOFF_OUTCOME_EXECUTED
     assert event["result"]["command"] == "uv run pytest"
     assert event["result"]["expected_command"] == "uv run pytest"
     assert event["result"]["executed_command"] == "uv run pytest"
@@ -483,7 +498,7 @@ def test_sigil_transcript_shell_result_cancels_modified_handoff(
             "result": {
                 "ok": True,
                 "handoff": {
-                    "type": "shell_prompt",
+                    "type": SHELL_PROMPT_HANDOFF_TYPE,
                     "command": "uv run pytest",
                     "reason": "Run tests.",
                 },
@@ -497,10 +512,13 @@ def test_sigil_transcript_shell_result_cancels_modified_handoff(
     assert event["type"] == "tool_result"
     assert event["tool_call_id"] == "call-1"
     assert event["result"]["ok"] is False
-    assert event["result"]["schema"] == "zeta.shell_handoff_result.v1"
-    assert event["result"]["type"] == "shell_handoff_result"
-    assert event["result"]["outcome"] == "cancelled"
-    assert event["result"]["cancellation_reason"] == "expected_command_not_executed"
+    assert event["result"]["schema"] == SHELL_HANDOFF_RESULT_SCHEMA
+    assert event["result"]["type"] == SHELL_HANDOFF_RESULT_TYPE
+    assert event["result"]["outcome"] == SHELL_HANDOFF_OUTCOME_CANCELLED
+    assert (
+        event["result"]["cancellation_reason"]
+        == SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED
+    )
     assert event["result"]["expected_command"] == "uv run pytest"
     assert event["result"]["actual_command"] == "uv run pytest -q"
     assert event["result"]["shell_turns"][0]["command"] == "uv run pytest -q"
@@ -520,7 +538,7 @@ def test_sigil_transcript_shell_result_includes_intervening_shell_turns(
             "result": {
                 "ok": True,
                 "handoff": {
-                    "type": "shell_prompt",
+                    "type": SHELL_PROMPT_HANDOFF_TYPE,
                     "command": "uv run pytest",
                     "reason": "Run tests.",
                 },
@@ -532,7 +550,7 @@ def test_sigil_transcript_shell_result_includes_intervening_shell_turns(
 
     event = sigil_handoff.append_shell_result()
 
-    assert event["result"]["outcome"] == "executed"
+    assert event["result"]["outcome"] == SHELL_HANDOFF_OUTCOME_EXECUTED
     assert event["result"]["executed_command"] == "uv run pytest"
     assert [turn["command"] for turn in event["result"]["shell_turns"]] == [
         "git status --short",
@@ -555,7 +573,7 @@ def test_sigil_transcript_shell_result_does_not_reuse_resolved_handoff(
             "result": {
                 "ok": True,
                 "handoff": {
-                    "type": "shell_prompt",
+                    "type": SHELL_PROMPT_HANDOFF_TYPE,
                     "command": "uv run pytest",
                     "reason": "Run tests.",
                 },
@@ -568,9 +586,9 @@ def test_sigil_transcript_shell_result_does_not_reuse_resolved_handoff(
     second = sigil_handoff.append_shell_result()
 
     assert first["type"] == "tool_result"
-    assert first["result"]["outcome"] == "executed"
+    assert first["result"]["outcome"] == SHELL_HANDOFF_OUTCOME_EXECUTED
     assert second["type"] == "shell_resume"
-    assert second["result"]["outcome"] == "no_pending_handoff"
+    assert second["result"]["outcome"] == SHELL_HANDOFF_OUTCOME_NO_PENDING
     assert second["result"]["shell_turns"][0]["command"] == "uv run pytest"
 
 
