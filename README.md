@@ -13,8 +13,6 @@ captured output without leaving your prompt.
 Sigil is inspired by IRC-style bot commands: lightweight punctuation prefixes
 that let you address an assistant inline without leaving the conversation.
 
-![15-second Sigil terminal demo](docs/demo.gif)
-
 ```sh
 , what changed in this repo?
 ,, run the relevant tests
@@ -252,9 +250,6 @@ zeta tools list --json
 sigil events
 ```
 
-See [docs/cli.md](docs/cli.md) for the user-facing CLI contract and JSON
-examples.
-
 ## State
 
 Sigil writes event-sourced state under `~/.sigil/` by default. Set
@@ -312,16 +307,6 @@ Run the checks used by CI:
 uv run pre-commit run --all-files
 uv run pytest
 ```
-
-Render deterministic demo GIFs:
-
-```sh
-scripts/render-demo-gifs.sh
-```
-
-Demo tapes live in [docs/demos](docs/demos/). They run the real Sigil CLI
-from this checkout while shimming only external dependencies such as the
-model server and `uv`.
 
 ## License
 
