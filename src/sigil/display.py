@@ -322,7 +322,7 @@ def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
         metadata = {}
     text = text_content(result)
     if name == "read":
-        return [f"{count_lines(text)} lines · {len(text.encode())} bytes"]
+        return [f"{count_lines(text)} lines"]
     if name == "ls":
         entries = metadata.get("entries")
         if isinstance(entries, int):

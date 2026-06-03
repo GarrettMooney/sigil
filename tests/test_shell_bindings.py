@@ -85,7 +85,7 @@ def make_stub(tmp: Path) -> Path:
               payload="$(cat)"
               case "$*" in
                 "display tool-result bash") printf '%s\n' "staged in prompt" ;;
-                "display tool-result read") printf '%s\n' "2 lines · 4 bytes" ;;
+                "display tool-result read") printf '%s\n' "2 lines" ;;
                 "display tool-result ls") printf '%s\n' "2 entries" ;;
                 "display tool-result grep") printf '%s\n' "2 matches · 2 files" ;;
                 "display shell-result")

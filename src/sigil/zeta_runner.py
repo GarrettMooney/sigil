@@ -93,6 +93,7 @@ def enabled_tool_tuple(allowed_tools: Iterable[str] | None) -> tuple[str, ...]:
 def record_agent_final(content: str, *, glyph: str) -> None:
     if not content:
         return
+    print()
     print(content)
     append_zeta_event("assistant_message", content=content, glyph=glyph)
 

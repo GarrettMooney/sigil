@@ -103,7 +103,7 @@ def test_sigil_display_summarizes_tool_results() -> None:
     assert sigil_display.tool_result_summary(
         "read",
         {"ok": True, "content": [{"type": "text", "text": "a\nb\n"}]},
-    ) == ["2 lines · 4 bytes"]
+    ) == ["2 lines"]
     assert sigil_display.tool_result_summary(
         "grep",
         {"ok": True, "content": [{"type": "text", "text": "a.py:1:x\nb.py:2:y\n"}]},
@@ -275,6 +275,31 @@ def test_sigil_zeta_step_writes_handoff_file(
         "command": "uv run pytest",
         "reason": "Run tests.",
     }
+
+
+def test_zeta_agent_step_separates_trace_from_final_answer(
+    monkeypatch,
+    capsys,
+) -> None:
+    def fake_next_model_action(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        del objective, transcript, kwargs
+        return {"type": "final", "content": "The answer."}
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(
+        zeta_runner.runtime, "next_model_action", fake_next_model_action
+    )
+
+    code = zeta_runner.run_agent_step("answer me", glyph=",,")
+
+    assert code == 0
+    captured = capsys.readouterr()
+    assert captured.out == "\nThe answer.\n"
+    assert "❯ zeta ,, " in captured.err
 
 
 def test_sigil_transcript_shell_turn_records_recent_turn(
@@ -635,6 +660,7 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
     assert code == 0
     output = capsys.readouterr().out
     assert "❯ read   pyproject.toml" in output
+    assert "\n\nIt contains project metadata.\n" in output
     assert "project metadata" in output
     assert len(transcripts) == 2
 
@@ -677,5 +703,6 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
 
     output = capsys.readouterr().out
     assert code == 0
+    assert "\n\nIt contains Sigil docs.\n" in output
     assert "It contains Sigil docs." in output
     assert "question tool budget" not in output

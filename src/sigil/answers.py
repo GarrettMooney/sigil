@@ -212,6 +212,7 @@ def run_text_answer(
             )
         )
     else:
+        print()
         print(answer)
     return 0
 
@@ -380,6 +381,7 @@ def record_answer(
             )
         )
         return
+    print()
     print(answer)
 
 
