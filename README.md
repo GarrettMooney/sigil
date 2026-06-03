@@ -17,8 +17,8 @@ that let you address an assistant inline without leaving the conversation.
 
 ```sh
 , what changed in this repo?
-sigil command "find files over 10 MB in this repo excluding .git"
 ,, run the relevant tests
+,,, update the docs and run checks
 + cargo test
 ```
 
