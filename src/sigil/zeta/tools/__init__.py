@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
 from . import bash, edit, grep, ls, read, write
 from .base import ToolImpl, ToolSpec, diagnostic, error_result
+
+ExecutionMode = Literal["handoff", "direct"]
 
 TOOL_IMPLS: dict[str, ToolImpl] = {
     bash.SPEC.name: ToolImpl(bash.SPEC, bash.analyze, bash.run),
@@ -114,10 +116,17 @@ def run_tool(
     params: dict[str, Any],
     *,
     edit_mode: str = "review_patch",
+    execution_mode: ExecutionMode = "handoff",
 ) -> dict[str, Any]:
     tool = TOOL_IMPLS.get(name)
     if tool is None:
         return error_result("unknown-tool", f"unknown tool: {name}")
-    if name == edit.SPEC.name and edit_mode == "direct_replace":
+    if name == bash.SPEC.name and execution_mode == "direct":
+        return bash.run_direct(params)
+    if name == write.SPEC.name and execution_mode == "direct":
+        return write.run_direct(params)
+    if name == edit.SPEC.name and (
+        edit_mode == "direct_replace" or execution_mode == "direct"
+    ):
         return edit.run_direct(params)
     return tool.run(params)

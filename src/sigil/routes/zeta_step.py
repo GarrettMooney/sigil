@@ -24,6 +24,7 @@ from ..zeta.server import ensure_server
 
 HandoffOutput = Literal["detail", "summary", "none"]
 EditMode = Literal["review_patch", "direct_replace"]
+ExecutionMode = Literal["handoff", "direct"]
 
 
 def run_agent_step(
@@ -43,12 +44,12 @@ def run_agent_step(
     if not ensure_server():
         return 1
     output = trace_output or sys.stderr
-    prompt = agent_prompt(objective, stdin_text=stdin_text)
+    prompt = agent_prompt(objective, glyph=glyph, stdin_text=stdin_text)
     enabled_tools = enabled_tool_tuple(allowed_tools)
     render_zeta_status(
         glyph,
         enabled_tools,
-        "one step",
+        "auto loop" if glyph == ",,," else "one step",
         output=output,
         color_enabled=True,
     )
@@ -73,6 +74,7 @@ def run_agent_step(
             max_turns=max_steps,
             stop_on_handoff=True,
             edit_mode=edit_mode or edit_mode_for_glyph(glyph),
+            execution_mode=execution_mode_for_glyph(glyph),
         ),
         context=context,
     )
@@ -185,12 +187,24 @@ def edit_mode_for_glyph(glyph: str) -> EditMode:
     return "review_patch"
 
 
-def agent_prompt(objective: str, *, stdin_text: str) -> str:
-    sections = [
-        "Run one bounded edit step.",
-        f"Objective: {objective}",
-    ]
+def execution_mode_for_glyph(glyph: str) -> ExecutionMode:
+    if glyph == ",,,":
+        return "direct"
+    return "handoff"
+
+
+def agent_prompt(objective: str, *, glyph: str, stdin_text: str) -> str:
+    instruction = (
+        "Run the bounded automatic tool loop until no more tool calls are needed."
+        if glyph == ",,,"
+        else "Run one bounded edit step."
+    )
+    sections = [instruction, f"Objective: {objective}"]
     if stdin_text:
         sections.append(f"Confirmed piped input:\n{stdin_text}")
-    sections.append("After the step, stop. Do not commit.")
+    if glyph == ",,,":
+        sections.append("When the objective is handled, return a final answer.")
+    else:
+        sections.append("After the step, stop.")
+    sections.append("Do not commit.")
     return "\n\n".join(sections)

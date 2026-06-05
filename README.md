@@ -155,7 +155,7 @@ Installed zsh and Bash bindings expose these shortcuts:
 | --- | --- | --- |
 | `,` | read | Answer from read-only context. |
 | `,,` | step | Run or resume one shell-owned Zeta turn. |
-| `,,,` | auto step | Run one auto-approved edit step; exact replacements apply directly. |
+| `,,,` | auto loop | Run auto-approved tool calls until no more are needed. |
 | `+` | run | Run one explicit command and capture stdout/stderr snippets. |
 
 Examples:
@@ -189,9 +189,9 @@ resumes the active Zeta step and attaches the recorded shell turns as the source
 of truth. If you changed the staged command, Zeta receives that as a changed
 handoff rather than assuming the original command ran.
 
-`,,,` uses the same model-facing edit schema as `,,`, but it is the routine
-path: exact replacements are applied directly after Zeta verifies the target
-text matches once. Bash handoffs are still staged in your prompt.
+`,,,` is the routine automatic path. Read-only tools run directly, Bash
+commands execute directly, exact replacements apply directly after Zeta verifies
+the target text matches once, and `write` writes the target file directly.
 
 Read-only routes do not expose Bash. If an answer recommends a command, it is
 plain answer text, not a tool call or terminal handoff.
@@ -215,7 +215,7 @@ Each route has a fixed effect on your system:
 | --- | --- | --- |
 | `,` | read-only | Local answer route with no Bash tool. |
 | `,,` | read/write/handoff | One shell-owned Zeta step; Bash is staged in the prompt. |
-| `,,,` | read/write/direct edit/handoff | Auto-approved Zeta step; exact replacements apply directly, Bash stays staged. |
+| `,,,` | read/write/execute | Auto-approved Zeta step; read-only tools, Bash, edit, and write run directly. |
 | `+` | execute | Explicit local command execution with stdout/stderr capture. |
 
 Sigil stores audit/debug events and per-shell continuity under `~/.sigil/`.

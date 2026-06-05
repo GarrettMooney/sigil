@@ -35,6 +35,18 @@ ZETA_AGENT_SYSTEM_PROMPT = (
     "verification command."
 )
 
+ZETA_AGENT_AUTO_SYSTEM_PROMPT = (
+    "You are Sigil's bounded auto edit route. Complete the user's objective "
+    "by running tool calls until no more tool calls are needed. Read/search "
+    "tools run immediately for local context. Bash commands execute "
+    "automatically, and edit/write tools apply directly, so only use them when "
+    "they are minimal, relevant, and safe for this local workspace. Do not "
+    "install dependencies, commit, push, reset, delete unrelated files, or "
+    "perform network operations. If the request is ambiguous or unsafe, stop "
+    "and say what you need. End with a concise summary of changed files and "
+    "verification performed or the next verification command."
+)
+
 
 def run_act_stepper(
     *,
@@ -388,10 +400,7 @@ def run_zeta_agent_step(
     """Run one non-interactive Zeta edit step."""
     route_glyph = glyph or str(act.get("glyph") or ",,,")
     enabled_tools = effective_zeta_tools(tools)
-    approval = str(act.get("approval") or "confirm")
-    step_label = (
-        "one auto-approved step" if approval == "auto" else "one confirmed step"
-    )
+    step_label = "auto tool loop" if route_glyph == ",,," else "one confirmed step"
     render_zeta_status(
         route_glyph,
         enabled_tools,
@@ -402,12 +411,19 @@ def run_zeta_agent_step(
     exit_code = run_agent_step(
         str(act.get("objective") or ""),
         glyph=route_glyph,
-        system=ZETA_AGENT_SYSTEM_PROMPT,
+        system=system_prompt_for_glyph(route_glyph),
         stdin_text=str(act.get("stdin") or ""),
         allowed_tools=enabled_tools,
     )
     print()
     return exit_code
+
+
+def system_prompt_for_glyph(glyph: str) -> str:
+    """Return the route-specific Zeta system prompt."""
+    if glyph == ",,,":
+        return ZETA_AGENT_AUTO_SYSTEM_PROMPT
+    return ZETA_AGENT_SYSTEM_PROMPT
 
 
 def effective_zeta_tools(

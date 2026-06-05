@@ -77,8 +77,14 @@ def run_tool(
     params: dict[str, Any],
     *,
     edit_mode: str = "review_patch",
+    execution_mode: tool_registry.ExecutionMode = "handoff",
 ) -> dict[str, Any]:
-    return tool_registry.run_tool(name, params, edit_mode=edit_mode)
+    return tool_registry.run_tool(
+        name,
+        params,
+        edit_mode=edit_mode,
+        execution_mode=execution_mode,
+    )
 
 
 def zeta_system_prompt(

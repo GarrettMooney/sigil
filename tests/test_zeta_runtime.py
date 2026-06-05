@@ -217,6 +217,57 @@ def test_zeta_agent_turn_stops_after_handoff_tool(monkeypatch) -> None:
     }
 
 
+def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
+    requests = 0
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "bash",
+                            "arguments": '{"command":"printf direct-bash"}',
+                        },
+                    }
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+
+    def fake_chat_completion_messages(
+        *args: object, **kwargs: object
+    ) -> dict[str, Any]:
+        nonlocal requests
+        requests += 1
+        return next(responses)
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "test",
+        [],
+        zeta_agent.AgentConfig(
+            allowed_tools=("bash",),
+            execution_mode="direct",
+            max_turns=3,
+        ),
+    )
+
+    assert requests == 2
+    assert result.handoff is None
+    assert result.final_text == "done"
+    tool_result = next(
+        event for event in result.events if event.get("type") == "tool_result"
+    )
+    assert tool_result["result"]["metadata"]["stdout"] == "direct-bash"
+
+
 def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> None:
     ran = False
 
@@ -388,6 +439,34 @@ def test_zeta_tool_bash_returns_handoff() -> None:
     assert data["handoff"]["reason"] == "Run tests."
 
 
+def test_zeta_tool_bash_direct_executes_command() -> None:
+    data = zeta.run_tool(
+        "bash",
+        {"command": "printf direct-bash"},
+        execution_mode="direct",
+    )
+
+    assert data["ok"] is True
+    assert data["metadata"]["mode"] == "direct"
+    assert data["metadata"]["status"] == 0
+    assert data["metadata"]["stdout"] == "direct-bash"
+    assert "direct-bash" in data["content"][0]["text"]
+
+
+def test_zeta_tool_write_direct_writes_file(tmp_path: Path) -> None:
+    target = tmp_path / "direct.txt"
+
+    data = zeta.run_tool(
+        "write",
+        {"path": str(target), "content": "hello\n"},
+        execution_mode="direct",
+    )
+
+    assert data["ok"] is True
+    assert data["metadata"] == {"mode": "direct", "path": str(target)}
+    assert target.read_text(encoding="utf-8") == "hello\n"
+
+
 def test_sigil_display_summarizes_tool_results() -> None:
     assert sigil_display.tool_result_summary(
         "bash",
@@ -400,9 +479,23 @@ def test_sigil_display_summarizes_tool_results() -> None:
         },
     ) == ["staged in prompt"]
     assert sigil_display.tool_result_summary(
+        "bash",
+        {
+            "ok": True,
+            "metadata": {"mode": "direct", "status": 0},
+        },
+    ) == ["exit 0"]
+    assert sigil_display.tool_result_summary(
         "read",
         {"ok": True, "content": [{"type": "text", "text": "a\nb\n"}]},
     ) == ["2 lines"]
+    assert sigil_display.tool_result_summary(
+        "write",
+        {
+            "ok": True,
+            "metadata": {"mode": "direct", "path": "notes.txt"},
+        },
+    ) == ["wrote · notes.txt"]
     assert sigil_display.tool_result_summary(
         "grep",
         {"ok": True, "content": [{"type": "text", "text": "a.py:1:x\nb.py:2:y\n"}]},
@@ -821,9 +914,74 @@ def test_zeta_agent_direct_edit_stops_after_applying(
     assert tool_result["result"]["metadata"]["mode"] == "direct_replace"
 
 
+def test_zeta_agent_direct_mode_continues_after_edit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("old\n", encoding="utf-8")
+    requests = 0
+
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "edit",
+                            "arguments": json.dumps(
+                                {
+                                    "location": str(target),
+                                    "old": "old\n",
+                                    "new": "new\n",
+                                }
+                            ),
+                        },
+                    }
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        nonlocal requests
+        requests += 1
+        return next(responses)
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "edit",
+        [],
+        zeta_agent.AgentConfig(
+            allowed_tools=("edit",),
+            edit_mode="direct_replace",
+            execution_mode="direct",
+            max_turns=3,
+        ),
+    )
+
+    assert requests == 2
+    assert result.final_text == "done"
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
 def test_zeta_step_glyph_selects_edit_mode() -> None:
     assert zeta_runner.edit_mode_for_glyph(",,") == "review_patch"
     assert zeta_runner.edit_mode_for_glyph(",,,") == "direct_replace"
+    assert zeta_runner.execution_mode_for_glyph(",,") == "handoff"
+    assert zeta_runner.execution_mode_for_glyph(",,,") == "direct"
 
 
 def test_zeta_system_prompt_is_product_neutral_and_dynamic() -> None:

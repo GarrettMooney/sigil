@@ -130,6 +130,9 @@ def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
     metadata = result.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
+    direct_summary = direct_tool_result_summary(name, metadata)
+    if direct_summary:
+        return direct_summary
     text = text_content(result)
     if name == "read":
         return [f"{count_lines(text)} lines"]
@@ -153,6 +156,21 @@ def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
         return [str(result.get("message") or result.get("error") or "failed")]
     if result.get("ok") is True:
         return ["ok"]
+    return []
+
+
+def direct_tool_result_summary(name: str, metadata: dict[str, Any]) -> list[str]:
+    """Return compact summaries for tools that ran directly."""
+    if name == "bash" and metadata.get("mode") == "direct":
+        status = metadata.get("status")
+        if isinstance(status, int):
+            return [f"exit {status}"]
+        return ["executed"]
+    if name == "write" and metadata.get("mode") == "direct":
+        path = metadata.get("path")
+        if isinstance(path, str) and path:
+            return [f"wrote · {path}"]
+        return ["wrote"]
     return []
 
 

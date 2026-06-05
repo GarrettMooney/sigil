@@ -18,6 +18,7 @@ from .tools import (
 )
 
 EditMode = Literal["review_patch", "direct_replace"]
+ExecutionMode = Literal["handoff", "direct"]
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class AgentConfig:
     max_turns: int = 8
     stop_on_handoff: bool = True
     edit_mode: EditMode = "review_patch"
+    execution_mode: ExecutionMode = "handoff"
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,7 @@ def run_agent_turn(
                 allowed_tools=allowed_tools,
                 index=index,
                 edit_mode=config.edit_mode,
+                execution_mode=config.execution_mode,
             )
             events.extend(result_event.events)
             if result_event.handoff is not None and config.stop_on_handoff:
@@ -126,6 +129,7 @@ def handle_tool_call(
     allowed_tools: tuple[str, ...],
     index: int,
     edit_mode: EditMode = "review_patch",
+    execution_mode: ExecutionMode = "handoff",
 ) -> ToolCallResult:
     call_id = str(tool_call.get("id") or f"call-{index}")
     function = tool_call.get("function")
@@ -201,9 +205,16 @@ def handle_tool_call(
                 tool_result_event(call_id, name, result),
             ]
         )
-    result = run_tool_for_mode(name, params, edit_mode=edit_mode)
+    result = run_tool_for_mode(
+        name,
+        params,
+        edit_mode=edit_mode,
+        execution_mode=execution_mode,
+    )
     handoff = result_handoff(result)
-    stop = bool(name == "edit" and result.get("ok") is True)
+    stop = bool(
+        execution_mode == "handoff" and name == "edit" and result.get("ok") is True
+    )
     return ToolCallResult(
         events=[call_event, analysis_event, tool_result_event(call_id, name, result)],
         handoff=handoff,
@@ -230,7 +241,15 @@ def run_tool_for_mode(
     params: dict[str, Any],
     *,
     edit_mode: EditMode,
+    execution_mode: ExecutionMode,
 ) -> dict[str, Any]:
+    if execution_mode == "direct":
+        return run_tool(
+            name,
+            params,
+            edit_mode=edit_mode,
+            execution_mode=execution_mode,
+        )
     if name == "edit":
         return run_tool(name, params, edit_mode=edit_mode)
     return run_tool(name, params)
