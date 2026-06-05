@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError, ValidationError
+
 from . import bash, edit, grep, ls, read, write
 from .base import ToolImpl, ToolSpec, diagnostic, error_result
-from .schema import validate_tool_args as validate_args_against_schema
 
 TOOL_IMPLS: dict[str, ToolImpl] = {
     bash.SPEC.name: ToolImpl(bash.SPEC, bash.analyze, bash.run),
@@ -63,8 +65,34 @@ def model_tool_descriptors(
 
 
 def validate_tool_args(name: str, params: dict[str, Any]) -> list[str]:
-    """Validate params against the built-in subset of JSON Schema."""
-    return validate_args_against_schema(TOOL_SPECS, name, params)
+    """Validate params against the tool's JSON Schema."""
+    spec = TOOL_SPECS.get(name)
+    if spec is None:
+        return [f"unknown tool: {name}"]
+    try:
+        validator = Draft202012Validator(spec.schema)
+    except SchemaError as exc:
+        return [f"invalid schema for tool {name}: {exc.message}"]
+    errors = sorted(validator.iter_errors(params), key=validation_error_sort_key)
+    return [format_validation_error(error) for error in errors]
+
+
+def validation_error_sort_key(error: ValidationError) -> tuple[str, str]:
+    return (json_path(error.absolute_path), error.message)
+
+
+def format_validation_error(error: ValidationError) -> str:
+    return f"{json_path(error.absolute_path)}: {error.message}"
+
+
+def json_path(parts: Any) -> str:
+    path = "$"
+    for part in parts:
+        if isinstance(part, int):
+            path += f"[{part}]"
+        else:
+            path += f".{part}"
+    return path
 
 
 def analyze_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
