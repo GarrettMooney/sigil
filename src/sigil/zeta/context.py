@@ -5,29 +5,44 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-PROJECT_CONTEXT_FILES = ("AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
+
+def _context_directories(current: Path) -> list[Path]:
+    global_directory = Path.home() / ".zeta"
+    return [global_directory, *reversed(current.parents), current]
+
+
+def _agents_file(directory: Path) -> Path | None:
+    try:
+        entries = directory.iterdir()
+    except OSError:
+        return None
+    for entry in entries:
+        if entry.name == "AGENTS.md" and entry.is_file():
+            return entry
+    return None
 
 
 def load_project_context(cwd: str | Path | None = None) -> str:
     """Load project instruction files from parent directories, global to local."""
     current = Path(cwd or os.getcwd()).resolve()
-    directories = [*reversed(current.parents), current]
+    directories = _context_directories(current)
     sections: list[str] = []
     seen: set[Path] = set()
     for directory in directories:
-        for filename in PROJECT_CONTEXT_FILES:
-            path = directory / filename
-            try:
-                resolved = path.resolve()
-            except OSError:
-                continue
-            if resolved in seen or not path.is_file():
-                continue
-            seen.add(resolved)
-            try:
-                text = path.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            if text.strip():
-                sections.append(f"Project context from {path}:\n{text.strip()}")
+        path = _agents_file(directory)
+        if path is None:
+            continue
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if text.strip():
+            sections.append(f"Project context from {path}:\n{text.strip()}")
     return "\n\n".join(sections)

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from ...protocol import shell_handoff_tool_result
+from ...protocols import shell_handoff_tool_result
 
 EffectKind = Literal["read", "write", "delete", "execute", "search"]
 Resource = Literal["path", "process", "session"]

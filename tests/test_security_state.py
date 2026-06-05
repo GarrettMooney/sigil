@@ -13,7 +13,7 @@ from _patch import patch, patch_dict
 from sigil.cli import cli, main
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.display import should_color
-from sigil.answers import (
+from sigil.routes.ask import (
     ANSWER_SYSTEM_PROMPT,
     ask,
     discussion_turns,
@@ -292,7 +292,7 @@ def test_question_routes_record_glyph_and_local_tools() -> None:
                 calls.append((args, kwargs))
                 return 0
 
-            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
                 assert ask("what is sigil?", json_output=True) == 0
             fresh_turn = read_jsonl("last-answer.jsonl")[0]
             assert fresh_turn["glyph"] == "ask"
@@ -300,7 +300,7 @@ def test_question_routes_record_glyph_and_local_tools() -> None:
             assert request_event["type"] == "answer_requested"
             assert request_event["input"] == "what is sigil?"
             assert "question" not in request_event
-            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
                 assert (
                     ask(
                         "what is sigil?",
@@ -341,7 +341,7 @@ def test_question_route_requests_tool_calls_on_stdout() -> None:
                 captured_kwargs.update(kwargs)
                 return 0
 
-            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
                 assert ask("inspect pyproject") == 0
 
     assert captured_kwargs["input_text"] == "inspect pyproject"
@@ -791,7 +791,7 @@ def test_fresh_ask_prepends_recent_turns_context_to_zeta_prompt() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
                 assert ask("what should I do next?", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -820,7 +820,7 @@ def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
                 assert ask("what does this repo do", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -850,7 +850,7 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
                 assert ask("why failed", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -878,7 +878,7 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
                 assert (
                     ask(
                         "follow up",
@@ -908,7 +908,7 @@ def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.answers.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
                 assert ask("hello", json_output=True) == 0
 
     prompt = captured["prompt"]

@@ -6,7 +6,7 @@ import click
 
 from ._base import cli
 from ._shared import piped_stdin_text, question_with_stdin
-from ..answers import (
+from ..routes.ask import (
     ZETA_ANSWER_TOOLS,
     ask,
     discussion_turns,

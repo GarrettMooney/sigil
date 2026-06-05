@@ -8,13 +8,13 @@ import click
 
 from ._shared import confirm_piped_input, print_json_line, question_with_stdin
 from ._shared import should_confirm_piped_input, should_run_act_operator
-from ..acts import run_act_stepper
-from ..operators import OperatorInvocation, create_invocation
-from ..answers import (
+from ..routes.act import run_act_stepper
+from ..routes.ask import (
     ZETA_ANSWER_TOOLS,
     ask,
     discussion_turns,
 )
+from ..routes.operators import OperatorInvocation, create_invocation
 
 
 def run_operator(

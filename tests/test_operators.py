@@ -13,7 +13,7 @@ from click.testing import CliRunner
 from _patch import patch, patch_dict
 from sigil.cli import cli
 from sigil.cli.operators import run_operator
-from sigil.operators import (
+from sigil.routes.operators import (
     create_invocation,
     parse_operator_token,
     proposal_user_prompt,
@@ -256,9 +256,9 @@ def test_command_verb_runs_piped_proposal_operator() -> None:
         }
 
     with (
-        patch("sigil.operators.ensure_server", return_value=True),
-        patch("sigil.operators.chat_json", side_effect=fake_chat_json),
-        patch("sigil.operators.append_event", return_value={}),
+        patch("sigil.routes.operators.ensure_server", return_value=True),
+        patch("sigil.routes.operators.chat_json", side_effect=fake_chat_json),
+        patch("sigil.routes.operators.append_event", return_value={}),
     ):
         result = CliRunner().invoke(
             cli,
@@ -361,7 +361,9 @@ def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
             "sigil.cli.operators.confirm_piped_input",
             side_effect=AssertionError("no prompt"),
         ),
-        patch("sigil.operators.chat_json", side_effect=AssertionError("no model")),
+        patch(
+            "sigil.routes.operators.chat_json", side_effect=AssertionError("no model")
+        ),
     ):
         result = invoke_op(["^", "status"], input="notes\n")
 
@@ -390,11 +392,11 @@ def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
         try:
             with (
                 patch(
-                    "sigil.acts.prompt_on_tty",
+                    "sigil.routes.act.prompt_on_tty",
                     side_effect=AssertionError("no prompt"),
                 ),
-                patch("sigil.acts.run_zeta_agent_step", side_effect=fake_run_pi),
-                patch("sigil.acts.append_event", side_effect=fake_append_event),
+                patch("sigil.routes.act.run_zeta_agent_step", side_effect=fake_run_pi),
+                patch("sigil.routes.act.append_event", side_effect=fake_append_event),
             ):
                 result = invoke_op([",,,", "ship", "it"])
             act_events = read_jsonl("last-act.jsonl")
@@ -451,9 +453,11 @@ def test_confirmed_act_can_edit_tools_before_execution() -> None:
                 return next(prompts)
 
             with (
-                patch("sigil.acts.prompt_on_tty", side_effect=fake_prompt),
-                patch("sigil.acts.edit_tools", return_value=["read", "grep", "edit"]),
-                patch("sigil.acts.run_zeta_agent_step", side_effect=fake_run_pi),
+                patch("sigil.routes.act.prompt_on_tty", side_effect=fake_prompt),
+                patch(
+                    "sigil.routes.act.edit_tools", return_value=["read", "grep", "edit"]
+                ),
+                patch("sigil.routes.act.run_zeta_agent_step", side_effect=fake_run_pi),
             ):
                 result = invoke_op([",,", "ship", "it"])
             act_events = read_jsonl("last-act.jsonl")
@@ -479,11 +483,13 @@ def test_confirmed_act_leaves_editor_errors_visible() -> None:
                 clear_calls.append((args, kwargs))
 
             with (
-                patch("sigil.acts.prompt_on_tty", return_value="e\n"),
-                patch("sigil.acts.edit_tools", return_value=None),
-                patch("sigil.acts.clear_lines_on_tty", side_effect=fake_clear_lines),
+                patch("sigil.routes.act.prompt_on_tty", return_value="e\n"),
+                patch("sigil.routes.act.edit_tools", return_value=None),
                 patch(
-                    "sigil.acts.run_zeta_agent_step",
+                    "sigil.routes.act.clear_lines_on_tty", side_effect=fake_clear_lines
+                ),
+                patch(
+                    "sigil.routes.act.run_zeta_agent_step",
                     side_effect=AssertionError("no zeta"),
                 ),
             ):
@@ -496,7 +502,10 @@ def test_confirmed_act_leaves_editor_errors_visible() -> None:
 def test_piped_triple_comma_denies_input_before_act_generation() -> None:
     with (
         patch("sigil.cli.operators.confirm_piped_input", return_value=False),
-        patch("sigil.acts.run_zeta_agent_step", side_effect=AssertionError("no zeta")),
+        patch(
+            "sigil.routes.act.run_zeta_agent_step",
+            side_effect=AssertionError("no zeta"),
+        ),
     ):
         result = invoke_op([",,,", "ship"], input="notes\n")
 
@@ -512,8 +521,8 @@ def test_act_zeta_step_invokes_zeta_runner() -> None:
         captured["kwargs"] = kwargs
         return 0
 
-    with patch("sigil.acts.run_agent_step", side_effect=fake_run_agent_step):
-        from sigil.acts import run_zeta_agent_step
+    with patch("sigil.routes.act.run_agent_step", side_effect=fake_run_agent_step):
+        from sigil.routes.act import run_zeta_agent_step
 
         result = run_zeta_agent_step(
             {"objective": "repair", "stdin": "notes", "glyph": ",,"},
@@ -564,9 +573,12 @@ def test_act_resume_executes_pending_step_without_regenerating() -> None:
                 },
             )
             with (
-                patch("sigil.acts.create_act", side_effect=AssertionError("no create")),
-                patch("sigil.acts.prompt_on_tty", return_value="y\n"),
-                patch("sigil.acts.run_zeta_agent_step", side_effect=fake_run_pi),
+                patch(
+                    "sigil.routes.act.create_act",
+                    side_effect=AssertionError("no create"),
+                ),
+                patch("sigil.routes.act.prompt_on_tty", return_value="y\n"),
+                patch("sigil.routes.act.run_zeta_agent_step", side_effect=fake_run_pi),
             ):
                 result = CliRunner().invoke(cli, ["act", "resume"])
             act_events = read_jsonl("last-act.jsonl")
@@ -622,9 +634,10 @@ def test_act_replaces_stale_same_objective_act_without_pending_step() -> None:
             )
             with (
                 patch(
-                    "sigil.acts.prompt_on_tty", side_effect=AssertionError("no prompt")
+                    "sigil.routes.act.prompt_on_tty",
+                    side_effect=AssertionError("no prompt"),
                 ),
-                patch("sigil.acts.run_zeta_agent_step", side_effect=fake_run_pi),
+                patch("sigil.routes.act.run_zeta_agent_step", side_effect=fake_run_pi),
             ):
                 result = invoke_op([",,,", "ship", "it"])
             act_events = read_jsonl("last-act.jsonl")
@@ -870,10 +883,10 @@ def test_verb_commands_run_piped_stream_operators() -> None:
         }
 
     with (
-        patch("sigil.operators.ensure_server", return_value=True),
-        patch("sigil.operators.chat_json", side_effect=fake_chat_json),
+        patch("sigil.routes.operators.ensure_server", return_value=True),
+        patch("sigil.routes.operators.chat_json", side_effect=fake_chat_json),
         patch("sigil.cli.ask.ask", side_effect=fake_ask),
-        patch("sigil.operators.append_event", return_value={}),
+        patch("sigil.routes.operators.append_event", return_value={}),
     ):
         ask_result = CliRunner().invoke(
             cli,
@@ -905,16 +918,16 @@ def test_verb_commands_run_piped_stream_operators() -> None:
 
 def test_command_verb_generates_proposal_without_stdin() -> None:
     with (
-        patch("sigil.operators.ensure_server", return_value=True),
+        patch("sigil.routes.operators.ensure_server", return_value=True),
         patch(
-            "sigil.operators.chat_json",
+            "sigil.routes.operators.chat_json",
             return_value={
                 "kind": "command",
                 "body": "find . -size +10M",
                 "explanation": "Lists large files.",
             },
         ),
-        patch("sigil.operators.append_event", return_value={}),
+        patch("sigil.routes.operators.append_event", return_value={}),
     ):
         result = CliRunner().invoke(cli, ["command", "find big files"])
 
@@ -924,16 +937,16 @@ def test_command_verb_generates_proposal_without_stdin() -> None:
 
 def test_command_verb_json_emits_proposal_envelope() -> None:
     with (
-        patch("sigil.operators.ensure_server", return_value=True),
+        patch("sigil.routes.operators.ensure_server", return_value=True),
         patch(
-            "sigil.operators.chat_json",
+            "sigil.routes.operators.chat_json",
             return_value={
                 "kind": "command",
                 "body": "git push origin main",
                 "explanation": "Publishes the branch.",
             },
         ),
-        patch("sigil.operators.append_event", return_value={}),
+        patch("sigil.routes.operators.append_event", return_value={}),
     ):
         result = CliRunner().invoke(cli, ["command", "--json", "ship it"])
 

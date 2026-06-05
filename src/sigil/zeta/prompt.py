@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Iterable
 
-from ..protocol import SHELL_HANDOFF_RESULT_SCHEMA
+from ..protocols import SHELL_HANDOFF_RESULT_SCHEMA
 from .tools import model_tool_descriptors
 
 BASE_SYSTEM_PROMPT = f"""You are Zeta, a shell-native coding agent.

@@ -11,19 +11,19 @@ import json
 import sys
 from typing import Any, Iterable
 
-from .model import ensure_server
-from .session import recent_turns_context
-from .state import (
+from ..session import recent_turns_context
+from ..state import (
     ANSWER_TRANSCRIPT,
     append_event,
     append_jsonl,
     read_jsonl,
     write_jsonl,
 )
-from .zeta.model import chat_text
-from .zeta import runtime
-from .zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
-from .display import render_tool_start, render_zeta_status
+from ..display import render_tool_start, render_zeta_status
+from ..zeta import runtime
+from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
+from ..zeta.model import chat_text
+from ..zeta.server import ensure_server
 
 
 ANSWER_ROUTE = "answer"
@@ -61,7 +61,7 @@ def discussion_turns() -> list[dict[str, object]]:
 
 def prepend_recent_turns(user_input: str) -> str:
     """Attach recent shell activity to a fresh question prompt."""
-    from .failure import active_failure_context
+    from ..failure import active_failure_context
 
     sections = []
     context = recent_turns_context()

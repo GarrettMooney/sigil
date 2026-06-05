@@ -6,12 +6,8 @@ from typing import Any, cast
 
 from click.testing import CliRunner
 
-from sigil import answers as answers_runner
-from sigil import display as sigil_display
-from sigil import handoff as sigil_handoff
-from sigil import zeta_runner
 from sigil.cli import cli as sigil_cli
-from sigil.protocol import (
+from sigil.protocols import (
     SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
@@ -20,10 +16,15 @@ from sigil.protocol import (
     SHELL_HANDOFF_RESULT_TYPE,
     SHELL_PROMPT_HANDOFF_TYPE,
 )
+from sigil.routes import ask as answers_runner
+from sigil.routes import zeta_step as zeta_runner
+from sigil import handoff as sigil_handoff
 from sigil.session import recent_turns, record_turn
+from sigil import display as sigil_display
 from sigil.zeta import agent as zeta_agent
 from sigil.zeta import runtime as zeta
 from sigil.zeta import model as zeta_model
+from sigil.zeta.tools import validate_tool_args
 from sigil.zeta.cli import cli as zeta_cli
 
 
@@ -302,18 +303,42 @@ def test_zeta_project_context_loads_global_to_local(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    home = tmp_path / "home"
+    global_context = home / ".zeta"
     root = tmp_path / "repo"
     child = root / "pkg"
+    global_context.mkdir(parents=True)
     child.mkdir(parents=True)
+    (global_context / "AGENTS.md").write_text("global instructions\n", encoding="utf-8")
     (root / "AGENTS.md").write_text("root instructions\n", encoding="utf-8")
-    (child / "CLAUDE.md").write_text("child instructions\n", encoding="utf-8")
+    (child / "AGENTS.md").write_text("child instructions\n", encoding="utf-8")
+    (child / "CLAUDE.md").write_text("ignored instructions\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(child)
 
     context = zeta.load_project_context()
 
+    assert context.index("global instructions") < context.index("root instructions")
     assert context.index("root instructions") < context.index("child instructions")
     assert "AGENTS.md" in context
-    assert "CLAUDE.md" in context
+    assert "CLAUDE.md" not in context
+    assert "ignored instructions" not in context
+
+
+def test_zeta_project_context_requires_exact_agents_filename(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    (project / "AGENTS.MD").write_text("uppercase ignored\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    context = zeta.load_project_context()
+
+    assert "uppercase ignored" not in context
 
 
 def test_zeta_tools_list_exposes_v1_builtins() -> None:
@@ -462,19 +487,104 @@ def test_zeta_tool_ls_can_filter_large_files_without_shelling_out(
     assert data["metadata"]["exclude"] == [".git"]
 
 
-def test_zeta_tool_edit_writes_patch_artifact() -> None:
-    patch = "--- a/a.txt\n+++ b/a.txt\n@@\n-old\n+new\n"
+def test_zeta_tool_edit_writes_patch_artifact(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("old\n", encoding="utf-8")
+
     result = CliRunner().invoke(
         zeta_cli,
         ["tool", "edit"],
-        input=json.dumps({"patch": patch}),
+        input=json.dumps({"location": str(target), "old": "old\n", "new": "new\n"}),
     )
     assert result.exit_code == 0
     data = json.loads(result.output)
     artifact = Path(data["handoff"]["artifact"])
     assert artifact.exists()
-    assert artifact.read_text(encoding="utf-8") == patch
+    patch = artifact.read_text(encoding="utf-8")
+    assert "-old\n" in patch
+    assert "+new\n" in patch
     assert data["handoff"]["command"].startswith("git apply ")
+
+
+def test_zeta_tool_edit_accepts_exact_replacement(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("hello\nold\nbye\n", encoding="utf-8")
+    payload = {
+        "location": str(target),
+        "old": "old\n",
+        "new": "new\n",
+        "reason": "Replace one line.",
+    }
+
+    result = CliRunner().invoke(
+        zeta_cli,
+        ["tool", "edit"],
+        input=json.dumps(payload),
+    )
+
+    assert validate_tool_args("edit", payload) == []
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    artifact = Path(data["handoff"]["artifact"])
+    patch = artifact.read_text(encoding="utf-8")
+    assert data["handoff"]["command"].startswith("git apply ")
+    assert data["handoff"]["reason"] == "Replace one line."
+    assert "-old\n" in patch
+    assert "+new\n" in patch
+
+
+def test_zeta_tool_edit_direct_replace_writes_file(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("hello\nold\nbye\n", encoding="utf-8")
+
+    data = zeta.run_tool(
+        "edit",
+        {"location": str(target), "old": "old\n", "new": "new\n"},
+        edit_mode="direct_replace",
+    )
+
+    assert data["ok"] is True
+    assert target.read_text(encoding="utf-8") == "hello\nnew\nbye\n"
+    assert "handoff" not in data
+    metadata = data["metadata"]
+    assert metadata["mode"] == "direct_replace"
+    artifact = Path(metadata["artifact"])
+    assert artifact.exists()
+    assert "+new\n" in artifact.read_text(encoding="utf-8")
+
+
+def test_zeta_tool_edit_rejects_ambiguous_exact_replacement(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("old\nold\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        zeta_cli,
+        ["tool", "edit"],
+        input=json.dumps({"location": str(target), "old": "old\n", "new": "new\n"}),
+    )
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"]["code"] == "old-text-not-unique"
+
+
+def test_zeta_tool_edit_marks_no_newline_exact_replacement(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("old", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        zeta_cli,
+        ["tool", "edit"],
+        input=json.dumps({"location": str(target), "old": "old", "new": "new"}),
+    )
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    artifact = Path(data["handoff"]["artifact"])
+    patch = artifact.read_text(encoding="utf-8")
+    assert "-old\n\\ No newline at end of file\n" in patch
+    assert "+new\n\\ No newline at end of file\n" in patch
 
 
 def test_zeta_transcript_append_and_tail(tmp_path: Path, monkeypatch) -> None:
@@ -641,15 +751,79 @@ def test_sigil_transcript_shell_turn_records_recent_turn(
     assert turns[0]["stderr_snippet"] == "test failed"
 
 
-def test_zeta_patch_analysis_extracts_paths() -> None:
-    patch = "--- a/src/old.py\n+++ b/src/new.py\n@@\n-x\n+y\n"
-    data = zeta.analyze_tool("edit", {"patch": patch})
+def test_zeta_edit_analysis_reports_location() -> None:
+    data = zeta.analyze_tool(
+        "edit",
+        {"location": "src/new.py", "old": "x", "new": "y"},
+    )
     assert data["valid"] is True
     assert data["resolved"] is True
-    assert [effect["target"] for effect in data["effects"]] == [
-        "src/old.py",
-        "src/new.py",
-    ]
+    assert [effect["target"] for effect in data["effects"]] == ["src/new.py"]
+
+
+def test_zeta_agent_direct_edit_stops_after_applying(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("old\n", encoding="utf-8")
+    requests = 0
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        nonlocal requests
+        requests += 1
+        return {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "edit",
+                        "arguments": json.dumps(
+                            {
+                                "location": str(target),
+                                "old": "old\n",
+                                "new": "new\n",
+                            }
+                        ),
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "edit",
+        [],
+        zeta_agent.AgentConfig(
+            allowed_tools=("edit",),
+            edit_mode="direct_replace",
+            max_turns=3,
+        ),
+    )
+
+    assert requests == 1
+    assert result.handoff is None
+    assert target.read_text(encoding="utf-8") == "new\n"
+    tool_result = next(
+        event for event in result.events if event.get("type") == "tool_result"
+    )
+    assert tool_result["result"]["ok"] is True
+    assert tool_result["result"]["metadata"]["mode"] == "direct_replace"
+
+
+def test_zeta_step_glyph_selects_edit_mode() -> None:
+    assert zeta_runner.edit_mode_for_glyph(",,") == "review_patch"
+    assert zeta_runner.edit_mode_for_glyph(",,,") == "direct_replace"
 
 
 def test_zeta_system_prompt_is_product_neutral_and_dynamic() -> None:

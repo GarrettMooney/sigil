@@ -6,7 +6,7 @@ import os
 from typing import Any
 
 from .session import recent_turns, record_turn
-from .protocol import (
+from .protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
     SHELL_HANDOFF_OUTCOME_NO_PENDING,

@@ -33,7 +33,7 @@ suggesting, executing, and explaining. Sigil keeps those routes separate.
 | --- | --- | --- |
 | "Answer from context." | `,` | Read-only answer with local inspection tools. No shell is exposed. |
 | "Do one agent turn." | `,,` | Runs one shell-owned Zeta turn. Bash calls are staged in your prompt. |
-| "Do another agent turn." | `,,,` | Same Zeta turn route in v1; reserved for a faster routine path. |
+| "Do a routine edit step." | `,,,` | Runs one auto-approved Zeta step; exact replacements are applied directly. |
 | "Run and capture this command." | `+` | Runs one explicit command, streams output, and records stdout/stderr snippets. |
 
 The result is a shell workflow with small blast radius, durable state, and a
@@ -155,7 +155,7 @@ Installed zsh and Bash bindings expose these shortcuts:
 | --- | --- | --- |
 | `,` | read | Answer from read-only context. |
 | `,,` | step | Run or resume one shell-owned Zeta turn. |
-| `,,,` | auto step | Same v1 Zeta turn route as `,,`. |
+| `,,,` | auto step | Run one auto-approved edit step; exact replacements apply directly. |
 | `+` | run | Run one explicit command and capture stdout/stderr snippets. |
 
 Examples:
@@ -189,8 +189,9 @@ resumes the active Zeta step and attaches the recorded shell turns as the source
 of truth. If you changed the staged command, Zeta receives that as a changed
 handoff rather than assuming the original command ran.
 
-`,,,` currently uses the same v1 Zeta loop as `,,`. It remains a separate glyph
-so a more automatic routine path can be split out later.
+`,,,` uses the same model-facing edit schema as `,,`, but it is the routine
+path: exact replacements are applied directly after Zeta verifies the target
+text matches once. Bash handoffs are still staged in your prompt.
 
 Read-only routes do not expose Bash. If an answer recommends a command, it is
 plain answer text, not a tool call or terminal handoff.
@@ -214,7 +215,7 @@ Each route has a fixed effect on your system:
 | --- | --- | --- |
 | `,` | read-only | Local answer route with no Bash tool. |
 | `,,` | read/write/handoff | One shell-owned Zeta step; Bash is staged in the prompt. |
-| `,,,` | read/write/handoff | Same v1 route as `,,`. |
+| `,,,` | read/write/direct edit/handoff | Auto-approved Zeta step; exact replacements apply directly, Bash stays staged. |
 | `+` | execute | Explicit local command execution with stdout/stderr capture. |
 
 Sigil stores audit/debug events and per-shell continuity under `~/.sigil/`.

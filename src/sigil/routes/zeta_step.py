@@ -11,18 +11,19 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable, Literal, TextIO
 
-from .display import (
+from ..state import append_jsonl
+from ..display import (
     render_handoff_lines,
     render_tool_start,
     render_zeta_status,
     tool_result_summary,
 )
-from .model import ensure_server
-from .state import append_jsonl
-from .zeta import runtime
-from .zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
+from ..zeta import runtime
+from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
+from ..zeta.server import ensure_server
 
 HandoffOutput = Literal["detail", "summary", "none"]
+EditMode = Literal["review_patch", "direct_replace"]
 
 
 def run_agent_step(
@@ -36,6 +37,7 @@ def run_agent_step(
     handoff_path: str | Path | None = None,
     handoff_output: HandoffOutput = "detail",
     trace_output: TextIO | None = None,
+    edit_mode: EditMode | None = None,
 ) -> int:
     """Run a bounded Zeta agent step for CLI routes."""
     if not ensure_server():
@@ -70,6 +72,7 @@ def run_agent_step(
             allowed_tools=enabled_tools,
             max_turns=max_steps,
             stop_on_handoff=True,
+            edit_mode=edit_mode or edit_mode_for_glyph(glyph),
         ),
         context=context,
     )
@@ -131,6 +134,8 @@ def replay_agent_events(
         if not isinstance(result_payload, dict):
             continue
         render_result_summary(name, result_payload, output=output)
+        if name == "edit" and result_payload.get("ok") is True:
+            status = 0
         handoff = result_payload.get("handoff")
         if not isinstance(handoff, dict):
             continue
@@ -172,6 +177,12 @@ def print_handoff(
 
 def append_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
     return append_jsonl(runtime.TRANSCRIPT, {"type": event_type, **fields})
+
+
+def edit_mode_for_glyph(glyph: str) -> EditMode:
+    if glyph == ",,,":
+        return "direct_replace"
+    return "review_patch"
 
 
 def agent_prompt(objective: str, *, stdin_text: str) -> str:

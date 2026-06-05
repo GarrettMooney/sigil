@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any, Iterable, TextIO, cast
 
-from .protocol import (
+from .protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
     SHELL_HANDOFF_OUTCOME_NO_PENDING,
@@ -103,7 +103,7 @@ def summarize(tool: str, args: object) -> str:
     tool_args = cast(dict[str, object], args)
     fields_by_tool = {
         "read": ("path", "file_path"),
-        "edit": ("path", "file_path"),
+        "edit": ("location", "path", "file_path"),
         "write": ("path", "file_path"),
         "bash": ("command", "cmd"),
         "grep": ("pattern", "query", "path", "glob"),
@@ -144,6 +144,11 @@ def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
         if files:
             return [f"{len(matches)} matches · {len(files)} files"]
         return [f"{len(matches)} matches"]
+    if name == "edit" and metadata.get("mode") == "direct_replace":
+        location = metadata.get("location")
+        if isinstance(location, str) and location:
+            return [f"applied · {location}"]
+        return ["applied"]
     if result.get("ok") is False:
         return [str(result.get("message") or result.get("error") or "failed")]
     if result.get("ok") is True:

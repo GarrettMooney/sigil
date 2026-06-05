@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 import sys
 
-from .tty import LOVE, MUTED, RESET
-from .zeta import model as zeta_model
+from ..tty import LOVE, MUTED, RESET
+from . import model as zeta_model
 
 
 def model_path() -> str:

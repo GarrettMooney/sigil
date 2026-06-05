@@ -6,7 +6,7 @@ import click
 
 from ._base import cli
 from ._shared import pretty_print_json
-from ..acts import abort_active_act, last_act, print_act, run_act_stepper
+from ..routes.act import abort_active_act, last_act, print_act, run_act_stepper
 
 
 @cli.command("act")

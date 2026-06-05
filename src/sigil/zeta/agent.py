@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Iterable, cast
+from typing import Any, Iterable, Literal, cast
 
-from ..protocol import is_shell_prompt_handoff
+from ..protocols import is_shell_prompt_handoff
 from . import runtime
 from .model import chat_completion_messages, model_endpoint_open
 from .tools import (
@@ -17,6 +17,8 @@ from .tools import (
     validate_tool_args,
 )
 
+EditMode = Literal["review_patch", "direct_replace"]
+
 
 @dataclass(frozen=True)
 class AgentConfig:
@@ -26,6 +28,7 @@ class AgentConfig:
     allowed_tools: Iterable[str] | None = None
     max_turns: int = 8
     stop_on_handoff: bool = True
+    edit_mode: EditMode = "review_patch"
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,7 @@ def run_agent_turn(
                 tool_call,
                 allowed_tools=allowed_tools,
                 index=index,
+                edit_mode=config.edit_mode,
             )
             events.extend(result_event.events)
             if result_event.handoff is not None and config.stop_on_handoff:
@@ -86,6 +90,8 @@ def run_agent_turn(
                     events=events,
                     handoff=result_event.handoff,
                 )
+            if result_event.stop:
+                return AgentTurnResult(events=events)
     return AgentTurnResult(events=events)
 
 
@@ -93,6 +99,7 @@ def run_agent_turn(
 class ToolCallResult:
     events: list[dict[str, Any]]
     handoff: dict[str, Any] | None = None
+    stop: bool = False
 
 
 def assistant_message_event(assistant: dict[str, Any]) -> dict[str, Any]:
@@ -118,6 +125,7 @@ def handle_tool_call(
     *,
     allowed_tools: tuple[str, ...],
     index: int,
+    edit_mode: EditMode = "review_patch",
 ) -> ToolCallResult:
     call_id = str(tool_call.get("id") or f"call-{index}")
     function = tool_call.get("function")
@@ -193,11 +201,13 @@ def handle_tool_call(
                 tool_result_event(call_id, name, result),
             ]
         )
-    result = run_tool(name, params)
+    result = run_tool_for_mode(name, params, edit_mode=edit_mode)
     handoff = result_handoff(result)
+    stop = bool(name == "edit" and result.get("ok") is True)
     return ToolCallResult(
         events=[call_event, analysis_event, tool_result_event(call_id, name, result)],
         handoff=handoff,
+        stop=stop,
     )
 
 
@@ -213,6 +223,17 @@ def parse_tool_arguments(arguments: Any) -> tuple[dict[str, Any], str]:
     if not isinstance(params, dict):
         return {}, "function arguments JSON was not an object"
     return cast(dict[str, Any], params), ""
+
+
+def run_tool_for_mode(
+    name: str,
+    params: dict[str, Any],
+    *,
+    edit_mode: EditMode,
+) -> dict[str, Any]:
+    if name == "edit":
+        return run_tool(name, params, edit_mode=edit_mode)
+    return run_tool(name, params)
 
 
 def invalid_tool_result(

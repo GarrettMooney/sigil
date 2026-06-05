@@ -7,7 +7,7 @@ import os
 from typing import Any, Iterable, TextIO
 
 from . import tools as tool_registry
-from .context import PROJECT_CONTEXT_FILES, load_project_context
+from .context import load_project_context
 from .prompt import system_prompt
 from .transcript import (
     DEFAULT_TAIL_LIMIT,
@@ -26,7 +26,6 @@ TOOL_SPECS = tool_registry.TOOL_SPECS
 
 __all__ = [
     "DEFAULT_TAIL_LIMIT",
-    "PROJECT_CONTEXT_FILES",
     "TOOL_SPECS",
     "TRANSCRIPT",
     "allowed_tool_names",
@@ -73,8 +72,13 @@ def analyze_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
     return tool_registry.analyze_tool(name, params)
 
 
-def run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
-    return tool_registry.run_tool(name, params)
+def run_tool(
+    name: str,
+    params: dict[str, Any],
+    *,
+    edit_mode: str = "review_patch",
+) -> dict[str, Any]:
+    return tool_registry.run_tool(name, params, edit_mode=edit_mode)
 
 
 def zeta_system_prompt(

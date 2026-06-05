@@ -1,14 +1,16 @@
-"""Patch-edit handoff tool implementation."""
+"""Exact-replacement edit handoff tool implementation."""
 
 from __future__ import annotations
 
+import difflib
 import shlex
-from typing import Any
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable
 
 from .base import (
     ToolSpec,
     analysis,
-    diagnostic,
     effect,
     error_result,
     handoff,
@@ -19,67 +21,131 @@ from .base import (
 SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["patch"],
+    "required": ["location", "old", "new"],
     "properties": {
-        "patch": {"type": "string"},
+        "location": {"type": "string", "minLength": 1},
+        "old": {"type": "string", "minLength": 1},
+        "new": {"type": "string"},
         "reason": {"type": "string"},
     },
 }
 
 SPEC = ToolSpec(
     "edit",
-    "Write a patch artifact and stage git apply.",
+    "Edit a file by exact replacement using location, old text, and new text.",
     SCHEMA,
     True,
 )
 
 
 def analyze(params: dict[str, Any]) -> dict[str, Any]:
-    patch = str(params.get("patch") or "")
-    if not patch:
-        return missing("patch")
-    paths = patch_paths(patch)
-    resolved = bool(paths)
-    diagnostics = (
-        [] if resolved else [diagnostic("patch-paths", "no patch paths found")]
-    )
-    return analysis(
-        resolved=resolved,
-        effects=[effect("write", path) for path in paths],
-        diagnostics=diagnostics,
-    )
+    location = str(params.get("location") or "")
+    if not location:
+        return missing("location")
+    return analysis(effects=[effect("write", location)])
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:
-    patch = str(params.get("patch") or "")
+    edit = prepare_exact_replacement(params)
+    if not isinstance(edit, ExactReplacement):
+        return edit
+    return stage_patch(
+        edit.patch,
+        str(params.get("reason") or f"Apply exact replacement in {edit.location}."),
+    )
+
+
+def run_direct(params: dict[str, Any]) -> dict[str, Any]:
+    edit = prepare_exact_replacement(params)
+    if not isinstance(edit, ExactReplacement):
+        return edit
+    Path(edit.location).write_text(edit.updated, encoding="utf-8")
+    artifact = write_temp("zeta-edit-", ".patch", edit.patch)
+    return {
+        "ok": True,
+        "content": [
+            {"type": "text", "text": f"applied exact replacement to {edit.location}"}
+        ],
+        "metadata": {
+            "location": edit.location,
+            "artifact": str(artifact),
+            "mode": "direct_replace",
+        },
+    }
+
+
+@dataclass(frozen=True)
+class ExactReplacement:
+    location: str
+    updated: str
+    patch: str
+
+
+def prepare_exact_replacement(
+    params: dict[str, Any],
+) -> ExactReplacement | dict[str, Any]:
+    location = str(params.get("location") or "")
+    if not location:
+        return error_result("missing-location", "missing location")
+    old = str(params.get("old") or "")
+    if not old:
+        return error_result("missing-old", "missing old")
+    new = str(params.get("new") or "")
+    try:
+        text = Path(location).read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return error_result("read-failed", str(exc))
+    matches = text.count(old)
+    if matches == 0:
+        return error_result("old-text-not-found", "old text was not found")
+    if matches > 1:
+        return error_result("old-text-not-unique", "old text matched more than once")
+    updated = text.replace(old, new, 1)
+    patch = replacement_patch(location, text, updated)
     if not patch:
-        return error_result("missing-patch", "missing patch")
+        return error_result("empty-edit", "replacement did not change the file")
+    return ExactReplacement(location=location, updated=updated, patch=patch)
+
+
+def stage_patch(patch: str, reason: str) -> dict[str, Any]:
     path = write_temp("zeta-edit-", ".patch", patch)
     return handoff(
         f"git apply {shlex.quote(str(path))}",
-        str(params.get("reason") or "Apply the staged patch."),
+        reason,
         artifact=str(path),
     )
 
 
-def patch_paths(patch: str) -> list[str]:
-    paths: list[str] = []
-    for line in patch.splitlines():
-        path = patch_path_from_line(line)
-        if path and path not in paths:
-            paths.append(path)
-    return paths
+def replacement_patch(location: str, old: str, new: str) -> str:
+    before = old.splitlines(keepends=True)
+    after = new.splitlines(keepends=True)
+    lines = difflib.unified_diff(
+        before,
+        after,
+        fromfile=patch_source_path(location),
+        tofile=patch_target_path(location),
+    )
+    return "".join(normalize_diff_lines(lines))
 
 
-def patch_path_from_line(line: str) -> str | None:
-    if line.startswith("+++ "):
-        raw = line[4:].strip().split("\t", 1)[0]
-    elif line.startswith("--- "):
-        raw = line[4:].strip().split("\t", 1)[0]
-    else:
-        return None
-    if raw == "/dev/null":
-        return None
-    if raw.startswith("a/") or raw.startswith("b/"):
-        return raw[2:]
-    return raw
+def normalize_diff_lines(lines: Iterable[str]) -> list[str]:
+    normalized = []
+    for line in lines:
+        if line.endswith("\n"):
+            normalized.append(line)
+        else:
+            normalized.append(f"{line}\n")
+            normalized.append("\\ No newline at end of file\n")
+    return normalized
+
+
+def patch_source_path(path: str) -> str:
+    if path.startswith("/"):
+        return path
+    return f"a/{path}"
+
+
+def patch_target_path(path: str) -> str:
+    if path.startswith("/"):
+        return path
+    return f"b/{path}"

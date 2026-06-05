@@ -109,8 +109,15 @@ def analyze_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
     return tool.analyze(params)
 
 
-def run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
+def run_tool(
+    name: str,
+    params: dict[str, Any],
+    *,
+    edit_mode: str = "review_patch",
+) -> dict[str, Any]:
     tool = TOOL_IMPLS.get(name)
     if tool is None:
         return error_result("unknown-tool", f"unknown tool: {name}")
+    if name == edit.SPEC.name and edit_mode == "direct_replace":
+        return edit.run_direct(params)
     return tool.run(params)

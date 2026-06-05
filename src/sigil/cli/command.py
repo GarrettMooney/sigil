@@ -6,7 +6,7 @@ import click
 
 from ._base import cli
 from ._shared import piped_stdin_text, print_json_line
-from ..operators import run_command_proposal
+from ..routes.operators import run_command_proposal
 
 
 @cli.command("command")
