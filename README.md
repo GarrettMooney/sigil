@@ -230,7 +230,6 @@ sigil events
 The glyphs are thin shell functions over a regular CLI:
 
 ```text
-sigil command [--json] [PROMPT]
 sigil ask [--follow-up] [--json] [QUESTION]
 sigil run COMMAND [ARGS...]
 sigil act [show|resume|abort] [--json]
@@ -280,7 +279,6 @@ sigil events
 Sigil is:
 
 - A command-line tool and optional shell binding.
-- A local-model command proposal route.
 - A shell-owned Zeta loop for one-step read/search/edit/write workflows.
 - An evented state layer for shell continuity and audit history.
 

@@ -16,9 +16,7 @@ from sigil.cli.operators import run_operator
 from sigil.routes.operators import (
     create_invocation,
     parse_operator_token,
-    proposal_user_prompt,
 )
-from sigil.session import record_turn
 from sigil.state import append_jsonl, read_jsonl
 
 
@@ -240,52 +238,11 @@ def test_at_operator_is_rejected() -> None:
     assert "unsupported operator: @" in result.output
 
 
-def test_command_verb_runs_piped_proposal_operator() -> None:
-    calls = {}
+def test_command_verb_is_not_registered() -> None:
+    result = CliRunner().invoke(cli, ["command", "update example"])
 
-    def fake_chat_json(
-        system: str, user: str, schema: dict[str, object]
-    ) -> dict[str, str]:
-        calls["system"] = system
-        calls["user"] = user
-        calls["schema"] = schema
-        return {
-            "kind": "command",
-            "body": "uv run pytest",
-            "explanation": "Tests validate the current code path before cleanup.",
-        }
-
-    with (
-        patch("sigil.routes.operators.ensure_server", return_value=True),
-        patch("sigil.routes.operators.chat_json", side_effect=fake_chat_json),
-        patch("sigil.routes.operators.append_event", return_value={}),
-    ):
-        result = CliRunner().invoke(
-            cli,
-            ["command", "draft an executive summary"],
-            input="meeting notes\n",
-        )
-    assert result.exit_code == 0, result.output
-    assert result.output == (
-        "uv run pytest\nTests validate the current code path before cleanup.\n"
-    )
-    assert "Produce one typed proposal" in str(calls["system"])
-    assert "Prompt: draft an executive summary" in str(calls["user"])
-    schema = calls["schema"]
-    assert schema["properties"]["kind"]["enum"] == ["command"]
-    assert "body" in schema["properties"]
-    assert "explanation" in schema["properties"]
-
-
-def test_command_verb_rejects_non_command_proposals() -> None:
-    with patch(
-        "sigil.cli.command.run_command_proposal",
-        side_effect=RuntimeError("command route did not produce a proposal"),
-    ):
-        result = CliRunner().invoke(cli, ["command", "update example"])
-
-    assert result.exit_code == 1
-    assert "did not produce a proposal" in result.stderr
+    assert result.exit_code == 2
+    assert "No such command" in result.stderr
 
 
 def test_double_comma_runs_confirmed_agent_step() -> None:
@@ -356,14 +313,9 @@ def test_op_cli_returns_agent_stepper_status() -> None:
 
 
 def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
-    with (
-        patch(
-            "sigil.cli.operators.confirm_piped_input",
-            side_effect=AssertionError("no prompt"),
-        ),
-        patch(
-            "sigil.routes.operators.chat_json", side_effect=AssertionError("no model")
-        ),
+    with patch(
+        "sigil.cli.operators.confirm_piped_input",
+        side_effect=AssertionError("no prompt"),
     ):
         result = invoke_op(["^", "status"], input="notes\n")
 
@@ -864,45 +816,22 @@ def test_op_cli_routes_piped_triple_comma_to_auto_agent_step() -> None:
     assert calls[0][1]["glyph"] == ",,,"
 
 
-def test_verb_commands_run_piped_stream_operators() -> None:
+def test_ask_verb_accepts_piped_input() -> None:
     ask_calls = []
-    json_calls = []
 
     def fake_ask(*args: object, **kwargs: object) -> int:
         ask_calls.append((args, kwargs))
         return 0
 
-    def fake_chat_json(
-        system: str, user: str, schema: dict[str, object]
-    ) -> dict[str, str]:
-        json_calls.append((system, user, schema))
-        return {
-            "kind": "command",
-            "body": "stream result",
-            "explanation": "because stdin",
-        }
-
-    with (
-        patch("sigil.routes.operators.ensure_server", return_value=True),
-        patch("sigil.routes.operators.chat_json", side_effect=fake_chat_json),
-        patch("sigil.cli.ask.ask", side_effect=fake_ask),
-        patch("sigil.routes.operators.append_event", return_value={}),
-    ):
+    with patch("sigil.cli.ask.ask", side_effect=fake_ask):
         ask_result = CliRunner().invoke(
             cli,
             ["ask", "review"],
             input="diff\n",
         )
-        command_result = CliRunner().invoke(
-            cli,
-            ["command", "summarize"],
-            input="notes\n",
-        )
 
     assert ask_result.exit_code == 0, ask_result.output
-    assert command_result.exit_code == 0, command_result.output
     assert ask_result.output == ""
-    assert command_result.output == "stream result\nbecause stdin\n"
     assert ask_calls == [
         (
             ("review\n\nPiped input:\ndiff\n",),
@@ -913,49 +842,6 @@ def test_verb_commands_run_piped_stream_operators() -> None:
             },
         )
     ]
-    assert "Operator: command (command)" in json_calls[0][1]
-
-
-def test_command_verb_generates_proposal_without_stdin() -> None:
-    with (
-        patch("sigil.routes.operators.ensure_server", return_value=True),
-        patch(
-            "sigil.routes.operators.chat_json",
-            return_value={
-                "kind": "command",
-                "body": "find . -size +10M",
-                "explanation": "Lists large files.",
-            },
-        ),
-        patch("sigil.routes.operators.append_event", return_value={}),
-    ):
-        result = CliRunner().invoke(cli, ["command", "find big files"])
-
-    assert result.exit_code == 0, result.output
-    assert result.output == "find . -size +10M\nLists large files.\n"
-
-
-def test_command_verb_json_emits_proposal_envelope() -> None:
-    with (
-        patch("sigil.routes.operators.ensure_server", return_value=True),
-        patch(
-            "sigil.routes.operators.chat_json",
-            return_value={
-                "kind": "command",
-                "body": "git push origin main",
-                "explanation": "Publishes the branch.",
-            },
-        ),
-        patch("sigil.routes.operators.append_event", return_value={}),
-    ):
-        result = CliRunner().invoke(cli, ["command", "--json", "ship it"])
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {
-        "prompt": "ship it",
-        "command": "git push origin main",
-        "explanation": "Publishes the branch.",
-    }
 
 
 def test_op_cli_rejects_mixed_glyphs() -> None:
@@ -968,228 +854,3 @@ def test_op_cli_rejects_transform_until_colon_operator_exists() -> None:
     result = invoke_op([":json"])
     assert result.exit_code == 2
     assert "unsupported operator: :" in result.output
-
-
-def test_proposal_user_prompt_includes_recent_turns_in_interactive_mode() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            record_turn("ls -la", 0, "/repo")
-            record_turn("pytest tests/test_foo.py", 1, "/repo")
-            invocation = create_invocation(
-                ",",
-                prompt="commit message for what just happened",
-                stdin="",
-                mode="interactive",
-            )
-            prompt = proposal_user_prompt(invocation)
-
-    assert "Recent shell activity:" in prompt
-    assert "ls -la" in prompt
-    assert "pytest tests/test_foo.py" in prompt
-    assert "exit 0" in prompt
-    assert "exit 1" in prompt
-
-
-def test_proposal_user_prompt_keeps_prompt_and_attaches_active_failure() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            record_turn(
-                "pytest tests/test_foo.py",
-                1,
-                "/repo",
-                stderr_snippet="AssertionError: no",
-            )
-            invocation = create_invocation(
-                ",",
-                prompt="fix",
-                stdin="",
-                mode="interactive",
-            )
-            prompt = proposal_user_prompt(invocation)
-
-    assert "Prompt: fix" in prompt
-    assert "Suggest the smallest safe next shell command" not in prompt
-    assert "Last failed command context:" in prompt
-    assert "Failed command: pytest tests/test_foo.py" in prompt
-    assert "AssertionError: no" in prompt
-
-
-def test_proposal_user_prompt_attaches_active_failure_for_unrelated_prompt() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            record_turn(
-                "pytest tests/test_foo.py",
-                1,
-                "/repo",
-                stderr_snippet="AssertionError: no",
-            )
-            invocation = create_invocation(
-                ",",
-                prompt="summarize the repository layout",
-                stdin="",
-                mode="interactive",
-            )
-            prompt = proposal_user_prompt(invocation)
-
-    assert "Prompt: summarize the repository layout" in prompt
-    assert "Last failed command context:" in prompt
-    assert "Failed command: pytest tests/test_foo.py" in prompt
-
-
-def test_proposal_user_prompt_omits_failure_context_after_successful_turn() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            record_turn(
-                "pytest tests/test_foo.py",
-                1,
-                "/repo",
-                stderr_snippet="AssertionError: no",
-            )
-            record_turn("git status --short", 0, "/repo")
-            invocation = create_invocation(
-                ",",
-                prompt="fix",
-                stdin="",
-                mode="interactive",
-            )
-            prompt = proposal_user_prompt(invocation)
-
-    assert "Last failed command context:" not in prompt
-
-
-def test_proposal_user_prompt_omits_recent_turns_when_none_recorded() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            invocation = create_invocation(
-                ",",
-                prompt="anything",
-                stdin="",
-                mode="interactive",
-            )
-            prompt = proposal_user_prompt(invocation)
-
-    assert "Recent shell activity" not in prompt
-
-
-def test_proposal_user_prompt_omits_failure_context_when_none_recorded(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            invocation = create_invocation(
-                ",",
-                prompt="anything",
-                stdin="",
-                mode="interactive",
-            )
-            prompt = proposal_user_prompt(invocation)
-
-    captured = capsys.readouterr()
-    assert captured.err == ""
-    assert "No failed command is recorded" not in prompt
-    assert "Last failed command context:" not in prompt
-
-
-def test_proposal_user_prompt_omits_recent_turns_in_pipeline_mode() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            record_turn("ls -la", 0, "/repo")
-            invocation = create_invocation(
-                ",",
-                prompt="summarize",
-                stdin="some piped input\n",
-                mode="pipeline",
-            )
-            prompt = proposal_user_prompt(invocation)
-
-    assert "Recent shell activity" not in prompt
-
-
-def test_proposal_user_prompt_includes_recent_question_transcript() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            append_jsonl(
-                "last-answer.jsonl",
-                {"role": "user", "content": "find the biggest files"},
-            )
-            append_jsonl(
-                "last-answer.jsonl",
-                {"role": "assistant", "content": "du -ah . | sort -rh | head -n 10"},
-            )
-            invocation = create_invocation(
-                ",,",
-                prompt="do that",
-                stdin="",
-                mode="interactive",
-            )
-            prompt = proposal_user_prompt(invocation)
-
-    assert "Recent answer transcript:" in prompt
-    assert "find the biggest files" in prompt
-    assert "du -ah . | sort -rh | head -n 10" in prompt
-
-
-def test_proposal_user_prompt_omits_question_transcript_when_empty() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            invocation = create_invocation(
-                ",",
-                prompt="anything",
-                stdin="",
-                mode="interactive",
-            )
-            prompt = proposal_user_prompt(invocation)
-
-    assert "Recent answer transcript" not in prompt
-
-
-def test_proposal_user_prompt_omits_question_transcript_in_pipeline_mode() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            append_jsonl(
-                "last-answer.jsonl",
-                {"role": "user", "content": "find the biggest files"},
-            )
-            append_jsonl(
-                "last-answer.jsonl",
-                {"role": "assistant", "content": "du -ah . | sort -rh | head -n 10"},
-            )
-            invocation = create_invocation(
-                ",",
-                prompt="summarize",
-                stdin="some piped input\n",
-                mode="pipeline",
-            )
-            prompt = proposal_user_prompt(invocation)
-
-    assert "Recent answer transcript" not in prompt

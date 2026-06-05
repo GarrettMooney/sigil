@@ -49,7 +49,6 @@ def test_top_level_help_lists_commands() -> None:
     for command in [
         "act",
         "ask",
-        "command",
         "doctor",
         "events",
         "install",
@@ -57,7 +56,14 @@ def test_top_level_help_lists_commands() -> None:
         "session",
     ]:
         assert command in result.output
-    for command in ["op", "record-turn", "record-failure", "staged", "status"]:
+    for command in [
+        "command",
+        "op",
+        "record-turn",
+        "record-failure",
+        "staged",
+        "status",
+    ]:
         assert f"\n  {command} " not in result.output
     assert "\n  question" not in result.output
 

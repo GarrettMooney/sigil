@@ -3,15 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Literal, cast
-
-from ..failure import active_failure_context
-from ..session import recent_turns_context
-from ..state import append_event
-from ..zeta.model import chat_json
-from ..zeta.server import ensure_server
-from .ask import recent_answer_context
 
 OperatorBase = Literal[","]
 
@@ -22,37 +14,6 @@ OPERATOR_NAMES: dict[OperatorBase, str] = {
 SUPPORTED_OPERATORS = frozenset(OPERATOR_NAMES)
 OPERATOR_MAX_DEPTHS: dict[OperatorBase, int] = {
     ",": 3,
-}
-MAX_STDIN_CHARS = 120_000
-MAX_EVENT_OUTPUT_CHARS = 4000
-MAX_TARGET_FILES = 16
-MAX_TARGET_FILE_CHARS = 20_000
-RECOMMEND_SYSTEM = (
-    "You are a semantic shell operator. Produce one typed proposal from the "
-    "input stream, prompt, current project context, and any last-failure "
-    "context. The proposal must be one directly runnable shell command. "
-    "Do not execute it or claim to have changed anything."
-)
-
-PROPOSAL_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "kind": {
-            "type": "string",
-            "enum": ["command"],
-            "description": "The proposal kind. Only shell commands are supported.",
-        },
-        "body": {
-            "type": "string",
-            "description": "One concrete shell command.",
-        },
-        "explanation": {
-            "type": "string",
-            "description": "Brief reason this is the best next action.",
-        },
-    },
-    "required": ["kind", "body", "explanation"],
 }
 
 
@@ -71,33 +32,6 @@ class OperatorInvocation:
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-serializable representation."""
         return asdict(self)
-
-
-@dataclass(frozen=True)
-class OperatorResult:
-    """Model output produced by a semantic operator invocation."""
-
-    output: str
-    command: str | None = None
-    explanation: str = ""
-    stderr: str = ""
-    exit_code: int = 0
-
-
-@dataclass(frozen=True)
-class TypedProposal:
-    """A model proposal with explicit effect kind."""
-
-    kind: Literal["command"]
-    body: str
-    explanation: str = ""
-
-    def display(self) -> str:
-        """Return terminal-visible proposal text."""
-        lines = [self.body]
-        if self.explanation:
-            lines.append(self.explanation)
-        return "\n".join(lines)
 
 
 def parse_operator_token(token: str) -> tuple[OperatorBase, int]:
@@ -143,142 +77,3 @@ def create_invocation(
         stdin=stdin,
         mode=mode,
     )
-
-
-def run_command_proposal(
-    *,
-    prompt: str,
-    stdin: str,
-    mode: str = "interactive",
-) -> OperatorResult:
-    """Run the named command-proposal route."""
-    if not ensure_server():
-        raise SystemExit(1)
-    invocation = OperatorInvocation(
-        glyph="command",
-        base=",",
-        depth=1,
-        name="command",
-        prompt=prompt,
-        stdin=stdin,
-        mode=mode,
-    )
-    system = f"{RECOMMEND_SYSTEM}\n\nDepth: 1. Return one concrete shell command."
-    user = proposal_user_prompt(invocation)
-    proposal = run_proposal_model(invocation, system, user)
-    if proposal is None:
-        raise RuntimeError("command route did not produce a proposal")
-    output = proposal.display()
-    append_event(
-        {
-            "type": "operator_completed",
-            "operator": invocation.to_dict(),
-            "output_snippet": output[:MAX_EVENT_OUTPUT_CHARS],
-            "glyph": invocation.glyph,
-        }
-    )
-    return OperatorResult(
-        output=output,
-        command=proposal.body,
-        explanation=proposal.explanation,
-    )
-
-
-def run_proposal_model(
-    invocation: OperatorInvocation,
-    system: str,
-    user: str,
-) -> TypedProposal | None:
-    """Run the model for typed command proposals."""
-    if invocation.name == "command":
-        data = chat_json(system, user, PROPOSAL_SCHEMA)
-        proposal = proposal_from_json(data, explanation_required=True)
-        if not proposal:
-            raise RuntimeError("command route did not produce a proposal")
-        return proposal
-    return None
-
-
-def proposal_from_json(
-    data: dict[str, object],
-    *,
-    explanation_required: bool = False,
-) -> TypedProposal | None:
-    """Convert structured model output into a typed proposal."""
-    kind = str(data.get("kind", "")).strip()
-    raw_body = str(data.get("body", ""))
-    if kind != "command" or not raw_body.strip():
-        return None
-    body = raw_body.strip()
-    explanation = str(data.get("explanation", "")).strip()
-    if explanation_required and not explanation:
-        return None
-    return TypedProposal(
-        kind=cast("Literal['command']", kind),
-        body=body,
-        explanation=explanation,
-    )
-
-
-def proposal_user_prompt(invocation: OperatorInvocation) -> str:
-    """Return a proposal prompt with stdin, file, and failure context."""
-    prompt = invocation.prompt or default_prompt(invocation)
-    stdin_text, stdin_label = bounded_stdin(invocation.stdin)
-    sections = [
-        f"Operator: {invocation.glyph} ({invocation.name})",
-        f"Prompt: {prompt}",
-        proposal_instruction(),
-        f"{stdin_label}:\n{stdin_text}",
-    ]
-    files = readable_target_files(
-        [line.strip() for line in invocation.stdin.splitlines() if line.strip()]
-    )
-    if files:
-        sections.append("Readable target file snapshots:")
-        for path, content in files:
-            label = str(path)
-            if len(content) > MAX_TARGET_FILE_CHARS:
-                content = content[:MAX_TARGET_FILE_CHARS]
-                label = f"{label} (first {MAX_TARGET_FILE_CHARS} chars)"
-            sections.append(f"--- {label}\n{content}")
-    if invocation.mode == "interactive":
-        turns_section = recent_turns_context()
-        if turns_section:
-            sections.append(turns_section)
-        answer_section = recent_answer_context()
-        if answer_section:
-            sections.append(answer_section)
-        sections.append(active_failure_context())
-    return "\n\n".join(section for section in sections if section)
-
-
-def bounded_stdin(stdin: str) -> tuple[str, str]:
-    """Return bounded stdin text and a display label."""
-    if len(stdin) > MAX_STDIN_CHARS:
-        return stdin[-MAX_STDIN_CHARS:], f"stdin (last {MAX_STDIN_CHARS} chars)"
-    return stdin, "stdin"
-
-
-def proposal_instruction() -> str:
-    """Return proposal guidance for a command proposal."""
-    return "Return exactly one command proposal. Use kind=command."
-
-
-def default_prompt(invocation: OperatorInvocation) -> str:
-    """Return a fallback prompt for bare operator invocations."""
-    return "Inspect and summarize the current context."
-
-
-def readable_target_files(lines: list[str]) -> list[tuple[Path, str]]:
-    """Read a bounded set of file paths from stdin target lines."""
-    files: list[tuple[Path, str]] = []
-    for line in lines[:MAX_TARGET_FILES]:
-        path = Path(line)
-        try:
-            if not path.is_file():
-                continue
-            content = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        files.append((path, content))
-    return files
