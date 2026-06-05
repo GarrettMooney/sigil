@@ -15,6 +15,7 @@ from ..routes.ask import (
     discussion_turns,
 )
 from ..routes.operators import OperatorInvocation, create_invocation
+from ..status import current_status, format_status
 
 
 def run_operator(
@@ -44,12 +45,24 @@ def run_operator(
     if should_run_act_operator(invocation):
         return dispatch_act_operator(invocation, prompt, stdin_text)
 
+    if invocation.name == "status":
+        return dispatch_status_operator()
+
     if should_confirm_piped_input(invocation):
         if not confirm_piped_input(stdin_text):
             print("sigil glyph: piped input declined", file=sys.stderr)
             raise click.exceptions.Exit(2)
 
     return dispatch_readonly_operator(invocation, json_output=json_output)
+
+
+def dispatch_status_operator() -> int:
+    """Run the status glyph through the read-only status renderer."""
+    status = current_status()
+    print(format_status(status))
+    if status.state != "clean":
+        return 1
+    return 0
 
 
 def dispatch_act_operator(

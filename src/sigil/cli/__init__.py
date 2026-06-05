@@ -18,6 +18,7 @@ from . import (  # noqa: F401  (imported for command registration side effects)
     install,
     run,
     session,
+    status,
     transcript,
     zeta_step,
 )

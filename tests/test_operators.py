@@ -50,6 +50,7 @@ def invoke_op(args: list[str], input: str | None = None):
         (",", ",", 1),
         (",,", ",", 2),
         (",,,", ",", 3),
+        ("?", "?", 1),
     ],
 )
 def test_parse_operator_token_repetition(
@@ -64,7 +65,6 @@ def test_parse_operator_token_repetition(
     "token",
     [
         "",
-        "?",
         "??",
         "?^",
         "?:",
@@ -117,6 +117,21 @@ def test_op_cli_json_reports_parsed_invocation() -> None:
         "name": "read",
         "prompt": "review risky changes",
         "stdin": "diff --git a/file b/file\n",
+        "mode": "pipeline",
+    }
+
+
+def test_op_cli_json_reports_status_invocation() -> None:
+    result = invoke_op(["--json", "?"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload == {
+        "glyph": "?",
+        "base": "?",
+        "depth": 1,
+        "name": "status",
+        "prompt": "",
+        "stdin": "",
         "mode": "pipeline",
     }
 
@@ -223,12 +238,12 @@ def test_comma_operator_continues_existing_answer_transcript() -> None:
     ]
 
 
-def test_question_operator_is_rejected() -> None:
+def test_question_operator_routes_to_status() -> None:
     with patch("sigil.cli.operators.ask", side_effect=AssertionError("no ask")):
-        result = invoke_op(["?", "explain", "this"])
+        result = invoke_op(["?"])
 
-    assert result.exit_code == 2
-    assert "unsupported operator: ?" in result.output
+    assert result.exit_code == 0
+    assert result.output == "clean\n"
 
 
 def test_at_operator_is_rejected() -> None:
@@ -688,7 +703,7 @@ def test_op_cli_does_not_confirm_piped_comma_before_readonly_route() -> None:
     ]
 
 
-def test_op_cli_rejects_piped_question_operator() -> None:
+def test_op_cli_routes_piped_question_operator_to_status_without_confirmation() -> None:
     calls = []
 
     def fake_ask(*args: object, **kwargs: object) -> int:
@@ -704,9 +719,9 @@ def test_op_cli_rejects_piped_question_operator() -> None:
     ):
         result = invoke_op(["?", "review"], input="diff\n")
 
-    assert result.exit_code == 2
+    assert result.exit_code == 0
     assert calls == []
-    assert "unsupported operator: ?" in result.output
+    assert result.output == "clean\n"
 
 
 def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
@@ -847,7 +862,7 @@ def test_ask_verb_accepts_piped_input() -> None:
 def test_op_cli_rejects_mixed_glyphs() -> None:
     result = invoke_op(["?^"])
     assert result.exit_code == 2
-    assert "unsupported operator: ?" in result.output
+    assert "operator token must repeat one glyph: ?^" in result.output
 
 
 def test_op_cli_rejects_transform_until_colon_operator_exists() -> None:

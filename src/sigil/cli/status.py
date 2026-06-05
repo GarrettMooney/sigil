@@ -1,11 +1,16 @@
-"""Internal status renderer for tests and shell-native diagnostics."""
+"""Status command for shell-native diagnostics."""
 
 from __future__ import annotations
 
+import click
+
+from ._base import cli
 from ._shared import pretty_print_json
 from ..status import current_status, format_status
 
 
+@cli.command("status")
+@click.option("--json", "json_output", is_flag=True)
 def cmd_status(json_output: bool) -> int:
     """Show the current session's shortest useful status."""
     status = current_status()

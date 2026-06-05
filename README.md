@@ -18,6 +18,7 @@ that let you address an assistant inline without leaving the conversation.
 ,, run the relevant tests
 ,,, update the docs and run checks
 + cargo test
+?
 ```
 
 Sigil is alpha software. It is ready for early shell users who are comfortable
@@ -35,6 +36,7 @@ suggesting, executing, and explaining. Sigil keeps those routes separate.
 | "Do one agent turn." | `,,` | Confirms, then runs tool calls until no more are needed. |
 | "Do a routine edit step." | `,,,` | Runs one auto-approved Zeta step; exact replacements are applied directly. |
 | "Run and capture this command." | `+` | Runs one explicit command, streams output, and records stdout/stderr snippets. |
+| "Check Sigil status." | `?` | Shows the current session status without calling a model. |
 
 The result is a shell workflow with small blast radius, durable state, and a
 plain CLI underneath the punctuation.
@@ -115,6 +117,9 @@ Once the shell binding is installed, use the glyphs directly:
 # Run one command through Sigil's explicit capture path.
 + cargo test
 
+# Check current Sigil status.
+?
+
 ```
 
 Use stdin as context:
@@ -157,6 +162,7 @@ Installed zsh and Bash bindings expose these shortcuts:
 | `,,` | confirmed loop | Confirm, then run tool calls until no more are needed. |
 | `,,,` | auto loop | Run auto-approved tool calls until no more are needed. |
 | `+` | run | Run one explicit command and capture stdout/stderr snippets. |
+| `?` | status | Show the current session status. |
 
 Examples:
 
@@ -165,6 +171,7 @@ Examples:
 ,, run the relevant tests
 ,,, fix the failing parser test
 + cargo test
+?
 ```
 
 `,` prints a read-only answer. It does not stage commands or write to shell
@@ -218,6 +225,7 @@ The glyphs are thin shell functions over a regular CLI:
 sigil ask [--follow-up] [--json] [QUESTION]
 sigil run COMMAND [ARGS...]
 sigil act [show|resume|abort] [--json]
+sigil status [--json]
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear] [--json]
 sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]

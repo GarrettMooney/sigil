@@ -27,6 +27,7 @@ def cli(ctx: click.Context) -> None:
       ,,     confirmed Zeta tool loop for one agent step
       ,,,    auto-approved Zeta tool loop for routine edits
       +      run one explicit command and capture output
+      ?      show current session status
 
     Setup and diagnostics:
 
@@ -34,6 +35,7 @@ def cli(ctx: click.Context) -> None:
       sigil install zsh      install zsh glyph bindings
       sigil install bash     install Bash glyph bindings
       sigil doctor           check install, shell, state, and model endpoint
+      sigil status           show current session status
       sigil events           inspect recent Sigil activity
 
     Use "sigil COMMAND --help" for command-specific options.

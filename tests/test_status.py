@@ -86,12 +86,12 @@ def test_status_reports_failed_sigil_execution() -> None:
     assert status.actions == ("sigil events",)
 
 
-def test_status_cli_is_not_public_surface() -> None:
+def test_status_cli_is_public_surface() -> None:
     with isolated_sigil_state():
         result = CliRunner().invoke(cli, ["status"])
 
-    assert result.exit_code == 2
-    assert "No such command 'status'" in result.output
+    assert result.exit_code == 0
+    assert result.output == "clean\n"
 
 
 class isolated_sigil_state:

@@ -177,6 +177,10 @@ sigil_run() {
   "$__sigil_bin" run "$@"
 }
 
+sigil_status() {
+  "$__sigil_bin" status "$@"
+}
+
 if [[ $- == *i* ]]; then
   __sigil_install_zeta_prompt_capture
 fi
@@ -188,12 +192,14 @@ if __sigil_glyphs_enabled; then
   function ,, { sigil_agent_step "$*"; }
   function ,,, { sigil_agent_step_auto "$*"; }
   function + { sigil_run "$@"; }
+  function ? { sigil_status "$@"; }
 
   if [[ $- == *i* ]]; then
     alias ,='sigil_command'
     alias ,,='sigil_agent_step'
     alias ,,,='sigil_agent_step_auto'
     alias +='sigil_run'
+    alias ?='sigil_status'
   fi
 fi
 

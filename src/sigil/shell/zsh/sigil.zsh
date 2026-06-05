@@ -202,14 +202,23 @@ sigil_run() {
   "$__sigil_bin" run "$@"
 }
 
+sigil_status() {
+  "$__sigil_bin" status "$@"
+}
+
 # ── Glyph Bindings ───────────────────────────────────────────────────────
 
 if __sigil_glyphs_enabled; then
+  # zsh treats bare `?` as a glob pattern before command dispatch. Disabling
+  # that pattern keeps `?` available as a Sigil glyph.
+  disable -p "?" 2>/dev/null || true
+
   # Function definitions make the punctuation usable in non-alias contexts.
   function ',' { sigil_command "$@" }
   function ',,' { sigil_agent_step "$@" }
   function ',,,' { sigil_agent_step_auto "$@" }
   function '+' { sigil_run "$@" }
+  function '?' { sigil_status "$@" }
 
   # Aliases keep zsh from treating user prompts as glob patterns before our
   # functions receive them. `alias --` is required for `+` because zsh otherwise
@@ -218,6 +227,7 @@ if __sigil_glyphs_enabled; then
   alias ',,'='noglob sigil_agent_step'
   alias ',,,'='noglob sigil_agent_step_auto'
   alias -- '+'='noglob sigil_run'
+  alias '?'='noglob sigil_status'
 fi
 
 # ── zsh Command Lifecycle Hooks ──────────────────────────────────────────
@@ -235,7 +245,7 @@ if __sigil_glyphs_enabled; then
     emulate -L zsh
     local line="${1%%$'\n'}"
     case "$line" in
-      ,*|+*) return 1 ;;
+      ,*|\?*|+*) return 1 ;;
     esac
     return 0
   }

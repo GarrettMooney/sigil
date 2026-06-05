@@ -102,6 +102,7 @@ def make_stub(tmp: Path) -> Path:
               "command draft executive summary") printf '%s\n' "stream command" ;;
               "ask hello") printf '%s\n' "answer" ;;
               "ask draft executive summary") printf '%s\n' "readonly stream answer" ;;
+              status*) printf '%s\n' "clean" ;;
               run*) printf '%s\n' "ran:${*:2}" ;;
               *) printf '%s\n' "unexpected:$*" >&2; exit 64 ;;
             esac
@@ -446,6 +447,23 @@ def test_bash_run_glyph_dispatches_to_sigil_run() -> None:
         assert read_log(tmp) == ["run echo captured"]
 
 
+def test_bash_status_glyph_dispatches_to_sigil_status() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source src/sigil/shell/bash/sigil.bash\n                    ?\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "clean\n"
+        assert read_log(tmp) == ["status"]
+
+
 def test_bash_failure_snippet_env_is_not_ambiently_recorded() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -664,6 +682,24 @@ def test_zsh_run_glyph_dispatches_to_sigil_run() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_status_glyph_dispatches_to_sigil_status() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    ?\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "clean\n"
+        assert read_log(tmp) == ["status"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_does_not_record_ordinary_turns_ambiently() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -717,7 +753,7 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         assert_success(result)
         assert "__sigil_zshaddhistory" in result.stdout
         assert "comma=1" in result.stdout
-        assert "question=0" in result.stdout
+        assert "question=1" in result.stdout
         assert "escaped_question=0" in result.stdout
         assert "run=1" in result.stdout
         assert "at=0" in result.stdout

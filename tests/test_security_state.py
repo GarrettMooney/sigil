@@ -50,10 +50,12 @@ def test_top_level_help_lists_commands() -> None:
     assert ",,     confirmed Zeta tool loop for one agent step" in result.output
     assert ",,,    auto-approved Zeta tool loop for routine edits" in result.output
     assert "+      run one explicit command and capture output" in result.output
+    assert "?      show current session status" in result.output
     assert "named command:" not in result.output
     assert "named shell function:" not in result.output
     assert "Setup and diagnostics:" in result.output
     assert "sigil doctor" in result.output
+    assert "sigil status" in result.output
     assert "Commands:" in result.output
     for command in [
         "act",
@@ -63,6 +65,7 @@ def test_top_level_help_lists_commands() -> None:
         "install",
         "run",
         "session",
+        "status",
     ]:
         assert command in result.output
     for command in [
@@ -71,7 +74,6 @@ def test_top_level_help_lists_commands() -> None:
         "record-turn",
         "record-failure",
         "staged",
-        "status",
     ]:
         assert f"\n  {command} " not in result.output
     assert "\n  question" not in result.output

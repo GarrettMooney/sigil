@@ -5,15 +5,17 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal, cast
 
-OperatorBase = Literal[","]
+OperatorBase = Literal[",", "?"]
 
 OPERATOR_NAMES: dict[OperatorBase, str] = {
     ",": "read",
+    "?": "status",
 }
 
 SUPPORTED_OPERATORS = frozenset(OPERATOR_NAMES)
 OPERATOR_MAX_DEPTHS: dict[OperatorBase, int] = {
     ",": 3,
+    "?": 1,
 }
 
 
@@ -42,6 +44,7 @@ def parse_operator_token(token: str) -> tuple[OperatorBase, int]:
     ```text
     ,   -> (",", 1)
     ,,, -> (",", 3)
+    ?   -> ("?", 1)
     ```
     """
     if not token:
