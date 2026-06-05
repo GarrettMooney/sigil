@@ -243,7 +243,6 @@ Sigil also installs a bundled `zeta` entrypoint. It is a service API used by
 the shell bindings and Sigil routes, not the primary user interface:
 
 ```text
-zeta model stream
 zeta tools list --json
 zeta tool {read|ls|grep|bash|edit|write}
 zeta transcript {append|tail}

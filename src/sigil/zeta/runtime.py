@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Iterable, TextIO, cast
+from typing import Any, Iterable, TextIO
 
 from ..state import append_jsonl, read_jsonl
 from . import tools as tool_registry
@@ -244,66 +244,6 @@ def tool_result_message(
         "content": "Tool result JSON:\n"
         + json.dumps(event, ensure_ascii=False, separators=(",", ":")),
     }
-
-
-def stream_model_events(request: dict[str, Any]) -> Iterable[dict[str, Any]]:
-    objective = str(request.get("objective") or request.get("prompt") or "")
-    context = str(request.get("context") or "")
-    transcript = request.get("transcript")
-    if not isinstance(transcript, list):
-        transcript = transcript_tail()
-    from .agent import AgentConfig, run_agent_turn
-
-    result = run_agent_turn(
-        objective,
-        cast(list[dict[str, Any]], transcript),
-        AgentConfig(max_turns=1),
-        context="\n\n".join(part for part in [load_project_context(), context] if part),
-    )
-    yield from stream_agent_result(result)
-
-
-def stream_agent_result(result: Any) -> Iterable[dict[str, Any]]:
-    emitted_text = False
-    for event in result.events:
-        for stream_event in stream_event_from_agent_event(event):
-            if stream_event.get("type") == "assistant_delta":
-                emitted_text = True
-            yield stream_event
-    if result.final_text:
-        if not emitted_text:
-            content = result.final_text
-            yield {"type": "assistant_delta", "text": content}
-        yield {"type": "final"}
-        return
-    if result.handoff is None:
-        yield {"type": "final"}
-
-
-def stream_event_from_agent_event(event: dict[str, Any]) -> list[dict[str, Any]]:
-    event_type = event.get("type")
-    if event_type == "assistant_message":
-        content = str(event.get("content") or "")
-        return [{"type": "assistant_delta", "text": content}] if content else []
-    if event_type == "tool_call":
-        return [
-            {
-                "type": "tool_call",
-                "id": event.get("tool_call_id") or event.get("id"),
-                "name": event.get("name"),
-                "input": event.get("input") or {},
-            }
-        ]
-    if event_type == "tool_result":
-        return [
-            {
-                "type": "tool_result",
-                "tool_call_id": event.get("tool_call_id"),
-                "name": event.get("name"),
-                "result": event.get("result") or {},
-            }
-        ]
-    return []
 
 
 def read_json_stdin(stdin: TextIO) -> dict[str, Any]:

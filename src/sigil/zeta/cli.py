@@ -100,23 +100,6 @@ def run_tool_command(
     return 0
 
 
-@cli.group("model")
-def model_group() -> None:
-    """Model transport services."""
-
-
-@model_group.command("stream")
-def model_stream() -> int:
-    try:
-        request = zeta.read_json_stdin(sys.stdin)
-        for event in zeta.stream_model_events(request):
-            print_json_line(event)
-    except RuntimeError as exc:
-        print_json_line({"type": "error", "message": str(exc)})
-        return 1
-    return 0
-
-
 @cli.group("transcript")
 def transcript_group() -> None:
     """Transcript storage services."""
@@ -141,10 +124,6 @@ def transcript_tail(limit: int) -> int:
 
 def print_json(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
-
-
-def print_json_line(value: Any) -> None:
-    print(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 
 
 if __name__ == "__main__":
