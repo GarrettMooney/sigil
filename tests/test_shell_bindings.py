@@ -240,7 +240,7 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         assert "❯ bash   echo zeta" in result.stdout
         assert "  staged in prompt" in result.stdout
         assert "Run zeta handoff." not in result.stdout
-        assert "history=echo zeta" in result.stdout
+        assert "history=+ echo zeta" in result.stdout
 
 
 def test_bash_agent_wrappers_call_zeta_loop() -> None:
@@ -293,7 +293,7 @@ def test_bash_agent_step_uses_zeta_handoff_directly() -> None:
         assert_success(result)
         assert "  staged in prompt" in result.stdout
         assert "Run tests." not in result.stdout
-        assert "history=uv run pytest" in result.stdout
+        assert "history=+ uv run pytest" in result.stdout
 
 
 def test_bash_bare_agent_step_continues_after_shell_handoff() -> None:
@@ -312,7 +312,7 @@ def test_bash_bare_agent_step_continues_after_shell_handoff() -> None:
         assert read_log(tmp) == ["zeta-step --continue"]
         assert "  staged in prompt" in result.stdout
         assert "Continue after shell handoff." not in result.stdout
-        assert "history=echo continued" in result.stdout
+        assert "history=+ echo continued" in result.stdout
 
 
 def test_bash_exports_tty_for_pipeline_confirmations() -> None:
@@ -521,6 +521,38 @@ def test_bash_run_glyph_dispatches_to_sigil_run() -> None:
         assert read_log(tmp) == ["run echo captured"]
 
 
+def test_bash_wraps_simple_zeta_handoff_with_run_capture() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                '                    source src/sigil/shell/bash/sigil.bash\n                    sigil_agent_step hello >/dev/null\n                    printf "history=%s\\n" "$(__sigil_history_line)"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "history=+ echo zeta\n"
+
+
+def test_bash_keeps_shell_grammar_handoff_raw() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                '                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_insert "$(__sigil_zeta_prompt_command "echo zeta | cat")"\n                    printf "history=%s\\n" "$(__sigil_history_line)"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "history=echo zeta | cat\n"
+
+
 def test_bash_status_glyph_dispatches_to_sigil_status() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -597,7 +629,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         assert "❯ bash   echo zeta" in result.stdout
         assert "  staged in prompt" in result.stdout
         assert "Run zeta handoff." not in result.stdout
-        assert "history=echo zeta" in result.stdout
+        assert "history=+ echo zeta" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -616,7 +648,7 @@ def test_zsh_agent_step_uses_zeta_handoff_directly() -> None:
         assert_success(result)
         assert "  staged in prompt" in result.stdout
         assert "Run tests." not in result.stdout
-        assert "history=uv run pytest" in result.stdout
+        assert "history=+ uv run pytest" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -636,7 +668,7 @@ def test_zsh_bare_agent_step_continues_after_shell_handoff() -> None:
         assert read_log(tmp) == ["zeta-step --continue"]
         assert "  staged in prompt" in result.stdout
         assert "Continue after shell handoff." not in result.stdout
-        assert "history=echo continued" in result.stdout
+        assert "history=+ echo continued" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -753,6 +785,40 @@ def test_zsh_run_glyph_dispatches_to_sigil_run() -> None:
         assert_success(result)
         assert result.stdout == "ran:echo captured\n"
         assert read_log(tmp) == ["run echo captured"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_wraps_simple_zeta_handoff_with_run_capture() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_agent_step hello >/dev/null\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "history=+ echo zeta\n"
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_keeps_shell_grammar_handoff_raw() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_history_insert "$(__sigil_zeta_prompt_command "echo zeta | cat")"\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "history=echo zeta | cat\n"
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

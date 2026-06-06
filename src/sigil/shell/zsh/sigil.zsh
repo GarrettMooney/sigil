@@ -68,6 +68,19 @@ __sigil_prompt_insert() {
   __sigil_history_insert "$1"
 }
 
+__sigil_zeta_prompt_command() {
+  local command="${1:-}"
+  [[ -n "$command" ]] || return 0
+  case "$command" in
+    *[\|\&\;\<\>\(\)\`\$\*\?\{\}\[\]\~]*)
+      print -r -- "$command"
+      ;;
+    *)
+      print -r -- "+ $command"
+      ;;
+  esac
+}
+
 __sigil_json_string() {
   python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"
 }
@@ -181,7 +194,7 @@ __sigil_zeta_turn() {
     command="$(__sigil_json_get command < "$handoff_file" 2>/dev/null || true)"
     if [[ -n "$command" ]]; then
       __sigil_zeta_enable_capture
-      __sigil_prompt_insert "$command"
+      __sigil_prompt_insert "$(__sigil_zeta_prompt_command "$command")"
     fi
   fi
   rm -f "$handoff_file"
