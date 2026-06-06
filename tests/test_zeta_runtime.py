@@ -580,6 +580,22 @@ def test_zeta_project_context_requires_exact_agents_filename(
     assert "uppercase ignored" not in context
 
 
+def test_zeta_project_context_ignores_missing_global_directory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    (project / "AGENTS.md").write_text("project instructions\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project)
+
+    context = zeta.load_project_context()
+
+    assert "project instructions" in context
+
+
 def write_skill(
     root: Path,
     name: str,

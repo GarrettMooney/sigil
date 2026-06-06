@@ -13,12 +13,11 @@ def _context_directories(current: Path) -> list[Path]:
 
 def _agents_file(directory: Path) -> Path | None:
     try:
-        entries = directory.iterdir()
+        for entry in directory.iterdir():
+            if entry.name == "AGENTS.md" and entry.is_file():
+                return entry
     except OSError:
         return None
-    for entry in entries:
-        if entry.name == "AGENTS.md" and entry.is_file():
-            return entry
     return None
 
 
