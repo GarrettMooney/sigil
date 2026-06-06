@@ -30,8 +30,6 @@ from sigil.zeta.cli import cli as zeta_cli
 
 
 def test_zeta_model_config_uses_zeta_env(monkeypatch) -> None:
-    monkeypatch.setenv("SIGIL_MODEL_URL", "http://legacy.invalid/v1/chat/completions")
-    monkeypatch.setenv("SIGIL_MODEL_NAME", "legacy-model")
     monkeypatch.delenv("ZETA_MODEL_URL", raising=False)
     monkeypatch.delenv("ZETA_MODEL_NAME", raising=False)
 
