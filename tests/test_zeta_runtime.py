@@ -1743,10 +1743,14 @@ def test_zeta_system_prompt_is_product_neutral_and_dynamic() -> None:
     prompt = zeta.zeta_system_prompt(allowed_tools=("read", "ls"))
 
     assert "Sigil" not in prompt
-    assert "Available tools with input JSON Schemas:" in prompt
-    assert '"name":"read"' in prompt
-    assert '"name":"ls"' in prompt
-    assert '"name":"bash"' not in prompt
+    assert "Preserve user changes." in prompt
+    assert "Do not commit unless asked." in prompt
+    assert "more local instructions\noverride earlier ones" in prompt
+    assert "Available tools:" in prompt
+    assert "- read(path, offset?, limit?): Read a UTF-8 text file." in prompt
+    assert "- ls(path?, limit?, recursive?, min_size_bytes?, exclude?):" in prompt
+    assert '"parameters"' not in prompt
+    assert "- bash(" not in prompt
 
 
 def test_zeta_skill_directive_expands_in_context_message(

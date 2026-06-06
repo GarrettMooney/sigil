@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from typing import Iterable
+from typing import Any, Iterable
 
 from ..protocols import SHELL_HANDOFF_RESULT_SCHEMA
 from .skills import Skill
@@ -20,6 +19,14 @@ read-only tools for local context. Follow the active route instructions for
 whether commands and mutations are staged for review or run directly. Keep
 answers concise and do not invent command output, file contents, or tool
 results.
+
+Preserve user changes. Do not overwrite files you did not inspect. Avoid
+destructive commands unless explicitly requested. Do not commit unless asked.
+After direct mutations, run focused verification when practical; if verification
+is skipped, say so.
+
+Project context is ordered from broad to local; later, more local instructions
+override earlier ones when they conflict.
 
 When the transcript contains a {SHELL_HANDOFF_RESULT_SCHEMA} result, treat it as
 the source of truth for what happened after a shell handoff. If the outcome is
@@ -58,12 +65,49 @@ def system_prompt(
 def tools_prompt(allowed_tools: Iterable[str] | None = None) -> str:
     """Render active tools from the registry into the system prompt."""
     descriptors = model_tool_descriptors(allowed_tools)
-    return "\n".join(
-        [
-            "Available tools with input JSON Schemas:",
-            json.dumps(descriptors, ensure_ascii=False, separators=(",", ":")),
-        ]
+    lines = ["Available tools:"]
+    if not descriptors:
+        lines.append("(none)")
+        return "\n".join(lines)
+    lines.extend(tool_prompt_line(descriptor) for descriptor in descriptors)
+    return "\n".join(lines)
+
+
+def tool_prompt_line(descriptor: dict[str, Any]) -> str:
+    function = descriptor.get("function")
+    if not isinstance(function, dict):
+        return "- unknown()"
+    name = str(function.get("name") or "unknown")
+    description = str(function.get("description") or "").strip()
+    parameters = function.get("parameters")
+    schema = parameters if isinstance(parameters, dict) else {}
+    signature = tool_signature(name, schema)
+    if not description:
+        return f"- {signature}"
+    return f"- {signature}: {description}"
+
+
+def tool_signature(name: str, schema: dict[str, Any]) -> str:
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return f"{name}()"
+    raw_required = schema.get("required")
+    required = (
+        {item for item in raw_required if isinstance(item, str)}
+        if isinstance(raw_required, list)
+        else set()
     )
+    args = [
+        property_name
+        for property_name in properties
+        if isinstance(property_name, str) and property_name in required
+    ]
+    args.extend(
+        f"{property_name}?"
+        for property_name in properties
+        if isinstance(property_name, str) and property_name not in required
+    )
+    return f"{name}({', '.join(args)})"
 
 
 def skills_prompt(skills: Iterable[Skill]) -> str:
