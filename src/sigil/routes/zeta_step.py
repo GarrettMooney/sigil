@@ -17,6 +17,7 @@ from ..display import (
     TraceAwareStreamRenderer,
     TraceRenderState,
     create_stream_renderer,
+    render_context_usage,
     render_handoff_lines,
     render_tool_result_summary,
     render_tool_start,
@@ -126,8 +127,14 @@ def run_agent_step(
     if status is None:
         status = recorder.status
     if status is not None:
+        record_agent_model_telemetry(result.model_telemetry, glyph=glyph)
+        if not result_has_tool_context_usage(result):
+            render_context_usage(result.model_telemetry, output=output)
         return status
     if result.final_text:
+        record_agent_model_telemetry(result.model_telemetry, glyph=glyph)
+        if not result_has_tool_context_usage(result):
+            render_context_usage(result.model_telemetry, output=output)
         record_agent_final(
             result.final_text,
             glyph=glyph,
@@ -272,6 +279,7 @@ def record_agent_event(
         output=output,
         mark_text_separator=trace_state,
     )
+    render_context_usage(event_model_telemetry(persisted), output=output)
     handoff = result_payload.get("handoff")
     if not isinstance(handoff, dict):
         return None
@@ -302,6 +310,46 @@ def print_handoff(
 
 def append_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
     return append_jsonl(runtime.TRANSCRIPT, {"type": event_type, **fields})
+
+
+def record_agent_model_telemetry(
+    model_telemetry: dict[str, Any] | None,
+    *,
+    glyph: str,
+) -> None:
+    fields = model_telemetry_fields(model_telemetry)
+    if fields:
+        append_zeta_event("model_usage", **fields, glyph=glyph)
+
+
+def model_telemetry_fields(
+    model_telemetry: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(model_telemetry, dict):
+        return {}
+    fields: dict[str, Any] = {}
+    usage = model_telemetry.get("usage")
+    if isinstance(usage, dict):
+        fields["usage"] = usage
+    context_tokens = model_telemetry.get("model_context_tokens")
+    if isinstance(context_tokens, int) and not isinstance(context_tokens, bool):
+        fields["model_context_tokens"] = context_tokens
+    return fields
+
+
+def event_model_telemetry(event: dict[str, Any]) -> dict[str, Any] | None:
+    model_telemetry = event.get("model_telemetry")
+    if isinstance(model_telemetry, dict):
+        return model_telemetry
+    return None
+
+
+def result_has_tool_context_usage(result: AgentTurnResult) -> bool:
+    return any(
+        str(event.get("type") or "") == "tool_result"
+        and event_model_telemetry(event) is not None
+        for event in result.events
+    )
 
 
 def edit_mode_for_glyph(glyph: str) -> EditMode:

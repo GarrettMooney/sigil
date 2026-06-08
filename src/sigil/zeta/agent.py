@@ -53,6 +53,7 @@ class AgentTurnResult:
     events: list[dict[str, Any]] = field(default_factory=list)
     handoff: dict[str, Any] | None = None
     final_text_streamed: bool = False
+    model_telemetry: dict[str, Any] = field(default_factory=dict)
 
 
 def run_agent_turn(
@@ -77,8 +78,9 @@ def run_agent_turn(
     else:
         allowed_tools = tuple(config.allowed_tools)
     events: list[dict[str, Any]] = []
+    latest_model_telemetry: dict[str, Any] = {}
     for _ in turn_indices(config.max_turns):
-        assistant, streamed_content = request_assistant_message(
+        assistant, streamed_content, model_telemetry = request_assistant_message(
             runtime.zeta_chat_messages(
                 objective,
                 transcript,
@@ -92,6 +94,8 @@ def run_agent_turn(
             model_status=model_status,
             stream_sink=stream_sink,
         )
+        if model_telemetry:
+            latest_model_telemetry = model_telemetry
         message_event = assistant_message_event(assistant)
         if message_event:
             emit_event(events, message_event, event_sink)
@@ -101,7 +105,9 @@ def run_agent_turn(
                 final_text=str(assistant.get("content") or ""),
                 events=events,
                 final_text_streamed=streamed_content,
+                model_telemetry=latest_model_telemetry,
             )
+        last_tool_index = len(tool_calls) - 1
         for index, tool_call in enumerate(tool_calls):
             result_event = handle_tool_call(
                 tool_call,
@@ -109,6 +115,7 @@ def run_agent_turn(
                 index=index,
                 edit_mode=config.edit_mode,
                 execution_mode=config.execution_mode,
+                model_telemetry=(model_telemetry if index == last_tool_index else None),
                 event_sink=event_sink,
             )
             events.extend(result_event.events)
@@ -117,10 +124,14 @@ def run_agent_turn(
                     final_text="",
                     events=events,
                     handoff=result_event.handoff,
+                    model_telemetry=latest_model_telemetry,
                 )
             if result_event.stop:
-                return AgentTurnResult(events=events)
-    return AgentTurnResult(events=events)
+                return AgentTurnResult(
+                    events=events,
+                    model_telemetry=latest_model_telemetry,
+                )
+    return AgentTurnResult(events=events, model_telemetry=latest_model_telemetry)
 
 
 def turn_indices(max_turns: int | None) -> Iterable[int]:
@@ -136,9 +147,10 @@ def request_assistant_message(
     config: AgentConfig,
     model_status: ModelStatusFactory | None,
     stream_sink: ChatCompletionStreamSink | None,
-) -> tuple[dict[str, Any], bool]:
+) -> tuple[dict[str, Any], bool, dict[str, Any]]:
     status_context = model_status_context(model_status)
     status_open = False
+    model_telemetry: dict[str, Any] = {}
 
     def close_status(
         exc_type: type[BaseException] | None = None,
@@ -162,12 +174,13 @@ def request_assistant_message(
             selected_model=config.model_name,
             selected_url=config.model_url,
             stream_sink=turn_stream_sink if stream_sink is not None else None,
+            telemetry_sink=model_telemetry.update,
         )
     except BaseException as exc:
         close_status(type(exc), exc, exc.__traceback__)
         raise
     close_status()
-    return assistant, turn_stream_sink.streamed_content
+    return assistant, turn_stream_sink.streamed_content, model_telemetry
 
 
 class ModelTurnStreamSink:
@@ -244,6 +257,7 @@ def handle_tool_call(
     index: int,
     edit_mode: EditMode = "review_patch",
     execution_mode: ExecutionMode = "handoff",
+    model_telemetry: dict[str, Any] | None = None,
     event_sink: AgentEventSink | None = None,
 ) -> ToolCallResult:
     call_id = str(tool_call.get("id") or f"call-{index}")
@@ -255,6 +269,7 @@ def handle_tool_call(
             {},
             "invalid-tool-call",
             "tool call did not include a function payload",
+            model_telemetry=model_telemetry,
             event_sink=event_sink,
         )
     name = str(function.get("name") or "")
@@ -276,6 +291,7 @@ def handle_tool_call(
             "invalid-json-args",
             parse_error,
             call_event=call_event,
+            model_telemetry=model_telemetry,
             event_sink=event_sink,
         )
     if name not in allowed_tool_names():
@@ -286,6 +302,7 @@ def handle_tool_call(
             "unknown-tool",
             f"unknown tool: {name}",
             call_event=call_event,
+            model_telemetry=model_telemetry,
             event_sink=event_sink,
         )
     if name not in allowed_tools:
@@ -296,6 +313,7 @@ def handle_tool_call(
             "disallowed-tool",
             f"tool is not allowed in this route: {name}",
             call_event=call_event,
+            model_telemetry=model_telemetry,
             event_sink=event_sink,
         )
     schema_errors = validate_tool_args(name, params)
@@ -307,6 +325,7 @@ def handle_tool_call(
             "schema-mismatch",
             "; ".join(schema_errors),
             call_event=call_event,
+            model_telemetry=model_telemetry,
             event_sink=event_sink,
         )
     analysis = analyze_tool(name, params)
@@ -321,7 +340,16 @@ def handle_tool_call(
         events: list[dict[str, Any]] = []
         emit_event(events, call_event, event_sink)
         emit_event(events, analysis_event, event_sink)
-        emit_event(events, tool_result_event(call_id, name, result), event_sink)
+        emit_event(
+            events,
+            tool_result_event(
+                call_id,
+                name,
+                result,
+                model_telemetry=model_telemetry,
+            ),
+            event_sink,
+        )
         return ToolCallResult(events=events)
     events = []
     emit_event(events, call_event, event_sink)
@@ -336,7 +364,16 @@ def handle_tool_call(
     stop = bool(
         execution_mode == "handoff" and name == "edit" and result.get("ok") is True
     )
-    emit_event(events, tool_result_event(call_id, name, result), event_sink)
+    emit_event(
+        events,
+        tool_result_event(
+            call_id,
+            name,
+            result,
+            model_telemetry=model_telemetry,
+        ),
+        event_sink,
+    )
     return ToolCallResult(
         events=events,
         handoff=handoff,
@@ -385,6 +422,7 @@ def invalid_tool_result(
     message: str,
     *,
     call_event: dict[str, Any] | None = None,
+    model_telemetry: dict[str, Any] | None = None,
     event_sink: AgentEventSink | None = None,
 ) -> ToolCallResult:
     event = call_event or {
@@ -398,7 +436,12 @@ def invalid_tool_result(
     emit_event(events, event, event_sink)
     emit_event(
         events,
-        tool_result_event(call_id, name, tool_error(code, message)),
+        tool_result_event(
+            call_id,
+            name,
+            tool_error(code, message),
+            model_telemetry=model_telemetry,
+        ),
         event_sink,
     )
     return ToolCallResult(events=events)
@@ -408,13 +451,18 @@ def tool_result_event(
     call_id: str,
     name: str,
     result: dict[str, Any],
+    *,
+    model_telemetry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    event = {
         "type": "tool_result",
         "tool_call_id": call_id,
         "name": name,
         "result": result,
     }
+    if model_telemetry:
+        event["model_telemetry"] = dict(model_telemetry)
+    return event
 
 
 def tool_error(code: str, message: str) -> dict[str, Any]:

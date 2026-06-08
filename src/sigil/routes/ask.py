@@ -25,7 +25,9 @@ from ..display import (
     ThinkingStatus,
     TraceAwareStreamRenderer,
     TraceRenderState,
+    context_usage_line,
     create_stream_renderer,
+    render_context_usage,
     render_tool_result_summary,
     render_tool_start,
     thinking_status_factory,
@@ -251,8 +253,9 @@ def run_tool_answer(
     )
     answer = result.final_text
     answer_streamed = result.final_text_streamed
+    model_telemetry = dict(result.model_telemetry)
     if not answer:
-        answer, answer_streamed = run_fallback_answer_with_status(
+        answer, answer_streamed, fallback_telemetry = run_fallback_answer_with_status(
             system,
             prompt,
             turn_events,
@@ -260,6 +263,8 @@ def run_tool_answer(
             status_enabled=status_enabled,
             stream_renderer=stream_renderer,
         )
+        if fallback_telemetry:
+            model_telemetry = fallback_telemetry
     record_answer(
         input_text=input_text,
         prompt=prompt,
@@ -268,6 +273,7 @@ def run_tool_answer(
         tools=tool_events,
         json_output=json_output,
         model=model_selection_event(selected_model) if selected_model else None,
+        model_telemetry=model_telemetry,
         answer_streamed=answer_streamed,
         stream_renderer=stream_renderer,
         trace_state=trace_state,
@@ -299,14 +305,13 @@ class AnswerEventRecorder:
 
     def record(self, event: dict[str, Any]) -> None:
         self.recorded_event_ids.add(id(event))
-        tool_event = record_answer_event(
+        tool_events = record_answer_event(
             event,
             json_output=self.json_output,
             stream_renderer=self.stream_renderer,
             trace_state=self.trace_state,
         )
-        if tool_event is not None:
-            self.tool_events.append(tool_event)
+        self.tool_events.extend(tool_events)
 
 
 def replay_answer_events(
@@ -321,14 +326,13 @@ def replay_answer_events(
     for event in result.events:
         if id(event) in skip_event_ids:
             continue
-        tool_event = record_answer_event(
+        event_tool_events = record_answer_event(
             event,
             json_output=json_output,
             stream_renderer=stream_renderer,
             trace_state=trace_state,
         )
-        if tool_event is not None:
-            tool_events.append(tool_event)
+        tool_events.extend(event_tool_events)
     return tool_events
 
 
@@ -338,7 +342,7 @@ def record_answer_event(
     json_output: bool,
     stream_renderer: StreamRenderer | None = None,
     trace_state: TraceRenderState | None = None,
-) -> dict[str, Any] | None:
+) -> list[dict[str, Any]]:
     event_type = str(event.get("type") or "")
     fields = {
         key: value for key, value in event.items() if key not in {"type", "route"}
@@ -355,13 +359,14 @@ def record_answer_event(
             if stream_renderer is not None:
                 stream_renderer.ensure_trace_boundary()
             render_tool_start(name, args, output=sys.stdout, newline=False)
-        return None
+        return []
     if event_type != "tool_result":
-        return None
+        return []
     name = str(trace.get("name") or "")
     result_payload = trace.get("result")
     if not isinstance(result_payload, dict):
         result_payload = {}
+    telemetry = event_model_telemetry(trace)
     if not json_output:
         render_tool_result_summary(
             name,
@@ -369,9 +374,16 @@ def record_answer_event(
             output=sys.stdout,
             mark_text_separator=trace_state,
         )
+        render_context_usage(telemetry, output=sys.stdout)
     tool_event = {"type": "tool_end", "tool": name, "result": result_payload}
+    if telemetry is not None:
+        tool_event["model_telemetry"] = telemetry
     append_jsonl("last-tools.jsonl", tool_event)
-    return tool_event
+    context_tool = context_usage_tool_event(telemetry)
+    if context_tool is None:
+        return [tool_event]
+    append_jsonl("last-tools.jsonl", context_tool)
+    return [tool_event, context_tool]
 
 
 def fallback_turn_context(prompt: str, turn_events: list[dict[str, Any]]) -> str:
@@ -472,6 +484,7 @@ def fallback_answer(
     turn_events: list[dict[str, Any]],
     selected_model: ModelSelection | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
+    telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
     """Answer from a compact current-turn evidence digest when stepping stalls."""
     fallback_prompt = "\n\n".join(
@@ -490,6 +503,7 @@ def fallback_answer(
             fallback_prompt,
             max_tokens=1200,
             stream_sink=stream_sink,
+            telemetry_sink=telemetry_sink,
         ).strip()
     else:
         answer = chat_text(
@@ -499,6 +513,7 @@ def fallback_answer(
             selected_model=selected_model.model,
             selected_url=selected_model.url,
             stream_sink=stream_sink,
+            telemetry_sink=telemetry_sink,
         ).strip()
     if answer:
         return answer
@@ -513,10 +528,11 @@ def run_fallback_answer_with_status(
     *,
     status_enabled: bool | None,
     stream_renderer: StreamRenderer | None,
-) -> tuple[str, bool]:
+) -> tuple[str, bool, dict[str, Any]]:
     fallback_sink = (
         StreamDeltaTracker(stream_renderer) if stream_renderer is not None else None
     )
+    model_telemetry: dict[str, Any] = {}
     status = ThinkingStatus(sys.stderr, enabled=status_enabled)
     status_open = False
 
@@ -542,12 +558,17 @@ def run_fallback_answer_with_status(
             turn_events,
             selected_model,
             stream_sink=fallback_sink,
+            telemetry_sink=model_telemetry.update,
         )
     except BaseException as exc:
         close_status(type(exc), exc, exc.__traceback__)
         raise
     close_status()
-    return answer, bool(fallback_sink and fallback_sink.streamed_content)
+    return (
+        answer,
+        bool(fallback_sink and fallback_sink.streamed_content),
+        model_telemetry,
+    )
 
 
 def record_answer(
@@ -559,16 +580,21 @@ def record_answer(
     tools: list[dict[str, Any]],
     json_output: bool,
     model: dict[str, str] | None,
+    model_telemetry: dict[str, Any] | None = None,
     answer_streamed: bool = False,
     stream_renderer: StreamRenderer | None = None,
     trace_state: TraceRenderState | None = None,
 ) -> None:
+    telemetry_fields = model_telemetry_fields(model_telemetry)
+    tool_context_rendered = tools_have_context_usage(tools)
+    visible_tools = tools_with_context_usage(tools, model_telemetry)
     answer_event: dict[str, Any] = {
         "type": "answer",
         "input": input_text,
         "prompt": prompt,
         "answer": answer,
         "runtime": "zeta",
+        **telemetry_fields,
     }
     assistant_turn: dict[str, Any] = {
         "role": "assistant",
@@ -577,6 +603,7 @@ def record_answer(
         "prompt": prompt,
         "follow_up": follow_up,
         "runtime": "zeta",
+        **telemetry_fields,
     }
     if model is not None:
         answer_event["model"] = model
@@ -591,8 +618,9 @@ def record_answer(
                     "prompt": prompt,
                     "answer": answer,
                     "runtime": "zeta",
-                    "tools": tools,
+                    "tools": visible_tools,
                     "malformed_events": 0,
+                    **telemetry_fields,
                     **({"model": model} if model is not None else {}),
                 },
                 ensure_ascii=False,
@@ -603,11 +631,73 @@ def record_answer(
     if answer_streamed:
         if stream_renderer is not None:
             stream_renderer.finish()
+        if not tool_context_rendered:
+            render_context_usage(model_telemetry, output=sys.stdout)
         return
+    if not tool_context_rendered:
+        render_context_usage(model_telemetry, output=sys.stdout)
     if trace_state is None or not trace_state.render_text_separator(sys.stdout):
         print()
     print(answer)
     print()
+
+
+def model_telemetry_fields(
+    model_telemetry: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(model_telemetry, dict):
+        return {}
+    fields: dict[str, Any] = {}
+    usage = model_telemetry.get("usage")
+    if isinstance(usage, dict):
+        fields["usage"] = usage
+    context_tokens = model_telemetry.get("model_context_tokens")
+    if isinstance(context_tokens, int) and not isinstance(context_tokens, bool):
+        fields["model_context_tokens"] = context_tokens
+    return fields
+
+
+def event_model_telemetry(event: dict[str, Any]) -> dict[str, Any] | None:
+    model_telemetry = event.get("model_telemetry")
+    if isinstance(model_telemetry, dict):
+        return model_telemetry
+    return None
+
+
+def tools_with_context_usage(
+    tools: list[dict[str, Any]],
+    model_telemetry: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if tools_have_context_usage(tools):
+        return tools
+    context_tool = context_usage_tool_event(model_telemetry)
+    if context_tool is None:
+        return tools
+    append_jsonl("last-tools.jsonl", context_tool)
+    return [*tools, context_tool]
+
+
+def tools_have_context_usage(tools: list[dict[str, Any]]) -> bool:
+    return any(tool.get("tool") == "context" for tool in tools)
+
+
+def context_usage_tool_event(
+    model_telemetry: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    summary = context_usage_line(model_telemetry)
+    if not summary:
+        return None
+    return {
+        "type": "tool_end",
+        "tool": "context",
+        "result": {
+            "ok": True,
+            "metadata": {
+                "summary": summary,
+                **model_telemetry_fields(model_telemetry),
+            },
+        },
+    }
 
 
 class StreamDeltaTracker:

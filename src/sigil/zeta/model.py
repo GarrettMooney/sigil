@@ -8,12 +8,17 @@ import socket
 import urllib.error
 import urllib.request
 from collections.abc import Iterable, Iterator, Mapping
-from typing import Any, Protocol
-from urllib.parse import urlparse
+from typing import Any, Callable, Protocol
+from urllib.parse import urlparse, urlunparse
 
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
 DEFAULT_MODEL_NAME = "local-model"
 DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS = None
+MODEL_METADATA_TIMEOUT_SECONDS = 0.5
+
+USAGE_TOKEN_FIELDS = ("prompt_tokens", "completion_tokens", "total_tokens")
+ModelTelemetrySink = Callable[[dict[str, Any]], None]
+_MODEL_CONTEXT_TOKENS_CACHE: dict[tuple[str, str], int] = {}
 
 
 class ChatCompletionStreamSink(Protocol):
@@ -84,6 +89,148 @@ def endpoint_reachable(url: str) -> bool:
 def model_endpoint_open(selected_url: str | None = None) -> bool:
     """Return whether the configured OpenAI-compatible server is listening."""
     return endpoint_reachable(model_url(selected_url))
+
+
+def model_server_root(selected_url: str | None = None) -> str:
+    """Return the endpoint root for sibling metadata endpoints."""
+    parsed = urlparse(model_url(selected_url))
+    path = parsed.path.rstrip("/")
+    for suffix in ("/v1/chat/completions", "/chat/completions"):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)]
+            break
+    else:
+        path = ""
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+def model_context_tokens(
+    selected_url: str | None = None,
+    selected_model: str | None = None,
+) -> int | None:
+    """Return the configured model context length when the server exposes it."""
+    resolved_url = model_url(selected_url)
+    resolved_model = model_name(selected_model)
+    cache_key = (resolved_url, resolved_model)
+    cached = _MODEL_CONTEXT_TOKENS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    for endpoint in ("/props", "/v1/models"):
+        payload = request_model_metadata(endpoint, selected_url=selected_url)
+        if not isinstance(payload, dict):
+            continue
+        tokens = context_tokens_from_metadata(payload, selected_model=resolved_model)
+        if tokens is not None:
+            _MODEL_CONTEXT_TOKENS_CACHE[cache_key] = tokens
+            return tokens
+    return None
+
+
+def request_model_metadata(
+    path: str,
+    *,
+    selected_url: str | None = None,
+) -> dict[str, Any] | None:
+    """Fetch a best-effort JSON document from a model metadata endpoint."""
+    url = model_server_root(selected_url).rstrip("/") + "/" + path.lstrip("/")
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(
+            req, timeout=MODEL_METADATA_TIMEOUT_SECONDS
+        ) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (
+        OSError,
+        TimeoutError,
+        urllib.error.URLError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+    ):
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def context_tokens_from_metadata(
+    payload: dict[str, Any],
+    *,
+    selected_model: str | None = None,
+) -> int | None:
+    """Extract a context length from llama-server style metadata."""
+    props_tokens = context_tokens_from_props(payload)
+    if props_tokens is not None:
+        return props_tokens
+    return context_tokens_from_models(payload, selected_model=selected_model)
+
+
+def context_tokens_from_props(payload: dict[str, Any]) -> int | None:
+    settings = payload.get("default_generation_settings")
+    if isinstance(settings, dict):
+        tokens = positive_int(settings.get("n_ctx"))
+        if tokens is not None:
+            return tokens
+        params = settings.get("params")
+        if isinstance(params, dict):
+            tokens = positive_int(params.get("n_ctx"))
+            if tokens is not None:
+                return tokens
+    return positive_int(payload.get("n_ctx"))
+
+
+def context_tokens_from_models(
+    payload: dict[str, Any],
+    *,
+    selected_model: str | None = None,
+) -> int | None:
+    models = candidate_models(payload)
+    if not models:
+        return None
+    for model in models:
+        if selected_model and not model_matches_name(model, selected_model):
+            continue
+        tokens = context_tokens_from_model_entry(model)
+        if tokens is not None:
+            return tokens
+    return context_tokens_from_model_entry(models[0])
+
+
+def candidate_models(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    for key in ("data", "models"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def model_matches_name(model: dict[str, Any], selected_model: str) -> bool:
+    names = [
+        value
+        for value in (model.get("id"), model.get("name"), model.get("model"))
+        if isinstance(value, str)
+    ]
+    aliases = model.get("aliases")
+    if isinstance(aliases, list):
+        names.extend(alias for alias in aliases if isinstance(alias, str))
+    return selected_model in names
+
+
+def context_tokens_from_model_entry(model: dict[str, Any]) -> int | None:
+    for key in ("meta", "details"):
+        value = model.get(key)
+        if isinstance(value, dict):
+            tokens = positive_int(value.get("n_ctx"))
+            if tokens is not None:
+                return tokens
+    return positive_int(model.get("n_ctx"))
+
+
+def positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value <= 0:
+        return None
+    return value
 
 
 def request_chat_completion(
@@ -195,6 +342,7 @@ class ChatStreamAccumulator:
         self.reasoning_content: list[str] = []
         self.tool_calls: dict[int, dict[str, Any]] = {}
         self.finish_reason: Any = None
+        self.usage: dict[str, int] | None = None
         self.seen_choice = False
         self.stream_sink = stream_sink
 
@@ -203,7 +351,12 @@ class ChatStreamAccumulator:
             value = chunk.get(key)
             if value is not None and key not in self.metadata:
                 self.metadata[key] = value
+        usage = normalized_usage(chunk.get("usage"))
+        if usage is not None:
+            self.usage = usage
         choices = chunk.get("choices")
+        if choices is None and usage is not None:
+            return
         if not isinstance(choices, list):
             raise RuntimeError("model stream failed: event choices were invalid")
         for choice in choices:
@@ -293,6 +446,7 @@ class ChatStreamAccumulator:
             ]
         return {
             **self.metadata,
+            **({"usage": self.usage} if self.usage is not None else {}),
             "choices": [
                 {
                     "index": 0,
@@ -317,6 +471,45 @@ class ChatStreamAccumulator:
         }
 
 
+def normalized_usage(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    usage = {
+        key: token_count
+        for key in USAGE_TOKEN_FIELDS
+        if isinstance((token_count := value.get(key)), int)
+        and not isinstance(token_count, bool)
+    }
+    return usage or None
+
+
+def model_telemetry(
+    payload: dict[str, Any],
+    *,
+    context_tokens: int | None = None,
+) -> dict[str, Any]:
+    telemetry: dict[str, Any] = {}
+    usage = normalized_usage(payload.get("usage"))
+    if usage is not None:
+        telemetry["usage"] = usage
+    if context_tokens is not None:
+        telemetry["model_context_tokens"] = context_tokens
+    return telemetry
+
+
+def emit_model_telemetry(
+    payload: dict[str, Any],
+    *,
+    context_tokens: int | None,
+    telemetry_sink: ModelTelemetrySink | None,
+) -> None:
+    if telemetry_sink is None:
+        return
+    telemetry = model_telemetry(payload, context_tokens=context_tokens)
+    if telemetry:
+        telemetry_sink(telemetry)
+
+
 def chat_completion_messages(
     messages: list[dict[str, Any]],
     *,
@@ -326,13 +519,16 @@ def chat_completion_messages(
     selected_model: str | None = None,
     selected_url: str | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
+    telemetry_sink: ModelTelemetrySink | None = None,
 ) -> dict[str, Any]:
     """Request one native OpenAI-compatible chat completion message."""
+    context_tokens = model_context_tokens(selected_url, selected_model)
     body: dict[str, Any] = {
         "model": model_name(selected_model),
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": max_tokens,
+        "stream_options": {"include_usage": True},
         "chat_template_kwargs": {"enable_thinking": False},
     }
     if tools:
@@ -344,6 +540,11 @@ def chat_completion_messages(
     if stream_sink is not None:
         request_kwargs["stream_sink"] = stream_sink
     payload = request_chat_completion(body, **request_kwargs)
+    emit_model_telemetry(
+        payload,
+        context_tokens=context_tokens,
+        telemetry_sink=telemetry_sink,
+    )
     message = payload["choices"][0]["message"]
     if not isinstance(message, dict):
         raise RuntimeError("model request failed: assistant message was invalid")
@@ -358,8 +559,10 @@ def chat_text(
     selected_model: str | None = None,
     selected_url: str | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
+    telemetry_sink: ModelTelemetrySink | None = None,
 ) -> str:
     """Request plain text from the configured model endpoint."""
+    context_tokens = model_context_tokens(selected_url, selected_model)
     body = {
         "model": model_name(selected_model),
         "messages": [
@@ -368,6 +571,7 @@ def chat_text(
         ],
         "temperature": 0.2,
         "max_tokens": max_tokens,
+        "stream_options": {"include_usage": True},
         "chat_template_kwargs": {"enable_thinking": False},
     }
     request_kwargs: dict[str, Any] = {}
@@ -376,4 +580,9 @@ def chat_text(
     if stream_sink is not None:
         request_kwargs["stream_sink"] = stream_sink
     payload = request_chat_completion(body, **request_kwargs)
+    emit_model_telemetry(
+        payload,
+        context_tokens=context_tokens,
+        telemetry_sink=telemetry_sink,
+    )
     return str(payload["choices"][0]["message"]["content"])

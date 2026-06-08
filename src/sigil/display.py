@@ -262,6 +262,67 @@ def render_tool_result_summary(
         mark_text_separator.mark_trace_finished()
 
 
+def render_context_usage(
+    telemetry: dict[str, Any] | None,
+    *,
+    output: TextIO,
+) -> None:
+    line = context_usage_line(telemetry)
+    if not line:
+        return
+    print(muted(line, enabled=should_color(output)), file=output, flush=True)
+
+
+def context_usage_line(telemetry: dict[str, Any] | None) -> str:
+    if not isinstance(telemetry, dict):
+        return ""
+    usage = telemetry.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    prompt_tokens = usage_token_count(usage.get("prompt_tokens"))
+    completion_tokens = usage_token_count(usage.get("completion_tokens"))
+    context_tokens = current_context_token_estimate(
+        prompt_tokens,
+        completion_tokens,
+    )
+    model_context_tokens = usage_token_count(telemetry.get("model_context_tokens"))
+    if context_tokens is None and model_context_tokens is None:
+        return ""
+    context_text = (
+        f"≈ {format_token_count(context_tokens)}"
+        if context_tokens is not None
+        else "unavailable"
+    )
+    if model_context_tokens is None:
+        return f"◌ context  {context_text} tokens"
+    return (
+        f"◌ context  {context_text} / {format_token_count(model_context_tokens)} tokens"
+    )
+
+
+def current_context_token_estimate(
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+) -> int | None:
+    if prompt_tokens is None:
+        return None
+    if completion_tokens is None:
+        return prompt_tokens
+    return prompt_tokens + completion_tokens
+
+
+def usage_token_count(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def format_token_count(value: int) -> str:
+    return f"{value:,}"
+
+
 class ThinkingStatus:
     """Render an ephemeral thinking timer while a blocking model request runs."""
 

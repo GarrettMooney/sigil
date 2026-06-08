@@ -24,7 +24,8 @@ from sigil.protocols import (
 from sigil.routes import ask as answers_runner
 from sigil.routes import zeta_step as zeta_runner
 from sigil import handoff as sigil_handoff
-from sigil.session import recent_turns, record_turn
+from sigil.session import read_event_log, recent_turns, record_turn
+from sigil.state import read_jsonl
 from sigil import display as sigil_display
 from sigil.zeta import agent as zeta_agent
 from sigil.zeta import runtime as zeta
@@ -201,6 +202,36 @@ def test_zeta_stream_emits_content_deltas_in_order() -> None:
 
     assert sink.deltas == ["hel", "lo"]
     assert payload["choices"][0]["message"]["content"] == "hello"
+
+
+def test_zeta_stream_preserves_usage_chunk() -> None:
+    payload = zeta_model.read_streamed_chat_completion(
+        sse_lines(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            {
+                "usage": {
+                    "prompt_tokens": 123,
+                    "completion_tokens": 4,
+                    "total_tokens": 127,
+                },
+            },
+            "[DONE]",
+        )
+    )
+
+    assert payload["usage"] == {
+        "prompt_tokens": 123,
+        "completion_tokens": 4,
+        "total_tokens": 127,
+    }
 
 
 def test_zeta_stream_sink_does_not_change_reconstructed_message() -> None:
@@ -567,6 +598,82 @@ def test_sigil_model_cli_rejects_unknown_profile(
     assert zeta_models.active_model_profile() is None
 
 
+def test_zeta_model_context_tokens_prefers_props(monkeypatch) -> None:
+    zeta_model._MODEL_CONTEXT_TOKENS_CACHE.clear()
+    calls: list[str] = []
+
+    def fake_metadata(
+        path: str,
+        *,
+        selected_url: str | None = None,
+    ) -> dict[str, Any] | None:
+        del selected_url
+        calls.append(path)
+        return {"default_generation_settings": {"n_ctx": 262_144}}
+
+    monkeypatch.setattr(zeta_model, "request_model_metadata", fake_metadata)
+
+    tokens = zeta_model.model_context_tokens(
+        "http://127.0.0.1:8080/v1/chat/completions",
+        "local-model",
+    )
+
+    assert tokens == 262_144
+    assert calls == ["/props"]
+
+
+def test_zeta_model_context_tokens_falls_back_to_selected_model(
+    monkeypatch,
+) -> None:
+    zeta_model._MODEL_CONTEXT_TOKENS_CACHE.clear()
+
+    def fake_metadata(
+        path: str,
+        *,
+        selected_url: str | None = None,
+    ) -> dict[str, Any] | None:
+        del selected_url
+        if path == "/props":
+            return {}
+        return {
+            "data": [
+                {"id": "other-model", "meta": {"n_ctx": 8_192}},
+                {
+                    "id": "fast-model",
+                    "aliases": ["fast"],
+                    "meta": {"n_ctx": 65_536},
+                },
+            ]
+        }
+
+    monkeypatch.setattr(zeta_model, "request_model_metadata", fake_metadata)
+
+    tokens = zeta_model.model_context_tokens(
+        "http://127.0.0.1:8080/v1/chat/completions",
+        "fast",
+    )
+
+    assert tokens == 65_536
+
+
+def test_zeta_model_context_tokens_returns_none_when_unavailable(
+    monkeypatch,
+) -> None:
+    zeta_model._MODEL_CONTEXT_TOKENS_CACHE.clear()
+    monkeypatch.setattr(
+        zeta_model,
+        "request_model_metadata",
+        lambda *args, **kwargs: {},
+    )
+
+    tokens = zeta_model.model_context_tokens(
+        "http://127.0.0.1:8080/v1/chat/completions",
+        "local-model",
+    )
+
+    assert tokens is None
+
+
 def test_zeta_chat_completion_messages_accepts_request_model(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
@@ -590,6 +697,7 @@ def test_zeta_chat_completion_messages_accepts_request_model(monkeypatch) -> Non
     assert message == {"content": "done"}
     body = cast(dict[str, Any], captured["body"])
     assert body["model"] == "fast-model"
+    assert body["stream_options"] == {"include_usage": True}
     assert captured["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
 
 
@@ -616,7 +724,45 @@ def test_zeta_chat_completion_messages_sends_native_tools(monkeypatch) -> None:
     body = cast(dict[str, Any], captured["body"])
     assert body["tools"][0]["function"]["name"] == "read"
     assert body["tool_choice"] == "auto"
+    assert body["stream_options"] == {"include_usage": True}
     assert "response_format" not in body
+
+
+def test_zeta_chat_completion_messages_reports_model_telemetry(
+    monkeypatch,
+) -> None:
+    telemetry: list[dict[str, Any]] = []
+
+    def fake_request(body: dict[str, Any]) -> dict[str, Any]:
+        del body
+        return {
+            "usage": {
+                "prompt_tokens": 123,
+                "completion_tokens": 4,
+                "total_tokens": 127,
+            },
+            "choices": [{"message": {"content": "done"}}],
+        }
+
+    monkeypatch.setattr(zeta_model, "model_context_tokens", lambda *args: 262_144)
+    monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
+
+    message = zeta_model.chat_completion_messages(
+        [{"role": "user", "content": "hi"}],
+        telemetry_sink=telemetry.append,
+    )
+
+    assert message == {"content": "done"}
+    assert telemetry == [
+        {
+            "usage": {
+                "prompt_tokens": 123,
+                "completion_tokens": 4,
+                "total_tokens": 127,
+            },
+            "model_context_tokens": 262_144,
+        }
+    ]
 
 
 def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
@@ -645,6 +791,126 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     assert result.events == [{"type": "assistant_message", "content": "done"}]
     kwargs = cast(dict[str, Any], captured["kwargs"])
     assert kwargs["tools"][0]["function"]["name"] == "read"
+
+
+def test_zeta_agent_turn_captures_model_telemetry(monkeypatch) -> None:
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del messages
+        telemetry_sink = cast(
+            "Callable[[dict[str, Any]], None]", kwargs["telemetry_sink"]
+        )
+        telemetry_sink(
+            {
+                "usage": {
+                    "prompt_tokens": 123,
+                    "completion_tokens": 4,
+                    "total_tokens": 127,
+                },
+                "model_context_tokens": 262_144,
+            }
+        )
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assert result.final_text == "done"
+    assert result.model_telemetry == {
+        "usage": {
+            "prompt_tokens": 123,
+            "completion_tokens": 4,
+            "total_tokens": 127,
+        },
+        "model_context_tokens": 262_144,
+    }
+
+
+def test_zeta_agent_turn_attaches_model_telemetry_to_last_tool_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    first = tmp_path / "README.md"
+    second = tmp_path / "pyproject.toml"
+    first.write_text("README\n", encoding="utf-8")
+    second.write_text("[project]\n", encoding="utf-8")
+    tool_telemetry = {
+        "usage": {"prompt_tokens": 123, "completion_tokens": 8, "total_tokens": 131},
+        "model_context_tokens": 262_144,
+    }
+    final_telemetry = {
+        "usage": {"prompt_tokens": 456, "completion_tokens": 4, "total_tokens": 460},
+        "model_context_tokens": 262_144,
+    }
+    responses = iter(
+        [
+            (
+                tool_telemetry,
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "read",
+                                "arguments": json.dumps({"path": str(first)}),
+                            },
+                        },
+                        {
+                            "id": "call-2",
+                            "type": "function",
+                            "function": {
+                                "name": "read",
+                                "arguments": json.dumps({"path": str(second)}),
+                            },
+                        },
+                    ],
+                },
+            ),
+            (final_telemetry, {"content": "done"}),
+        ]
+    )
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del messages
+        telemetry, response = next(responses)
+        telemetry_sink = cast(
+            "Callable[[dict[str, Any]], None]", kwargs["telemetry_sink"]
+        )
+        telemetry_sink(telemetry)
+        return response
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+    )
+
+    tool_results = [
+        event for event in result.events if event.get("type") == "tool_result"
+    ]
+    assert "model_telemetry" not in tool_results[0]
+    assert tool_results[1]["model_telemetry"] == tool_telemetry
+    assert result.model_telemetry == final_telemetry
 
 
 def test_zeta_agent_turn_wraps_model_request_in_status(monkeypatch) -> None:
@@ -1887,6 +2153,29 @@ def test_sigil_display_summarizes_tool_results() -> None:
     ) == ["10 matches · 3 files · truncated"]
 
 
+def test_sigil_display_summarizes_current_context_estimate() -> None:
+    line = sigil_display.context_usage_line(
+        {
+            "usage": {
+                "prompt_tokens": 18_432,
+                "completion_tokens": 391,
+                "total_tokens": 18_823,
+            },
+            "model_context_tokens": 262_144,
+        }
+    )
+
+    assert line == "◌ context  ≈ 18,823 / 262,144 tokens"
+    assert (
+        sigil_display.context_usage_line({"usage": {"prompt_tokens": 18_432}})
+        == "◌ context  ≈ 18,432 tokens"
+    )
+    assert (
+        sigil_display.context_usage_line({"model_context_tokens": 262_144})
+        == "◌ context  unavailable / 262,144 tokens"
+    )
+
+
 def test_sigil_display_stream_renderer_factory_selects_output_mode() -> None:
     assert isinstance(
         sigil_display.create_stream_renderer(StringIO()),
@@ -2318,6 +2607,155 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
     assert output.out == "\nThe answer.\n\n"
     assert "❯ read" in output.err
     assert captured["context"] == "ctx"
+
+
+def test_zeta_agent_step_renders_context_usage_on_trace_stream(
+    monkeypatch,
+    capsys,
+) -> None:
+    telemetry = {
+        "usage": {
+            "prompt_tokens": 18_432,
+            "completion_tokens": 391,
+            "total_tokens": 18_823,
+        },
+        "model_context_tokens": 262_144,
+    }
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config, kwargs
+        return zeta_agent.AgentTurnResult(
+            final_text="done",
+            model_telemetry=telemetry,
+        )
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.run_agent_step("answer me", glyph=",,")
+
+    assert code == 0
+    output = capsys.readouterr()
+    assert output.out == "\ndone\n\n"
+    assert "◌ context  ≈ 18,823 / 262,144 tokens" in output.err
+
+
+def test_zeta_agent_step_renders_context_usage_before_buffered_answer(
+    monkeypatch,
+    capsys,
+) -> None:
+    telemetry = {
+        "usage": {"prompt_tokens": 18_432},
+        "model_context_tokens": 262_144,
+    }
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config, kwargs
+        return zeta_agent.AgentTurnResult(
+            final_text="done",
+            model_telemetry=telemetry,
+        )
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.run_agent_step("answer me", glyph=",,", trace_output=sys.stdout)
+
+    assert code == 0
+    output = capsys.readouterr().out
+    assert output.index("◌ context  ≈ 18,432 / 262,144 tokens") < output.index("done")
+
+
+def test_zeta_agent_step_renders_context_usage_after_last_tool_result(
+    monkeypatch,
+    capsys,
+) -> None:
+    tool_telemetry = {
+        "usage": {"prompt_tokens": 123},
+        "model_context_tokens": 262_144,
+    }
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        first_call = {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "input": {"path": "a.md"},
+        }
+        first_result = {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "A\n"}],
+            },
+        }
+        second_call = {
+            "type": "tool_call",
+            "id": "call-2",
+            "tool_call_id": "call-2",
+            "name": "read",
+            "input": {"path": "b.md"},
+        }
+        second_result = {
+            "type": "tool_result",
+            "tool_call_id": "call-2",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "B\n"}],
+            },
+            "model_telemetry": tool_telemetry,
+        }
+        events = [first_call, first_result, second_call, second_result]
+        for event in events:
+            event_sink(event)
+        return zeta_agent.AgentTurnResult(
+            final_text="done",
+            events=events,
+            model_telemetry={
+                "usage": {"prompt_tokens": 456},
+                "model_context_tokens": 262_144,
+            },
+        )
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.run_agent_step(
+        "inspect",
+        glyph=",,",
+        trace_output=sys.stdout,
+    )
+
+    assert code == 0
+    output = capsys.readouterr().out
+    assert (
+        "❯ read   a.md  (1 lines)\n"
+        "❯ read   b.md  (1 lines)\n"
+        "◌ context  ≈ 123 / 262,144 tokens"
+    ) in output
+    assert output.count("◌ context") == 1
+    assert output.index("◌ context  ≈ 123 / 262,144 tokens") < output.index("done")
 
 
 def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
@@ -3485,6 +3923,99 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
     assert len(transcripts) == 1
 
 
+def test_zeta_answer_route_prints_context_usage_and_records_telemetry(
+    monkeypatch,
+    capsys,
+) -> None:
+    telemetry = {
+        "usage": {
+            "prompt_tokens": 18_432,
+            "completion_tokens": 391,
+            "total_tokens": 18_823,
+        },
+        "model_context_tokens": 262_144,
+    }
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config, kwargs
+        return zeta_agent.AgentTurnResult(
+            final_text="It contains project metadata.",
+            model_telemetry=telemetry,
+        )
+
+    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = answers_runner.run_tool_answer(
+        "question system",
+        "What does pyproject.toml contain?",
+    )
+
+    assert code == 0
+    output = capsys.readouterr().out
+    assert "It contains project metadata." in output
+    assert "◌ context  ≈ 18,823 / 262,144 tokens" in output
+    answer_event = read_event_log()[-1]
+    assert answer_event["usage"] == telemetry["usage"]
+    assert answer_event["model_context_tokens"] == 262_144
+    context_tool = read_jsonl("last-tools.jsonl")[-1]
+    assert context_tool["type"] == "tool_end"
+    assert context_tool["tool"] == "context"
+    assert context_tool["result"]["metadata"]["summary"] == (
+        "◌ context  ≈ 18,823 / 262,144 tokens"
+    )
+
+
+def test_zeta_answer_route_json_includes_context_telemetry(
+    monkeypatch,
+    capsys,
+) -> None:
+    telemetry = {
+        "usage": {
+            "prompt_tokens": 123,
+            "completion_tokens": 4,
+            "total_tokens": 127,
+        },
+        "model_context_tokens": 262_144,
+    }
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config, kwargs
+        return zeta_agent.AgentTurnResult(
+            final_text="buffered answer",
+            model_telemetry=telemetry,
+        )
+
+    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = answers_runner.run_tool_answer(
+        "question system",
+        "Question?",
+        json_output=True,
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["answer"] == "buffered answer"
+    assert payload["usage"] == telemetry["usage"]
+    assert payload["model_context_tokens"] == 262_144
+    assert payload["tools"][-1]["tool"] == "context"
+    assert payload["tools"][-1]["result"]["metadata"]["summary"] == (
+        "◌ context  ≈ 127 / 262,144 tokens"
+    )
+
+
 def test_zeta_answer_route_streams_final_text_without_duplicate(
     monkeypatch,
     capsys,
@@ -3603,6 +4134,95 @@ def test_zeta_answer_route_streams_text_before_tool_trace(
         "\nI'll inspect README.\n\n❯ read   README.md  (1 lines)\n\nIt is a README.\n\n"
     )
     assert '{"path"' not in output
+
+
+def test_zeta_answer_route_records_context_usage_after_last_tool(
+    monkeypatch,
+    capsys,
+) -> None:
+    telemetry = {
+        "usage": {
+            "prompt_tokens": 18_432,
+            "completion_tokens": 391,
+            "total_tokens": 18_823,
+        },
+        "model_context_tokens": 262_144,
+    }
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        first_call = {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "input": {"path": "a.md"},
+        }
+        first_result = {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "A\n"}],
+            },
+        }
+        second_call = {
+            "type": "tool_call",
+            "id": "call-2",
+            "tool_call_id": "call-2",
+            "name": "read",
+            "input": {"path": "b.md"},
+        }
+        second_result = {
+            "type": "tool_result",
+            "tool_call_id": "call-2",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "B\n"}],
+            },
+            "model_telemetry": telemetry,
+        }
+        events = [first_call, first_result, second_call, second_result]
+        for event in events:
+            event_sink(event)
+        return zeta_agent.AgentTurnResult(
+            final_text="It is a README.",
+            events=events,
+            model_telemetry=telemetry,
+        )
+
+    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = answers_runner.run_tool_answer("question system", "Question?")
+
+    assert code == 0
+    output = capsys.readouterr().out
+    assert (
+        "❯ read   a.md  (1 lines)\n"
+        "❯ read   b.md  (1 lines)\n"
+        "◌ context  ≈ 18,823 / 262,144 tokens"
+    ) in output
+    assert output.count("◌ context") == 1
+    tools = read_jsonl("last-tools.jsonl")
+    assert [(tool["type"], tool["tool"]) for tool in tools] == [
+        ("tool_start", "read"),
+        ("tool_end", "read"),
+        ("tool_start", "read"),
+        ("tool_end", "read"),
+        ("tool_end", "context"),
+    ]
+    assert tools[-1]["result"]["metadata"]["summary"] == (
+        "◌ context  ≈ 18,823 / 262,144 tokens"
+    )
 
 
 def test_zeta_answer_route_json_output_disables_live_streaming(
@@ -3769,8 +4389,9 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
         *,
         max_tokens: int,
         stream_sink: object | None = None,
+        telemetry_sink: object | None = None,
     ) -> str:
-        del system, prompt, max_tokens, stream_sink
+        del system, prompt, max_tokens, stream_sink, telemetry_sink
         return "It contains Sigil docs."
 
     monkeypatch.setattr(answers_runner, "chat_text", fake_chat_text)
@@ -3799,8 +4420,9 @@ def test_zeta_answer_fallback_formats_evidence_instead_of_raw_json(
         *,
         max_tokens: int,
         stream_sink: object | None = None,
+        telemetry_sink: object | None = None,
     ) -> str:
-        del system, max_tokens, stream_sink
+        del system, max_tokens, stream_sink, telemetry_sink
         captured["prompt"] = prompt
         return "Use a clearer decision index."
 
@@ -3872,8 +4494,9 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
         selected_model: str | None = None,
         selected_url: str | None = None,
         stream_sink: object | None = None,
+        telemetry_sink: object | None = None,
     ) -> str:
-        del system, prompt, max_tokens, stream_sink
+        del system, prompt, max_tokens, stream_sink, telemetry_sink
         captured["selected_model"] = selected_model
         captured["selected_url"] = selected_url
         return "Fallback answer."
