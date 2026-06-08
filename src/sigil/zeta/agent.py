@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import itertools
 import json
 from dataclasses import dataclass, field
+from types import TracebackType
 from typing import Any, Callable, ContextManager, Iterable, Literal, cast
 
 from ..protocols import is_shell_prompt_handoff
 from . import runtime
-from .model import chat_completion_messages, model_endpoint_open
+from .model import (
+    ChatCompletionStreamSink,
+    chat_completion_messages,
+    model_endpoint_open,
+)
 from .tools import (
     allowed_tool_names,
     analyze_tool,
@@ -26,11 +32,11 @@ ModelStatusFactory = Callable[[], ContextManager[object]]
 
 @dataclass(frozen=True)
 class AgentConfig:
-    """Configuration for one bounded Zeta turn."""
+    """Configuration for one Zeta turn."""
 
     system_prompt: str | None = None
     allowed_tools: Iterable[str] | None = None
-    max_turns: int = 8
+    max_turns: int | None = None
     stop_on_handoff: bool = True
     edit_mode: EditMode = "review_patch"
     execution_mode: ExecutionMode = "handoff"
@@ -41,11 +47,12 @@ class AgentConfig:
 
 @dataclass(frozen=True)
 class AgentTurnResult:
-    """Result from one bounded native tool-call loop."""
+    """Result from one native tool-call loop."""
 
     final_text: str = ""
     events: list[dict[str, Any]] = field(default_factory=list)
     handoff: dict[str, Any] | None = None
+    final_text_streamed: bool = False
 
 
 def run_agent_turn(
@@ -56,8 +63,9 @@ def run_agent_turn(
     context: str = "",
     event_sink: AgentEventSink | None = None,
     model_status: ModelStatusFactory | None = None,
+    stream_sink: ChatCompletionStreamSink | None = None,
 ) -> AgentTurnResult:
-    """Run a bounded assistant/tool loop without mutating session state."""
+    """Run an assistant/tool loop without mutating session state."""
     if config.model_url is None:
         endpoint_open = model_endpoint_open()
     else:
@@ -69,21 +77,21 @@ def run_agent_turn(
     else:
         allowed_tools = tuple(config.allowed_tools)
     events: list[dict[str, Any]] = []
-    for _ in range(config.max_turns):
-        with model_status_context(model_status):
-            assistant = chat_completion_messages(
-                runtime.zeta_chat_messages(
-                    objective,
-                    [*transcript, *events],
-                    system=config.system_prompt,
-                    allowed_tools=allowed_tools,
-                    context=context,
-                ),
-                tools=model_tool_descriptors(allowed_tools),
-                tool_choice="auto",
-                selected_model=config.model_name,
-                selected_url=config.model_url,
-            )
+    for _ in turn_indices(config.max_turns):
+        assistant, streamed_content = request_assistant_message(
+            runtime.zeta_chat_messages(
+                objective,
+                transcript,
+                system=config.system_prompt,
+                allowed_tools=allowed_tools,
+                context=context,
+                current_events=events,
+            ),
+            allowed_tools=allowed_tools,
+            config=config,
+            model_status=model_status,
+            stream_sink=stream_sink,
+        )
         message_event = assistant_message_event(assistant)
         if message_event:
             emit_event(events, message_event, event_sink)
@@ -92,6 +100,7 @@ def run_agent_turn(
             return AgentTurnResult(
                 final_text=str(assistant.get("content") or ""),
                 events=events,
+                final_text_streamed=streamed_content,
             )
         for index, tool_call in enumerate(tool_calls):
             result_event = handle_tool_call(
@@ -112,6 +121,77 @@ def run_agent_turn(
             if result_event.stop:
                 return AgentTurnResult(events=events)
     return AgentTurnResult(events=events)
+
+
+def turn_indices(max_turns: int | None) -> Iterable[int]:
+    if max_turns is None:
+        return itertools.count()
+    return range(max(max_turns, 0))
+
+
+def request_assistant_message(
+    messages: list[dict[str, Any]],
+    *,
+    allowed_tools: tuple[str, ...],
+    config: AgentConfig,
+    model_status: ModelStatusFactory | None,
+    stream_sink: ChatCompletionStreamSink | None,
+) -> tuple[dict[str, Any], bool]:
+    status_context = model_status_context(model_status)
+    status_open = False
+
+    def close_status(
+        exc_type: type[BaseException] | None = None,
+        exc: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> None:
+        nonlocal status_open
+        if not status_open:
+            return
+        status_open = False
+        status_context.__exit__(exc_type, exc, traceback)
+
+    turn_stream_sink = ModelTurnStreamSink(stream_sink, close_status)
+    status_context.__enter__()
+    status_open = True
+    try:
+        assistant = chat_completion_messages(
+            messages,
+            tools=model_tool_descriptors(allowed_tools),
+            tool_choice="auto",
+            selected_model=config.model_name,
+            selected_url=config.model_url,
+            stream_sink=turn_stream_sink if stream_sink is not None else None,
+        )
+    except BaseException as exc:
+        close_status(type(exc), exc, exc.__traceback__)
+        raise
+    close_status()
+    return assistant, turn_stream_sink.streamed_content
+
+
+class ModelTurnStreamSink:
+    """Forward model text deltas after clearing the blocking status renderer."""
+
+    def __init__(
+        self,
+        stream_sink: ChatCompletionStreamSink | None,
+        close_status: Callable[
+            [type[BaseException] | None, BaseException | None, TracebackType | None],
+            None,
+        ],
+    ) -> None:
+        self.stream_sink = stream_sink
+        self.close_status = close_status
+        self.streamed_content = False
+
+    def content_delta(self, text: str) -> None:
+        if not text:
+            return
+        self.streamed_content = True
+        self.close_status(None, None, None)
+        if self.stream_sink is not None:
+            self.stream_sink.content_delta(text)
 
 
 def model_status_context(

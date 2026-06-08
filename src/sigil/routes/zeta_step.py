@@ -13,10 +13,14 @@ from typing import Any, Iterable, Literal, TextIO
 
 from ..state import append_jsonl
 from ..display import (
+    StreamRenderer,
+    TraceAwareStreamRenderer,
+    TraceRenderState,
+    create_stream_renderer,
     render_handoff_lines,
+    render_tool_result_summary,
     render_tool_start,
     thinking_status_factory,
-    tool_result_summary,
 )
 from ..zeta import runtime
 from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
@@ -34,14 +38,14 @@ def run_agent_step(
     glyph: str,
     system: str | None = None,
     stdin_text: str = "",
-    max_steps: int = 8,
+    max_steps: int | None = None,
     allowed_tools: Iterable[str] | None = None,
     handoff_path: str | Path | None = None,
     handoff_output: HandoffOutput = "detail",
     trace_output: TextIO | None = None,
     edit_mode: EditMode | None = None,
 ) -> int:
-    """Run a bounded Zeta agent step for CLI routes."""
+    """Run a Zeta agent step for CLI routes."""
     selected_model = active_model_selection()
     server_ready = (
         ensure_server(
@@ -73,11 +77,20 @@ def run_agent_step(
     prior_transcript = runtime.transcript_tail()
     append_jsonl(runtime.TRANSCRIPT, user_event)
     context = runtime.load_project_context()
+    trace_state = TraceRenderState()
+    base_stream_renderer = create_stream_renderer(sys.stdout)
+    stream_renderer = (
+        TraceAwareStreamRenderer(base_stream_renderer, trace_state, sys.stdout)
+        if base_stream_renderer is not None
+        else None
+    )
     recorder = AgentStepEventRecorder(
         glyph=glyph,
         handoff_path=handoff_path,
         handoff_output=handoff_output,
         output=output,
+        stream_renderer=stream_renderer,
+        trace_state=trace_state,
     )
     result = run_agent_turn(
         prompt,
@@ -98,6 +111,7 @@ def run_agent_step(
         context=context,
         event_sink=recorder.record,
         model_status=thinking_status_factory(output),
+        stream_sink=stream_renderer,
     )
     status = replay_agent_events(
         result,
@@ -106,15 +120,23 @@ def run_agent_step(
         handoff_output=handoff_output,
         output=output,
         skip_event_ids=recorder.recorded_event_ids,
+        stream_renderer=stream_renderer,
+        trace_state=trace_state,
     )
     if status is None:
         status = recorder.status
     if status is not None:
         return status
     if result.final_text:
-        record_agent_final(result.final_text, glyph=glyph)
+        record_agent_final(
+            result.final_text,
+            glyph=glyph,
+            answer_streamed=result.final_text_streamed,
+            stream_renderer=stream_renderer,
+            trace_state=trace_state,
+        )
         return 0
-    print("Zeta stopped after reaching the step budget.", file=sys.stderr)
+    print("Zeta stopped without a final answer.", file=sys.stderr)
     return 1
 
 
@@ -124,12 +146,25 @@ def enabled_tool_tuple(allowed_tools: Iterable[str] | None) -> tuple[str, ...]:
     return tuple(allowed_tools)
 
 
-def record_agent_final(content: str, *, glyph: str) -> None:
+def record_agent_final(
+    content: str,
+    *,
+    glyph: str,
+    answer_streamed: bool = False,
+    stream_renderer: StreamRenderer | None = None,
+    trace_state: TraceRenderState | None = None,
+) -> None:
     del glyph
     if not content:
         return
-    print()
+    if answer_streamed:
+        if stream_renderer is not None:
+            stream_renderer.finish()
+        return
+    if trace_state is None or not trace_state.render_text_separator(sys.stdout):
+        print()
     print(content)
+    print()
 
 
 class AgentStepEventRecorder:
@@ -142,11 +177,15 @@ class AgentStepEventRecorder:
         handoff_path: str | Path | None,
         handoff_output: HandoffOutput,
         output: TextIO,
+        stream_renderer: StreamRenderer | None = None,
+        trace_state: TraceRenderState | None = None,
     ) -> None:
         self.glyph = glyph
         self.handoff_path = handoff_path
         self.handoff_output = handoff_output
         self.output = output
+        self.stream_renderer = stream_renderer
+        self.trace_state = trace_state
         self.recorded_event_ids: set[int] = set()
         self.status: int | None = None
 
@@ -158,6 +197,8 @@ class AgentStepEventRecorder:
             handoff_path=self.handoff_path,
             handoff_output=self.handoff_output,
             output=self.output,
+            stream_renderer=self.stream_renderer,
+            trace_state=self.trace_state,
         )
         if status is not None:
             self.status = status
@@ -171,6 +212,8 @@ def replay_agent_events(
     handoff_output: HandoffOutput = "detail",
     output: TextIO = sys.stderr,
     skip_event_ids: set[int] | frozenset[int] = frozenset(),
+    stream_renderer: StreamRenderer | None = None,
+    trace_state: TraceRenderState | None = None,
 ) -> int | None:
     status: int | None = None
     for event in result.events:
@@ -182,6 +225,8 @@ def replay_agent_events(
             handoff_path=handoff_path,
             handoff_output=handoff_output,
             output=output,
+            stream_renderer=stream_renderer,
+            trace_state=trace_state,
         )
         if event_status is not None:
             status = event_status
@@ -195,11 +240,15 @@ def record_agent_event(
     handoff_path: str | Path | None = None,
     handoff_output: HandoffOutput = "detail",
     output: TextIO = sys.stderr,
+    stream_renderer: StreamRenderer | None = None,
+    trace_state: TraceRenderState | None = None,
 ) -> int | None:
     event_type = str(event.get("type") or "")
     fields = {key: value for key, value in event.items() if key != "type"}
     persisted = append_zeta_event(event_type, **fields, glyph=glyph)
     if event_type == "tool_call":
+        if stream_renderer is not None:
+            stream_renderer.ensure_trace_boundary()
         params = persisted.get("input")
         render_tool_start(
             str(persisted.get("name") or ""),
@@ -214,37 +263,21 @@ def record_agent_event(
     result_payload = persisted.get("result")
     if not isinstance(result_payload, dict):
         print(file=output)
+        if trace_state is not None:
+            trace_state.mark_trace_finished()
         return None
-    render_result_summary(name, result_payload, output=output)
+    render_tool_result_summary(
+        name,
+        result_payload,
+        output=output,
+        mark_text_separator=trace_state,
+    )
     handoff = result_payload.get("handoff")
     if not isinstance(handoff, dict):
         return None
     write_handoff(handoff_path, handoff)
     print_handoff(handoff, mode=handoff_output)
     return 0
-
-
-def render_result_summary(
-    name: str,
-    result: dict[str, Any],
-    *,
-    output: TextIO,
-) -> None:
-    """Append the result summary onto the open tool-start line and close it.
-
-    A single-line summary trails the detail in parens (`❯ read README.md
-    (42 lines)`); the start line is always closed so nothing dangles.
-    """
-    lines = tool_result_summary(name, result)
-    if not lines:
-        print(file=output)
-        return
-    if len(lines) == 1:
-        print(f"  ({lines[0]})", file=output)
-        return
-    print(file=output)
-    for line in lines:
-        print(f"  {line}", file=output)
 
 
 def write_handoff(path: str | Path | None, handoff: dict[str, Any]) -> None:
@@ -285,9 +318,9 @@ def execution_mode_for_glyph(glyph: str) -> ExecutionMode:
 
 def agent_prompt(objective: str, *, glyph: str, stdin_text: str) -> str:
     instruction = (
-        "Run the bounded automatic tool loop until no more tool calls are needed."
+        "Run the automatic tool loop until no more tool calls are needed."
         if glyph in {",,", ",,,"}
-        else "Run one bounded edit step."
+        else "Run one edit step."
     )
     sections = [instruction, f"Objective: {objective}"]
     if stdin_text:

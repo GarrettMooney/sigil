@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
@@ -38,6 +40,56 @@ class TtyBuffer(StringIO):
         return True
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def visible_terminal_text(text: str) -> str:
+    return ANSI_RE.sub("", text).replace("\r", "")
+
+
+class FakeStreamingResponse:
+    def __init__(self, lines: list[bytes]) -> None:
+        self.lines = lines
+        self.closed = False
+
+    def __enter__(self) -> FakeStreamingResponse:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def __iter__(self) -> Iterator[bytes]:
+        return iter(self.lines)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class DeltaSink:
+    def __init__(self) -> None:
+        self.deltas: list[str] = []
+
+    def content_delta(self, text: str) -> None:
+        self.deltas.append(text)
+
+
+def required_stream_sink(
+    kwargs: dict[str, object],
+) -> zeta_model.ChatCompletionStreamSink:
+    stream_sink = kwargs.get("stream_sink")
+    assert stream_sink is not None
+    return cast(zeta_model.ChatCompletionStreamSink, stream_sink)
+
+
+def sse_lines(*payloads: dict[str, Any] | str) -> list[bytes]:
+    lines: list[bytes] = []
+    for payload in payloads:
+        data = payload if isinstance(payload, str) else json.dumps(payload)
+        lines.append(f"data: {data}\n".encode("utf-8"))
+        lines.append(b"\n")
+    return lines
+
+
 def write_models_config(home: Path, text: str) -> Path:
     config_dir = home / ".zeta"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -49,15 +101,354 @@ def write_models_config(home: Path, text: str) -> Path:
 def test_zeta_model_config_uses_zeta_env(monkeypatch) -> None:
     monkeypatch.delenv("ZETA_MODEL_URL", raising=False)
     monkeypatch.delenv("ZETA_MODEL_NAME", raising=False)
+    monkeypatch.delenv("ZETA_MODEL_IDLE_TIMEOUT_SECONDS", raising=False)
 
     assert zeta_model.model_url() == zeta_model.DEFAULT_MODEL_URL
     assert zeta_model.model_name() == zeta_model.DEFAULT_MODEL_NAME
+    assert zeta_model.model_idle_timeout() is None
 
     monkeypatch.setenv("ZETA_MODEL_URL", "http://zeta.invalid/v1/chat/completions")
     monkeypatch.setenv("ZETA_MODEL_NAME", "zeta-model")
+    monkeypatch.setenv("ZETA_MODEL_IDLE_TIMEOUT_SECONDS", "2.5")
 
     assert zeta_model.model_url() == "http://zeta.invalid/v1/chat/completions"
     assert zeta_model.model_name() == "zeta-model"
+    assert zeta_model.model_idle_timeout() == 2.5
+
+    monkeypatch.setenv("ZETA_MODEL_IDLE_TIMEOUT_SECONDS", "0")
+    assert zeta_model.model_idle_timeout() is None
+
+
+def test_zeta_request_chat_completion_streams_final_message(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+    response = FakeStreamingResponse(
+        sse_lines(
+            {
+                "id": "chatcmpl-test",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "hel"},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "lo"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            "[DONE]",
+        )
+    )
+
+    def fake_urlopen(req: Any, timeout: float | None = None) -> FakeStreamingResponse:
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        captured["accept"] = req.get_header("Accept")
+        captured["timeout"] = timeout
+        return response
+
+    monkeypatch.delenv("ZETA_MODEL_IDLE_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(zeta_model.urllib.request, "urlopen", fake_urlopen)
+    body = {"model": "local-model", "messages": []}
+
+    payload = zeta_model.request_chat_completion(body)
+
+    assert body == {"model": "local-model", "messages": []}
+    assert captured["body"]["stream"] is True
+    assert captured["accept"] == "text/event-stream"
+    assert captured["timeout"] is None
+    assert response.closed is True
+    assert payload["id"] == "chatcmpl-test"
+    assert payload["choices"][0]["message"] == {
+        "role": "assistant",
+        "content": "hello",
+    }
+    assert payload["choices"][0]["finish_reason"] == "stop"
+
+
+def test_zeta_stream_emits_content_deltas_in_order() -> None:
+    sink = DeltaSink()
+
+    payload = zeta_model.read_streamed_chat_completion(
+        sse_lines(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "hel"},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "lo"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            "[DONE]",
+        ),
+        stream_sink=sink,
+    )
+
+    assert sink.deltas == ["hel", "lo"]
+    assert payload["choices"][0]["message"]["content"] == "hello"
+
+
+def test_zeta_stream_sink_does_not_change_reconstructed_message() -> None:
+    frames = sse_lines(
+        {
+            "id": "chatcmpl-test",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "done"},
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        "[DONE]",
+    )
+    sink = DeltaSink()
+
+    without_sink = zeta_model.read_streamed_chat_completion(frames)
+    with_sink = zeta_model.read_streamed_chat_completion(frames, stream_sink=sink)
+
+    assert with_sink == without_sink
+    assert sink.deltas == ["done"]
+
+
+def test_zeta_stream_does_not_render_tool_call_fragments() -> None:
+    sink = DeltaSink()
+
+    payload = zeta_model.read_streamed_chat_completion(
+        sse_lines(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-read",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "read",
+                                        "arguments": '{"path"',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "function": {"arguments": ': "README.md"}'},
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            },
+            "[DONE]",
+        ),
+        stream_sink=sink,
+    )
+
+    assert sink.deltas == []
+    assert payload["choices"][0]["message"]["tool_calls"][0]["function"] == {
+        "name": "read",
+        "arguments": '{"path": "README.md"}',
+    }
+
+
+def test_zeta_stream_mixed_content_and_tool_call_exposes_completed_call() -> None:
+    sink = DeltaSink()
+
+    payload = zeta_model.read_streamed_chat_completion(
+        sse_lines(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "content": "I'll inspect README.",
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-read",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "read",
+                                        "arguments": '{"path":"README.md"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            },
+            "[DONE]",
+        ),
+        stream_sink=sink,
+    )
+
+    message = payload["choices"][0]["message"]
+    assert sink.deltas == ["I'll inspect README."]
+    assert message["content"] == "I'll inspect README."
+    assert message["tool_calls"][0]["function"]["name"] == "read"
+
+
+def test_zeta_stream_reconstructs_split_tool_calls() -> None:
+    payload = zeta_model.read_streamed_chat_completion(
+        sse_lines(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-read",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "read",
+                                        "arguments": '{"path"',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "function": {"arguments": ': "README.md"}'},
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            },
+            "[DONE]",
+        )
+    )
+
+    message = payload["choices"][0]["message"]
+    assert message["tool_calls"] == [
+        {
+            "id": "call-read",
+            "type": "function",
+            "function": {
+                "name": "read",
+                "arguments": '{"path": "README.md"}',
+            },
+        }
+    ]
+    assert payload["choices"][0]["finish_reason"] == "tool_calls"
+
+
+def test_zeta_stream_orders_multiple_tool_calls_by_index() -> None:
+    payload = zeta_model.read_streamed_chat_completion(
+        sse_lines(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 1,
+                                    "id": "call-ls",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "ls",
+                                        "arguments": '{"path":"."}',
+                                    },
+                                },
+                                {
+                                    "index": 0,
+                                    "id": "call-read",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "read",
+                                        "arguments": '{"path":"README.md"}',
+                                    },
+                                },
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            },
+            "[DONE]",
+        )
+    )
+
+    calls = payload["choices"][0]["message"]["tool_calls"]
+    assert [call["id"] for call in calls] == ["call-read", "call-ls"]
+
+
+def test_zeta_request_chat_completion_closes_stream_on_error(monkeypatch) -> None:
+    response = FakeStreamingResponse(
+        sse_lines({"error": {"message": "generation failed"}})
+    )
+
+    def fake_urlopen(req: Any, timeout: float | None = None) -> FakeStreamingResponse:
+        return response
+
+    monkeypatch.setattr(zeta_model.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match="generation failed"):
+        zeta_model.request_chat_completion({"model": "local-model", "messages": []})
+
+    assert response.closed is True
+
+
+def test_zeta_stream_rejects_malformed_events() -> None:
+    with pytest.raises(RuntimeError, match="invalid JSON event"):
+        zeta_model.read_streamed_chat_completion([b"data: nope\n", b"\n"])
 
 
 def test_zeta_model_profiles_load_user_config(
@@ -293,6 +684,84 @@ def test_zeta_agent_turn_wraps_model_request_in_status(monkeypatch) -> None:
     assert events == ["start", "stop"]
 
 
+def test_zeta_agent_turn_forwards_content_deltas_and_marks_final(monkeypatch) -> None:
+    sink = DeltaSink()
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del args
+        stream_sink = required_stream_sink(kwargs)
+        stream_sink.content_delta("hel")
+        stream_sink.content_delta("lo")
+        return {"content": "hello"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(max_turns=1),
+        stream_sink=sink,
+    )
+
+    assert sink.deltas == ["hel", "lo"]
+    assert result.final_text == "hello"
+    assert result.final_text_streamed is True
+
+
+def test_zeta_agent_turn_stops_status_before_first_stream_delta(monkeypatch) -> None:
+    events: list[str] = []
+
+    class Status:
+        def __enter__(self) -> object:
+            events.append("start")
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            events.append("stop")
+            return False
+
+    class AssertingSink:
+        def content_delta(self, text: str) -> None:
+            assert text == "done"
+            assert events == ["start", "stop"]
+            events.append("delta")
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del args
+        stream_sink = required_stream_sink(kwargs)
+        stream_sink.content_delta("done")
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(max_turns=1),
+        model_status=Status,
+        stream_sink=AssertingSink(),
+    )
+
+    assert result.final_text == "done"
+    assert events == ["start", "stop", "delta"]
+
+
 def test_zeta_agent_turn_uses_request_model(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
@@ -393,6 +862,72 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
     ] == ["read", "ls"]
 
 
+def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
+    sink = DeltaSink()
+    responses = iter(
+        [
+            {
+                "content": "I'll inspect README.",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"README.md"}',
+                        },
+                    }
+                ],
+            },
+            {"content": "It is a README."},
+        ]
+    )
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del args
+        response = next(responses)
+        stream_sink = kwargs.get("stream_sink")
+        if response.get("content") and stream_sink is not None:
+            stream_sink = cast(zeta_model.ChatCompletionStreamSink, stream_sink)
+            stream_sink.content_delta(str(response["content"]))
+        return response
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "run_tool",
+        lambda name, params: {
+            "ok": True,
+            "content": [{"type": "text", "text": "README"}],
+        },
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+        stream_sink=sink,
+    )
+
+    assert sink.deltas == ["I'll inspect README.", "It is a README."]
+    assert result.final_text == "It is a README."
+    assert result.final_text_streamed is True
+    assert result.events[0]["content"] == "I'll inspect README."
+
+
 def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
@@ -426,6 +961,83 @@ def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> No
         and "Objective:\ninspect the repo" in str(message.get("content"))
     ]
     assert len(prompt_messages) == 1
+
+
+def test_zeta_agent_turn_orders_follow_up_history_before_current_events(
+    monkeypatch,
+) -> None:
+    captured: list[list[dict[str, Any]]] = []
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"DECISIONS.md"}',
+                        },
+                    }
+                ]
+            },
+            {"content": "Improve the decision log."},
+        ]
+    )
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del kwargs
+        captured.append(messages)
+        return next(responses)
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "run_tool",
+        lambda name, params: {
+            "ok": True,
+            "content": [{"type": "text", "text": "Decision log"}],
+            "metadata": {"path": "DECISIONS.md"},
+        },
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "How would you improve it?",
+        [
+            {"role": "user", "content": "What is this vault about?"},
+            {"role": "assistant", "content": "It is a CEO vault."},
+        ],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+    )
+
+    assert result.final_text == "Improve the decision log."
+    second_turn = captured[1]
+    assert [message["role"] for message in second_turn] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert second_turn[1]["content"] == "What is this vault about?"
+    assert second_turn[2]["content"] == "It is a CEO vault."
+    assert "Objective:\nHow would you improve it?" in second_turn[3]["content"]
+    assert second_turn[4]["tool_calls"][0]["id"] == "call-1"
+    assert second_turn[5]["tool_call_id"] == "call-1"
 
 
 def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> None:
@@ -1253,6 +1865,70 @@ def test_sigil_display_summarizes_tool_results() -> None:
     ) == ["10 matches · 3 files · truncated"]
 
 
+def test_sigil_display_stream_renderer_factory_selects_output_mode() -> None:
+    assert isinstance(
+        sigil_display.create_stream_renderer(StringIO()),
+        sigil_display.TerminalStreamRenderer,
+    )
+    assert sigil_display.create_stream_renderer(StringIO(), json_output=True) is None
+    assert isinstance(
+        sigil_display.create_stream_renderer(TtyBuffer()),
+        sigil_display.RichStreamRenderer,
+    )
+
+
+def test_sigil_display_rich_stream_renderer_renders_markdown() -> None:
+    output = TtyBuffer()
+    renderer = sigil_display.RichStreamRenderer(output, refresh_interval=0)
+
+    renderer.content_delta("Hello ")
+    renderer.content_delta("**world**")
+    renderer.finish()
+
+    text = visible_terminal_text(output.getvalue())
+    assert "Hello world" in text
+    assert "**world**" not in text
+
+
+def test_sigil_display_rich_stream_renderer_wraps_with_left_padding() -> None:
+    output = TtyBuffer()
+    renderer = sigil_display.RichStreamRenderer(
+        output,
+        width=24,
+        refresh_interval=0,
+    )
+
+    renderer.content_delta("alpha beta gamma delta epsilon")
+    renderer.finish()
+
+    lines = [
+        line.rstrip()
+        for line in visible_terminal_text(output.getvalue()).splitlines()
+        if line.strip()
+    ]
+    assert "  alpha beta gamma delta" in lines
+    assert "  epsilon" in lines
+
+
+def test_sigil_display_rich_stream_renderer_finalizes_trace_boundaries() -> None:
+    output = TtyBuffer()
+    renderer = sigil_display.RichStreamRenderer(output, refresh_interval=0)
+
+    renderer.content_delta("First")
+    renderer.ensure_trace_boundary()
+    assert renderer.live is None
+    assert renderer.buffer == []
+    assert renderer.wrote_text is False
+
+    renderer.content_delta("Second")
+    renderer.finish()
+
+    text = visible_terminal_text(output.getvalue())
+    assert "First" in text
+    assert "Second" in text
+    assert renderer.live is None
+
+
 def test_sigil_display_thinking_status_updates_and_clears() -> None:
     output = TtyBuffer()
     now = 0.0
@@ -1568,7 +2244,7 @@ def test_sigil_zeta_step_keeps_trace_off_stdout(monkeypatch) -> None:
     result = CliRunner().invoke(sigil_cli, ["zeta-step", "summarize"])
 
     assert result.exit_code == 0
-    assert result.stdout == "\nsummary\n"
+    assert result.stdout == "summary\n"
     assert "❯ read" in result.stderr
     assert "❯ read" not in result.stdout
 
@@ -1617,7 +2293,7 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
 
     assert code == 0
     output = capsys.readouterr()
-    assert output.out == "\nThe answer.\n"
+    assert output.out == "The answer.\n"
     assert "❯ read" in output.err
     assert captured["context"] == "ctx"
 
@@ -1674,6 +2350,30 @@ def test_zeta_agent_step_double_comma_uses_handoff_mode(
     config = cast(zeta_agent.AgentConfig, captured["config"])
     assert config.edit_mode == "review_patch"
     assert config.execution_mode == "handoff"
+    assert config.max_turns is None
+
+
+def test_zeta_answer_route_has_no_default_step_budget(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, kwargs
+        captured["config"] = config
+        return zeta_agent.AgentTurnResult(final_text="done")
+
+    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = answers_runner.run_tool_answer("system", "question")
+
+    assert code == 0
+    config = cast(zeta_agent.AgentConfig, captured["config"])
+    assert config.max_turns is None
 
 
 def test_zeta_agent_step_double_comma_stages_bash_handoff(
@@ -1770,7 +2470,103 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
         code = zeta_runner.run_agent_step("inspect", glyph=glyph)
 
         assert code == 0
-        assert "\nIt is a README.\n" in capsys.readouterr().out
+        assert capsys.readouterr().out == "It is a README.\n"
+
+
+def test_zeta_agent_step_streams_text_before_tool_trace(
+    monkeypatch,
+    capsys,
+) -> None:
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        stream_sink = required_stream_sink(kwargs)
+        stream_sink.content_delta("I'll inspect README.")
+        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        tool_call = {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "input": {"path": "README.md"},
+        }
+        event_sink(tool_call)
+        return zeta_agent.AgentTurnResult(
+            final_text="It is a README.",
+            events=[tool_call],
+        )
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.run_agent_step("inspect", glyph=",,")
+
+    assert code == 0
+    output = capsys.readouterr()
+    assert output.out.startswith("I'll inspect README.\n")
+    assert "\nIt is a README.\n" in output.out
+    assert "❯ read   README.md" in output.err
+
+
+@pytest.mark.parametrize("glyph", [",,", ",,,"])
+def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
+    glyph: str,
+    monkeypatch,
+    capsys,
+) -> None:
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        stream_sink = required_stream_sink(kwargs)
+        stream_sink.content_delta("I'll inspect README.")
+        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        tool_call = {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "input": {"path": "README.md"},
+        }
+        tool_result = {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "README\n"}],
+            },
+        }
+        event_sink(tool_call)
+        event_sink(tool_result)
+        stream_sink.content_delta("It is a README.")
+        return zeta_agent.AgentTurnResult(
+            final_text="It is a README.",
+            events=[tool_call, tool_result],
+            final_text_streamed=True,
+        )
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.run_agent_step(
+        "inspect",
+        glyph=glyph,
+        trace_output=sys.stdout,
+    )
+
+    assert code == 0
+    output = capsys.readouterr().out
+    assert output == (
+        "I'll inspect README.\n❯ read   README.md  (1 lines)\n\nIt is a README.\n"
+    )
 
 
 def test_zeta_agent_step_prints_final_answer_after_direct_edit(
@@ -1809,7 +2605,7 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
 
     assert code == 0
     output = capsys.readouterr()
-    assert output.out == "\nedited and verified\n"
+    assert output.out == "edited and verified\n"
     assert "❯ edit   a.txt  (applied · a.txt)" in output.err
 
 
@@ -2550,6 +3346,152 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
     assert len(transcripts) == 1
 
 
+def test_zeta_answer_route_streams_final_text_without_duplicate(
+    monkeypatch,
+    capsys,
+) -> None:
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        stream_sink = required_stream_sink(kwargs)
+        assert isinstance(stream_sink, sigil_display.TerminalStreamRenderer)
+        stream_sink.content_delta("streamed answer")
+        return zeta_agent.AgentTurnResult(
+            final_text="streamed answer",
+            events=[{"type": "assistant_message", "content": "streamed answer"}],
+            final_text_streamed=True,
+        )
+
+    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = answers_runner.run_tool_answer("question system", "Question?")
+
+    assert code == 0
+    assert capsys.readouterr().out == "streamed answer\n"
+
+
+def test_zeta_answer_route_streams_markdown_with_rich_for_tty(
+    monkeypatch,
+) -> None:
+    output = TtyBuffer()
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        stream_sink = required_stream_sink(kwargs)
+        assert isinstance(stream_sink, sigil_display.RichStreamRenderer)
+        stream_sink.content_delta("**streamed** answer")
+        return zeta_agent.AgentTurnResult(
+            final_text="streamed answer",
+            events=[{"type": "assistant_message", "content": "streamed answer"}],
+            final_text_streamed=True,
+        )
+
+    monkeypatch.setattr(answers_runner.sys, "stdout", output)
+    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = answers_runner.run_tool_answer(
+        "question system",
+        "Question?",
+        input_text="Question?",
+    )
+
+    assert code == 0
+    assert "streamed answer" in visible_terminal_text(output.getvalue())
+    turns = answers_runner.discussion_turns()
+    assert [turn["content"] for turn in turns] == ["streamed answer"]
+
+
+def test_zeta_answer_route_streams_text_before_tool_trace(
+    monkeypatch,
+    capsys,
+) -> None:
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        stream_sink = required_stream_sink(kwargs)
+        stream_sink.content_delta("I'll inspect README.")
+        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        tool_call = {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "input": {"path": "README.md"},
+        }
+        tool_result = {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "README"}],
+            },
+        }
+        event_sink(tool_call)
+        event_sink(tool_result)
+        stream_sink.content_delta("It is a README.")
+        return zeta_agent.AgentTurnResult(
+            final_text="It is a README.",
+            events=[tool_call, tool_result],
+            final_text_streamed=True,
+        )
+
+    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = answers_runner.run_tool_answer("question system", "Question?")
+
+    assert code == 0
+    output = capsys.readouterr().out
+    assert output == (
+        "I'll inspect README.\n❯ read   README.md  (1 lines)\n\nIt is a README.\n"
+    )
+    assert '{"path"' not in output
+
+
+def test_zeta_answer_route_json_output_disables_live_streaming(
+    monkeypatch,
+    capsys,
+) -> None:
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        assert kwargs.get("stream_sink") is None
+        return zeta_agent.AgentTurnResult(final_text="buffered answer")
+
+    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = answers_runner.run_tool_answer(
+        "question system",
+        "Question?",
+        json_output=True,
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["answer"] == "buffered answer"
+
+
 def test_zeta_question_loop_prints_tool_start_while_agent_runs(
     monkeypatch,
     capsys,
@@ -2679,11 +3621,18 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
 
     monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
-    monkeypatch.setattr(
-        answers_runner,
-        "chat_text",
-        lambda system, prompt, max_tokens: "It contains Sigil docs.",
-    )
+
+    def fake_chat_text(
+        system: str,
+        prompt: str,
+        *,
+        max_tokens: int,
+        stream_sink: object | None = None,
+    ) -> str:
+        del system, prompt, max_tokens, stream_sink
+        return "It contains Sigil docs."
+
+    monkeypatch.setattr(answers_runner, "chat_text", fake_chat_text)
 
     code = answers_runner.run_tool_answer(
         "question system",
@@ -2696,6 +3645,52 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
     assert "\n\nIt contains Sigil docs.\n" in output
     assert "It contains Sigil docs." in output
     assert "question tool budget" not in output
+
+
+def test_zeta_answer_fallback_formats_evidence_instead_of_raw_json(
+    monkeypatch,
+) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_chat_text(
+        system: str,
+        prompt: str,
+        *,
+        max_tokens: int,
+        stream_sink: object | None = None,
+    ) -> str:
+        del system, max_tokens, stream_sink
+        captured["prompt"] = prompt
+        return "Use a clearer decision index."
+
+    monkeypatch.setattr(answers_runner, "chat_text", fake_chat_text)
+
+    answer = answers_runner.fallback_answer(
+        "question system",
+        "How would you improve it?",
+        [
+            {"role": "user", "content": "What is this vault about?"},
+            {"role": "assistant", "content": "It is a CEO vault."},
+            {
+                "type": "tool_result",
+                "tool_call_id": "call-1",
+                "name": "read",
+                "result": {
+                    "ok": True,
+                    "content": [{"type": "text", "text": "Decision log"}],
+                    "metadata": {"path": "/vault/DECISIONS.md"},
+                },
+            },
+        ],
+    )
+
+    assert answer == "Use a clearer decision index."
+    prompt = captured["prompt"]
+    assert "Current question:\nHow would you improve it?" in prompt
+    assert "Prior conversation:\nuser: What is this vault about?" in prompt
+    assert "assistant: It is a CEO vault." in prompt
+    assert "Tool result (read /vault/DECISIONS.md):\nDecision log" in prompt
+    assert "Current turn transcript JSON" not in prompt
 
 
 def test_zeta_answer_fallback_uses_active_session_model(
@@ -2735,8 +3730,9 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
         max_tokens: int,
         selected_model: str | None = None,
         selected_url: str | None = None,
+        stream_sink: object | None = None,
     ) -> str:
-        del system, prompt, max_tokens
+        del system, prompt, max_tokens, stream_sink
         captured["selected_model"] = selected_model
         captured["selected_url"] = selected_url
         return "Fallback answer."

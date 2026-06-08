@@ -86,11 +86,20 @@ Useful environment variables:
 ZETA_MODEL_URL=http://127.0.0.1:8080/v1/chat/completions
 ZETA_MODEL_NAME=local-model
 ZETA_MODEL_PATH=/path/to/model.gguf
+# Optional client-side stream idle timeout in seconds; unset or <=0 disables it.
+ZETA_MODEL_IDLE_TIMEOUT_SECONDS=0
 SIGIL_STATE_DIR=$HOME/.sigil
 SIGIL_RUN_CAPTURE_BYTES=6000
 # Optional override used by sigil doctor/runtime service discovery.
 ZETA_BIN=/path/to/zeta
 ```
+
+Sigil sends Zeta model requests with OpenAI-compatible streaming enabled
+internally, even though it still renders the final assistant message as one
+response. For local `llama-server`, this gives the server a direct client
+disconnect signal if Sigil aborts a request. `ZETA_MODEL_IDLE_TIMEOUT_SECONDS`
+is only a client-side stream read timeout; `llama-server --timeout` is a
+read/write timeout, not a generation cancellation guarantee.
 
 ## Changing Models Mid-Session
 

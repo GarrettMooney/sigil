@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, Iterable
+from types import TracebackType
+from typing import Any, Callable, Iterable
 
 from ..session import recent_turns_context
 from ..state import (
@@ -19,10 +20,19 @@ from ..state import (
     read_jsonl,
     write_jsonl,
 )
-from ..display import ThinkingStatus, render_tool_start, thinking_status_factory
+from ..display import (
+    StreamRenderer,
+    ThinkingStatus,
+    TraceAwareStreamRenderer,
+    TraceRenderState,
+    create_stream_renderer,
+    render_tool_result_summary,
+    render_tool_start,
+    thinking_status_factory,
+)
 from ..zeta import runtime
 from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
-from ..zeta.model import chat_text
+from ..zeta.model import ChatCompletionStreamSink, chat_text
 from ..zeta.models import ModelSelection, active_model_selection, model_selection_event
 from ..zeta.server import ensure_server
 
@@ -79,6 +89,8 @@ def prepend_recent_turns(user_input: str) -> str:
 
 RECENT_ANSWER_TURNS_LIMIT = 4
 RECENT_ANSWER_TURN_CHARS = 500
+FALLBACK_CONTEXT_CHARS = 32_000
+FALLBACK_EVENT_TEXT_CHARS = 6_000
 
 
 def recent_answer_context(
@@ -161,7 +173,7 @@ def run_tool_answer(
     input_text: str = "",
     follow_up: bool = False,
     json_output: bool = False,
-    max_steps: int = 4,
+    max_steps: int | None = None,
     allowed_tools: Iterable[str] = ANSWER_TOOLS,
     history: Iterable[dict[str, object]] = (),
     selected_model: ModelSelection | None = None,
@@ -180,7 +192,18 @@ def run_tool_answer(
     if not server_ready:
         return 1
     enabled_tools = tuple(allowed_tools)
-    recorder = AnswerEventRecorder(json_output=json_output)
+    trace_state = TraceRenderState()
+    base_stream_renderer = create_stream_renderer(sys.stdout, json_output=json_output)
+    stream_renderer = (
+        TraceAwareStreamRenderer(base_stream_renderer, trace_state, sys.stdout)
+        if base_stream_renderer is not None
+        else None
+    )
+    recorder = AnswerEventRecorder(
+        json_output=json_output,
+        stream_renderer=stream_renderer,
+        trace_state=trace_state,
+    )
     user_event: dict[str, Any] = {
         "type": "user_message",
         "content": prompt,
@@ -213,6 +236,7 @@ def run_tool_answer(
         context=runtime.load_project_context(),
         event_sink=recorder.record,
         model_status=thinking_status_factory(sys.stderr, enabled=status_enabled),
+        stream_sink=stream_renderer,
     )
     turn_events.extend(result.events)
     tool_events = list(recorder.tool_events)
@@ -221,12 +245,21 @@ def run_tool_answer(
             result,
             json_output=json_output,
             skip_event_ids=recorder.recorded_event_ids,
+            stream_renderer=stream_renderer,
+            trace_state=trace_state,
         )
     )
     answer = result.final_text
+    answer_streamed = result.final_text_streamed
     if not answer:
-        with ThinkingStatus(sys.stderr, enabled=status_enabled):
-            answer = fallback_answer(system, prompt, turn_events, selected_model)
+        answer, answer_streamed = run_fallback_answer_with_status(
+            system,
+            prompt,
+            turn_events,
+            selected_model,
+            status_enabled=status_enabled,
+            stream_renderer=stream_renderer,
+        )
     record_answer(
         input_text=input_text,
         prompt=prompt,
@@ -235,6 +268,9 @@ def run_tool_answer(
         tools=tool_events,
         json_output=json_output,
         model=model_selection_event(selected_model) if selected_model else None,
+        answer_streamed=answer_streamed,
+        stream_renderer=stream_renderer,
+        trace_state=trace_state,
     )
     return 0
 
@@ -248,14 +284,27 @@ def answer_thinking_status_enabled(json_output: bool) -> bool | None:
 class AnswerEventRecorder:
     """Persist and render answer-route events as the agent loop produces them."""
 
-    def __init__(self, *, json_output: bool) -> None:
+    def __init__(
+        self,
+        *,
+        json_output: bool,
+        stream_renderer: StreamRenderer | None = None,
+        trace_state: TraceRenderState | None = None,
+    ) -> None:
         self.json_output = json_output
+        self.stream_renderer = stream_renderer
+        self.trace_state = trace_state
         self.recorded_event_ids: set[int] = set()
         self.tool_events: list[dict[str, Any]] = []
 
     def record(self, event: dict[str, Any]) -> None:
         self.recorded_event_ids.add(id(event))
-        tool_event = record_answer_event(event, json_output=self.json_output)
+        tool_event = record_answer_event(
+            event,
+            json_output=self.json_output,
+            stream_renderer=self.stream_renderer,
+            trace_state=self.trace_state,
+        )
         if tool_event is not None:
             self.tool_events.append(tool_event)
 
@@ -265,12 +314,19 @@ def replay_answer_events(
     *,
     json_output: bool,
     skip_event_ids: set[int] | frozenset[int] = frozenset(),
+    stream_renderer: StreamRenderer | None = None,
+    trace_state: TraceRenderState | None = None,
 ) -> list[dict[str, Any]]:
     tool_events: list[dict[str, Any]] = []
     for event in result.events:
         if id(event) in skip_event_ids:
             continue
-        tool_event = record_answer_event(event, json_output=json_output)
+        tool_event = record_answer_event(
+            event,
+            json_output=json_output,
+            stream_renderer=stream_renderer,
+            trace_state=trace_state,
+        )
         if tool_event is not None:
             tool_events.append(tool_event)
     return tool_events
@@ -280,6 +336,8 @@ def record_answer_event(
     event: dict[str, Any],
     *,
     json_output: bool,
+    stream_renderer: StreamRenderer | None = None,
+    trace_state: TraceRenderState | None = None,
 ) -> dict[str, Any] | None:
     event_type = str(event.get("type") or "")
     fields = {
@@ -294,7 +352,9 @@ def record_answer_event(
             "last-tools.jsonl", {"type": "tool_start", "tool": name, "args": args}
         )
         if not json_output:
-            render_tool_start(name, args, output=sys.stdout)
+            if stream_renderer is not None:
+                stream_renderer.ensure_trace_boundary()
+            render_tool_start(name, args, output=sys.stdout, newline=False)
         return None
     if event_type != "tool_result":
         return None
@@ -302,9 +362,108 @@ def record_answer_event(
     result_payload = trace.get("result")
     if not isinstance(result_payload, dict):
         result_payload = {}
+    if not json_output:
+        render_tool_result_summary(
+            name,
+            result_payload,
+            output=sys.stdout,
+            mark_text_separator=trace_state,
+        )
     tool_event = {"type": "tool_end", "tool": name, "result": result_payload}
     append_jsonl("last-tools.jsonl", tool_event)
     return tool_event
+
+
+def fallback_turn_context(prompt: str, turn_events: list[dict[str, Any]]) -> str:
+    """Return a model-readable evidence digest for fallback answers."""
+    sections = [f"Current question:\n{prompt}"]
+    history = fallback_history_lines(turn_events)
+    if history:
+        sections.append("Prior conversation:\n" + "\n".join(history))
+    observations = fallback_observation_blocks(turn_events)
+    if observations:
+        sections.append("Current turn observations:\n" + "\n\n".join(observations))
+    return clamp_text("\n\n".join(sections), FALLBACK_CONTEXT_CHARS)
+
+
+def fallback_history_lines(turn_events: list[dict[str, Any]]) -> list[str]:
+    lines = []
+    for event in turn_events:
+        role = str(event.get("role") or "")
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(event.get("content") or "").strip()
+        if content:
+            lines.append(f"{role}: {clamp_text(content, RECENT_ANSWER_TURN_CHARS)}")
+    return lines
+
+
+def fallback_observation_blocks(turn_events: list[dict[str, Any]]) -> list[str]:
+    blocks = []
+    for event in turn_events:
+        event_type = str(event.get("type") or "")
+        if event_type == "assistant_message":
+            content = str(event.get("content") or "").strip()
+            if content:
+                blocks.append(
+                    "Assistant note:\n" + clamp_text(content, RECENT_ANSWER_TURN_CHARS)
+                )
+            continue
+        if event_type == "tool_result":
+            block = fallback_tool_result_block(event)
+            if block:
+                blocks.append(block)
+    return blocks
+
+
+def fallback_tool_result_block(event: dict[str, Any]) -> str:
+    result = event.get("result")
+    if not isinstance(result, dict):
+        return ""
+    label = fallback_tool_result_label(str(event.get("name") or "tool"), result)
+    text = fallback_tool_result_text(result)
+    if text:
+        return f"{label}:\n{clamp_text(text, FALLBACK_EVENT_TEXT_CHARS)}"
+    metadata = result.get("metadata")
+    if isinstance(metadata, dict) and metadata:
+        return f"{label} metadata:\n{json.dumps(metadata, ensure_ascii=False)}"
+    error = result.get("error")
+    if isinstance(error, dict) and error:
+        return f"{label} error:\n{json.dumps(error, ensure_ascii=False)}"
+    if result.get("ok") is True:
+        return f"{label}: ok"
+    return ""
+
+
+def fallback_tool_result_label(name: str, result: dict[str, Any]) -> str:
+    metadata = result.get("metadata")
+    if not isinstance(metadata, dict):
+        return f"Tool result ({name})"
+    details = [name]
+    path = metadata.get("path")
+    if isinstance(path, str) and path:
+        details.append(path)
+    pattern = metadata.get("pattern")
+    if isinstance(pattern, str) and pattern:
+        details.append(f"pattern={pattern}")
+    return "Tool result (" + " ".join(details) + ")"
+
+
+def fallback_tool_result_text(result: dict[str, Any]) -> str:
+    content = result.get("content")
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        str(part.get("text") or "")
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "text"
+    ).strip()
+
+
+def clamp_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n... truncated ..."
 
 
 def fallback_answer(
@@ -312,18 +471,26 @@ def fallback_answer(
     prompt: str,
     turn_events: list[dict[str, Any]],
     selected_model: ModelSelection | None = None,
+    stream_sink: ChatCompletionStreamSink | None = None,
 ) -> str:
-    """Answer from the current turn transcript when structured stepping stalls."""
+    """Answer from a compact current-turn evidence digest when stepping stalls."""
     fallback_prompt = "\n\n".join(
         [
-            "Answer the user's question using only this current Zeta turn transcript.",
-            "Do not request tools. If the transcript is insufficient, say what is missing.",
-            f"Question:\n{prompt}",
-            f"Current turn transcript JSON:\n{json.dumps(turn_events, ensure_ascii=False)}",
+            "Answer the user's question using only the conversation and local "
+            "tool evidence below.",
+            "Do not request tools. If the evidence is insufficient, say which "
+            "fact is missing in terms of the user's question; do not give a "
+            "meta-answer about transcript completeness.",
+            fallback_turn_context(prompt, turn_events),
         ]
     )
     if selected_model is None:
-        answer = chat_text(system, fallback_prompt, max_tokens=1200).strip()
+        answer = chat_text(
+            system,
+            fallback_prompt,
+            max_tokens=1200,
+            stream_sink=stream_sink,
+        ).strip()
     else:
         answer = chat_text(
             system,
@@ -331,10 +498,56 @@ def fallback_answer(
             max_tokens=1200,
             selected_model=selected_model.model,
             selected_url=selected_model.url,
+            stream_sink=stream_sink,
         ).strip()
     if answer:
         return answer
     return "I could not answer from the available local context."
+
+
+def run_fallback_answer_with_status(
+    system: str,
+    prompt: str,
+    turn_events: list[dict[str, Any]],
+    selected_model: ModelSelection | None,
+    *,
+    status_enabled: bool | None,
+    stream_renderer: StreamRenderer | None,
+) -> tuple[str, bool]:
+    fallback_sink = (
+        StreamDeltaTracker(stream_renderer) if stream_renderer is not None else None
+    )
+    status = ThinkingStatus(sys.stderr, enabled=status_enabled)
+    status_open = False
+
+    def close_status(
+        exc_type: type[BaseException] | None = None,
+        exc: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> None:
+        nonlocal status_open
+        if not status_open:
+            return
+        status_open = False
+        status.__exit__(exc_type, exc, traceback)
+
+    if fallback_sink is not None:
+        fallback_sink.before_first_delta = lambda: close_status(None, None, None)
+    status.__enter__()
+    status_open = True
+    try:
+        answer = fallback_answer(
+            system,
+            prompt,
+            turn_events,
+            selected_model,
+            stream_sink=fallback_sink,
+        )
+    except BaseException as exc:
+        close_status(type(exc), exc, exc.__traceback__)
+        raise
+    close_status()
+    return answer, bool(fallback_sink and fallback_sink.streamed_content)
 
 
 def record_answer(
@@ -346,6 +559,9 @@ def record_answer(
     tools: list[dict[str, Any]],
     json_output: bool,
     model: dict[str, str] | None,
+    answer_streamed: bool = False,
+    stream_renderer: StreamRenderer | None = None,
+    trace_state: TraceRenderState | None = None,
 ) -> None:
     answer_event: dict[str, Any] = {
         "type": "answer",
@@ -384,8 +600,35 @@ def record_answer(
             )
         )
         return
-    print()
+    if answer_streamed:
+        if stream_renderer is not None:
+            stream_renderer.finish()
+        return
+    if trace_state is None or not trace_state.render_text_separator(sys.stdout):
+        print()
     print(answer)
+    print()
+
+
+class StreamDeltaTracker:
+    """Track whether a nested stream sink emitted visible text."""
+
+    def __init__(
+        self,
+        stream_sink: StreamRenderer,
+        before_first_delta: Callable[[], None] | None = None,
+    ) -> None:
+        self.stream_sink = stream_sink
+        self.before_first_delta = before_first_delta
+        self.streamed_content = False
+
+    def content_delta(self, text: str) -> None:
+        if not text:
+            return
+        if not self.streamed_content and self.before_first_delta is not None:
+            self.before_first_delta()
+        self.streamed_content = True
+        self.stream_sink.content_delta(text)
 
 
 def append_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:

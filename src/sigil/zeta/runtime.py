@@ -127,15 +127,20 @@ def zeta_chat_messages(
     system: str | None = None,
     allowed_tools: Iterable[str] | None = None,
     context: str = "",
+    current_events: Iterable[dict[str, Any]] = (),
 ) -> list[dict[str, Any]]:
     messages = [
         {
             "role": "system",
             "content": zeta_system_prompt(system, allowed_tools=allowed_tools),
-        },
-        {"role": "user", "content": zeta_context_message(objective, context=context)},
+        }
     ]
     messages.extend(transcript_chat_messages(transcript[-20:]))
+    messages.append(
+        {"role": "user", "content": zeta_context_message(objective, context=context)}
+    )
+    event_list = list(current_events)
+    messages.extend(transcript_chat_messages(event_list[-20:]))
     return messages
 
 

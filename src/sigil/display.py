@@ -5,7 +5,12 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Any, Callable, TextIO, cast
+from typing import Any, Callable, Protocol, TextIO, cast
+
+from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.padding import Padding
 
 from .protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
@@ -16,6 +21,202 @@ from .tty import MUTED, RESET
 
 TRACE_LABEL_WIDTH = 5
 THINKING_STATUS_INTERVAL_SECONDS = 1.0
+RICH_STREAM_REFRESH_SECONDS = 0.125
+RICH_STREAM_LEFT_PADDING = 2
+
+
+class StreamRenderer(Protocol):
+    """Render visible assistant text deltas."""
+
+    def content_delta(self, text: str) -> None:
+        """Handle one visible assistant text delta."""
+        ...
+
+    def ensure_trace_boundary(self) -> None:
+        """Finalize the current assistant block before trace output."""
+        ...
+
+    def finish(self) -> None:
+        """Finalize the current assistant block."""
+        ...
+
+
+class TraceRenderState:
+    """Track whether trace output already separated the next text block."""
+
+    def __init__(self) -> None:
+        self.text_separator_pending = False
+        self.text_separator_rendered = False
+
+    def mark_trace_finished(self) -> None:
+        self.text_separator_pending = True
+
+    def clear_pending_separator(self) -> None:
+        self.text_separator_pending = False
+
+    def render_text_separator(self, output: TextIO) -> bool:
+        if not self.text_separator_pending:
+            return False
+        print(file=output)
+        self.text_separator_pending = False
+        self.text_separator_rendered = True
+        return True
+
+
+def create_stream_renderer(
+    output: TextIO,
+    *,
+    json_output: bool = False,
+) -> StreamRenderer | None:
+    """Return the renderer Sigil should use for human assistant text."""
+    if json_output:
+        return None
+    if is_interactive(output):
+        return RichStreamRenderer(output)
+    return TerminalStreamRenderer(output)
+
+
+class TerminalStreamRenderer:
+    """Render visible assistant text deltas to a terminal stream."""
+
+    def __init__(self, output: TextIO) -> None:
+        self.output = output
+        self.wrote_text = False
+        self.ends_with_newline = True
+
+    def content_delta(self, text: str) -> None:
+        if not text:
+            return
+        print(text, file=self.output, end="", flush=True)
+        self.wrote_text = True
+        self.ends_with_newline = text.endswith("\n")
+
+    def ensure_trace_boundary(self) -> None:
+        if not self.wrote_text or self.ends_with_newline:
+            return
+        print(file=self.output, flush=True)
+        self.ends_with_newline = True
+
+    def finish(self) -> None:
+        self.ensure_trace_boundary()
+
+
+class TraceAwareStreamRenderer:
+    """Add trace/text spacing policy around a concrete stream renderer."""
+
+    def __init__(
+        self,
+        renderer: StreamRenderer,
+        trace_state: TraceRenderState,
+        output: TextIO,
+    ) -> None:
+        self.renderer = renderer
+        self.trace_state = trace_state
+        self.output = output
+        self.text_active = False
+
+    def content_delta(self, text: str) -> None:
+        if not text:
+            return
+        if not self.text_active:
+            if not self.trace_state.render_text_separator(self.output):
+                print(file=self.output)
+            self.text_active = True
+        self.renderer.content_delta(text)
+
+    def ensure_trace_boundary(self) -> None:
+        self.renderer.ensure_trace_boundary()
+        if self.text_active:
+            print(file=self.output)
+            self.text_active = False
+        self.trace_state.clear_pending_separator()
+
+    def finish(self) -> None:
+        self.renderer.finish()
+        if self.text_active:
+            print(file=self.output)
+            self.text_active = False
+
+
+class RichStreamRenderer:
+    """Render streaming assistant Markdown in an interactive terminal."""
+
+    def __init__(
+        self,
+        output: TextIO,
+        *,
+        width: int | None = None,
+        refresh_interval: float = RICH_STREAM_REFRESH_SECONDS,
+        left_padding: int = RICH_STREAM_LEFT_PADDING,
+        clock: Callable[[], float] = time.monotonic,
+        console: Console | None = None,
+    ) -> None:
+        self.output = output
+        self.console = console or Console(
+            file=output,
+            force_terminal=True,
+            color_system="auto" if should_color(output) else None,
+            width=width,
+            highlight=False,
+        )
+        self.refresh_interval = refresh_interval
+        self.left_padding = left_padding
+        self.clock = clock
+        self.live: Live | None = None
+        self.buffer: list[str] = []
+        self.wrote_text = False
+        self.last_refresh = 0.0
+
+    def content_delta(self, text: str) -> None:
+        if not text:
+            return
+        self.buffer.append(text)
+        self.wrote_text = True
+        now = self.clock()
+        if self.live is None:
+            self.start_live(now)
+            return
+        if now - self.last_refresh >= self.refresh_interval:
+            self.refresh(now)
+
+    def ensure_trace_boundary(self) -> None:
+        self.finalize_block(clear=True)
+
+    def finish(self) -> None:
+        self.finalize_block(clear=True)
+
+    def start_live(self, now: float) -> None:
+        self.live = Live(
+            self.renderable(),
+            console=self.console,
+            auto_refresh=False,
+            transient=False,
+            redirect_stdout=False,
+            redirect_stderr=False,
+        )
+        self.live.start(refresh=True)
+        self.last_refresh = now
+
+    def refresh(self, now: float | None = None) -> None:
+        if self.live is None:
+            return
+        self.live.update(self.renderable(), refresh=True)
+        self.last_refresh = self.clock() if now is None else now
+
+    def finalize_block(self, *, clear: bool) -> None:
+        if not self.wrote_text:
+            return
+        self.refresh()
+        if self.live is not None:
+            self.live.stop()
+            self.live = None
+        if clear:
+            self.buffer.clear()
+            self.wrote_text = False
+            self.last_refresh = 0.0
+
+    def renderable(self) -> Padding:
+        return Padding(Markdown("".join(self.buffer)), (0, 0, 0, self.left_padding))
 
 
 def render_tool_start(
@@ -34,6 +235,30 @@ def render_tool_start(
     status = f"❯ {name:<{TRACE_LABEL_WIDTH}}  {detail}" if detail else f"❯ {name}"
     end = "\n" if newline else ""
     print(muted(status, enabled=should_color(output)), file=output, flush=True, end=end)
+
+
+def render_tool_result_summary(
+    name: str,
+    result: dict[str, Any],
+    *,
+    output: TextIO,
+    mark_text_separator: TraceRenderState | None = None,
+) -> None:
+    """Append a result summary onto an open tool-start line and close it."""
+    lines = tool_result_summary(name, result)
+    if not lines:
+        print(file=output)
+        if mark_text_separator is not None:
+            mark_text_separator.mark_trace_finished()
+        return
+    if len(lines) == 1:
+        print(f"  ({lines[0]})", file=output)
+    else:
+        print(file=output)
+        for line in lines:
+            print(f"  {line}", file=output)
+    if mark_text_separator is not None:
+        mark_text_separator.mark_trace_finished()
 
 
 class ThinkingStatus:
