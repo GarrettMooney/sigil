@@ -23,6 +23,7 @@ TRACE_LABEL_WIDTH = 5
 THINKING_STATUS_INTERVAL_SECONDS = 1.0
 RICH_STREAM_REFRESH_SECONDS = 0.125
 RICH_STREAM_LEFT_PADDING = 2
+THINKING_STATUS_LEFT_PADDING = RICH_STREAM_LEFT_PADDING
 
 
 class StreamRenderer(Protocol):
@@ -270,14 +271,18 @@ class ThinkingStatus:
         *,
         enabled: bool | None = None,
         interval: float = THINKING_STATUS_INTERVAL_SECONDS,
+        left_padding: int = THINKING_STATUS_LEFT_PADDING,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.output = output
         self.enabled = is_interactive(output) if enabled is None else enabled
         self.interval = interval
+        self.left_padding = left_padding
         self.clock = clock
         self.started_at = 0.0
         self.last_seconds: int | None = None
+        self.wrote_status = False
+        self.wrote_separator = False
         self.stop = threading.Event()
         self.thread: threading.Thread | None = None
         self.lock = threading.Lock()
@@ -309,18 +314,30 @@ class ThinkingStatus:
         if seconds == self.last_seconds:
             return
         self.last_seconds = seconds
-        self.write(f"\r\x1b[2K{thinking_status_text(seconds)}")
+        prefix = "\r\x1b[2K"
+        if not self.wrote_status:
+            prefix = "\n\r\x1b[2K"
+            self.wrote_separator = True
+        self.wrote_status = True
+        self.write(f"{prefix}{thinking_status_text(seconds, self.left_padding)}")
 
     def clear(self) -> None:
-        self.write("\r\x1b[2K")
+        if not self.wrote_status:
+            return
+        if self.wrote_separator:
+            self.write("\r\x1b[2K\x1b[1A\r\x1b[2K")
+        else:
+            self.write("\r\x1b[2K")
+        self.wrote_status = False
+        self.wrote_separator = False
 
     def write(self, text: str) -> None:
         with self.lock:
             print(text, file=self.output, end="", flush=True)
 
 
-def thinking_status_text(seconds: int) -> str:
-    return f"> Thinking ({seconds}s...)"
+def thinking_status_text(seconds: int, left_padding: int = 0) -> str:
+    return f"{' ' * left_padding}> Thinking ({seconds}s...)"
 
 
 def thinking_status_factory(

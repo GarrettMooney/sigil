@@ -1941,9 +1941,9 @@ def test_sigil_display_thinking_status_updates_and_clears() -> None:
         status.refresh()
 
     text = output.getvalue()
-    assert "> Thinking (0s...)" in text
-    assert "> Thinking (10s...)" in text
-    assert text.endswith("\r\x1b[2K")
+    assert "\n\r\x1b[2K  > Thinking (0s...)" in text
+    assert "\r\x1b[2K  > Thinking (10s...)" in text
+    assert text.endswith("\r\x1b[2K\x1b[1A\r\x1b[2K")
 
 
 def test_sigil_display_thinking_status_skips_non_tty() -> None:
@@ -2632,6 +2632,58 @@ def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
     assert capsys.readouterr().out == (
         "❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)\n\nDone.\n\n"
     )
+
+
+def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
+    monkeypatch,
+    capsys,
+) -> None:
+    output = TtyBuffer()
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        tool_call = {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "input": {"path": "README.md"},
+        }
+        tool_result = {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "README\n"}],
+            },
+        }
+        event_sink(tool_call)
+        event_sink(tool_result)
+        model_status = cast("Callable[[], Any]", kwargs.get("model_status"))
+        with model_status():
+            pass
+        return zeta_agent.AgentTurnResult(final_text="Done.", events=[])
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.run_agent_step(
+        "inspect",
+        glyph=",,",
+        trace_output=output,
+    )
+
+    assert code == 0
+    assert capsys.readouterr().out == "\nDone.\n\n"
+    trace_text = visible_terminal_text(output.getvalue())
+    assert "❯ read   README.md  (1 lines)\n\n  > Thinking (0s...)" in trace_text
 
 
 def test_zeta_agent_step_prints_final_answer_after_direct_edit(
