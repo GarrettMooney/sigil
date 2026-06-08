@@ -25,7 +25,6 @@ from ..display import (
     ThinkingStatus,
     TraceAwareStreamRenderer,
     TraceRenderState,
-    context_usage_line,
     create_stream_renderer,
     render_context_usage,
     render_tool_result_summary,
@@ -366,7 +365,6 @@ def record_answer_event(
     result_payload = trace.get("result")
     if not isinstance(result_payload, dict):
         result_payload = {}
-    telemetry = event_model_telemetry(trace)
     if not json_output:
         render_tool_result_summary(
             name,
@@ -374,16 +372,9 @@ def record_answer_event(
             output=sys.stdout,
             mark_text_separator=trace_state,
         )
-        render_context_usage(telemetry, output=sys.stdout)
     tool_event = {"type": "tool_end", "tool": name, "result": result_payload}
-    if telemetry is not None:
-        tool_event["model_telemetry"] = telemetry
     append_jsonl("last-tools.jsonl", tool_event)
-    context_tool = context_usage_tool_event(telemetry)
-    if context_tool is None:
-        return [tool_event]
-    append_jsonl("last-tools.jsonl", context_tool)
-    return [tool_event, context_tool]
+    return [tool_event]
 
 
 def fallback_turn_context(prompt: str, turn_events: list[dict[str, Any]]) -> str:
@@ -586,8 +577,6 @@ def record_answer(
     trace_state: TraceRenderState | None = None,
 ) -> None:
     telemetry_fields = model_telemetry_fields(model_telemetry)
-    tool_context_rendered = tools_have_context_usage(tools)
-    visible_tools = tools_with_context_usage(tools, model_telemetry)
     answer_event: dict[str, Any] = {
         "type": "answer",
         "input": input_text,
@@ -618,7 +607,7 @@ def record_answer(
                     "prompt": prompt,
                     "answer": answer,
                     "runtime": "zeta",
-                    "tools": visible_tools,
+                    "tools": tools,
                     "malformed_events": 0,
                     **telemetry_fields,
                     **({"model": model} if model is not None else {}),
@@ -631,15 +620,13 @@ def record_answer(
     if answer_streamed:
         if stream_renderer is not None:
             stream_renderer.finish()
-        if not tool_context_rendered:
-            render_context_usage(model_telemetry, output=sys.stdout)
-        return
-    if not tool_context_rendered:
         render_context_usage(model_telemetry, output=sys.stdout)
+        return
     if trace_state is None or not trace_state.render_text_separator(sys.stdout):
         print()
     print(answer)
     print()
+    render_context_usage(model_telemetry, output=sys.stdout)
 
 
 def model_telemetry_fields(
@@ -655,49 +642,6 @@ def model_telemetry_fields(
     if isinstance(context_tokens, int) and not isinstance(context_tokens, bool):
         fields["model_context_tokens"] = context_tokens
     return fields
-
-
-def event_model_telemetry(event: dict[str, Any]) -> dict[str, Any] | None:
-    model_telemetry = event.get("model_telemetry")
-    if isinstance(model_telemetry, dict):
-        return model_telemetry
-    return None
-
-
-def tools_with_context_usage(
-    tools: list[dict[str, Any]],
-    model_telemetry: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
-    if tools_have_context_usage(tools):
-        return tools
-    context_tool = context_usage_tool_event(model_telemetry)
-    if context_tool is None:
-        return tools
-    append_jsonl("last-tools.jsonl", context_tool)
-    return [*tools, context_tool]
-
-
-def tools_have_context_usage(tools: list[dict[str, Any]]) -> bool:
-    return any(tool.get("tool") == "context" for tool in tools)
-
-
-def context_usage_tool_event(
-    model_telemetry: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    summary = context_usage_line(model_telemetry)
-    if not summary:
-        return None
-    return {
-        "type": "tool_end",
-        "tool": "context",
-        "result": {
-            "ok": True,
-            "metadata": {
-                "summary": summary,
-                **model_telemetry_fields(model_telemetry),
-            },
-        },
-    }
 
 
 class StreamDeltaTracker:

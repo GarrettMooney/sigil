@@ -2645,7 +2645,7 @@ def test_zeta_agent_step_renders_context_usage_on_trace_stream(
     assert "◌ context  ≈ 18,823 / 262,144 tokens" in output.err
 
 
-def test_zeta_agent_step_renders_context_usage_before_buffered_answer(
+def test_zeta_agent_step_renders_context_usage_after_buffered_answer(
     monkeypatch,
     capsys,
 ) -> None:
@@ -2673,10 +2673,10 @@ def test_zeta_agent_step_renders_context_usage_before_buffered_answer(
 
     assert code == 0
     output = capsys.readouterr().out
-    assert output.index("◌ context  ≈ 18,432 / 262,144 tokens") < output.index("done")
+    assert output.index("done") < output.index("◌ context  ≈ 18,432 / 262,144 tokens")
 
 
-def test_zeta_agent_step_renders_context_usage_after_last_tool_result(
+def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
     monkeypatch,
     capsys,
 ) -> None:
@@ -2749,13 +2749,10 @@ def test_zeta_agent_step_renders_context_usage_after_last_tool_result(
 
     assert code == 0
     output = capsys.readouterr().out
-    assert (
-        "❯ read   a.md  (1 lines)\n"
-        "❯ read   b.md  (1 lines)\n"
-        "◌ context  ≈ 123 / 262,144 tokens"
-    ) in output
+    assert ("❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)") in output
     assert output.count("◌ context") == 1
-    assert output.index("◌ context  ≈ 123 / 262,144 tokens") < output.index("done")
+    assert "◌ context  ≈ 123 / 262,144 tokens" not in output
+    assert output.index("done") < output.index("◌ context  ≈ 456 / 262,144 tokens")
 
 
 def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
@@ -3960,15 +3957,11 @@ def test_zeta_answer_route_prints_context_usage_and_records_telemetry(
     output = capsys.readouterr().out
     assert "It contains project metadata." in output
     assert "◌ context  ≈ 18,823 / 262,144 tokens" in output
+    assert output.index("It contains project metadata.") < output.index("◌ context")
     answer_event = read_event_log()[-1]
     assert answer_event["usage"] == telemetry["usage"]
     assert answer_event["model_context_tokens"] == 262_144
-    context_tool = read_jsonl("last-tools.jsonl")[-1]
-    assert context_tool["type"] == "tool_end"
-    assert context_tool["tool"] == "context"
-    assert context_tool["result"]["metadata"]["summary"] == (
-        "◌ context  ≈ 18,823 / 262,144 tokens"
-    )
+    assert read_jsonl("last-tools.jsonl") == []
 
 
 def test_zeta_answer_route_json_includes_context_telemetry(
@@ -4010,10 +4003,7 @@ def test_zeta_answer_route_json_includes_context_telemetry(
     assert payload["answer"] == "buffered answer"
     assert payload["usage"] == telemetry["usage"]
     assert payload["model_context_tokens"] == 262_144
-    assert payload["tools"][-1]["tool"] == "context"
-    assert payload["tools"][-1]["result"]["metadata"]["summary"] == (
-        "◌ context  ≈ 127 / 262,144 tokens"
-    )
+    assert payload["tools"] == []
 
 
 def test_zeta_answer_route_streams_final_text_without_duplicate(
@@ -4136,7 +4126,7 @@ def test_zeta_answer_route_streams_text_before_tool_trace(
     assert '{"path"' not in output
 
 
-def test_zeta_answer_route_records_context_usage_after_last_tool(
+def test_zeta_answer_route_renders_context_usage_at_bottom_after_tools(
     monkeypatch,
     capsys,
 ) -> None:
@@ -4206,11 +4196,10 @@ def test_zeta_answer_route_records_context_usage_after_last_tool(
 
     assert code == 0
     output = capsys.readouterr().out
-    assert (
-        "❯ read   a.md  (1 lines)\n"
-        "❯ read   b.md  (1 lines)\n"
+    assert ("❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)") in output
+    assert output.index("It is a README.") < output.index(
         "◌ context  ≈ 18,823 / 262,144 tokens"
-    ) in output
+    )
     assert output.count("◌ context") == 1
     tools = read_jsonl("last-tools.jsonl")
     assert [(tool["type"], tool["tool"]) for tool in tools] == [
@@ -4218,11 +4207,7 @@ def test_zeta_answer_route_records_context_usage_after_last_tool(
         ("tool_end", "read"),
         ("tool_start", "read"),
         ("tool_end", "read"),
-        ("tool_end", "context"),
     ]
-    assert tools[-1]["result"]["metadata"]["summary"] == (
-        "◌ context  ≈ 18,823 / 262,144 tokens"
-    )
 
 
 def test_zeta_answer_route_json_output_disables_live_streaming(

@@ -128,13 +128,10 @@ def run_agent_step(
         status = recorder.status
     if status is not None:
         record_agent_model_telemetry(result.model_telemetry, glyph=glyph)
-        if not result_has_tool_context_usage(result):
-            render_context_usage(result.model_telemetry, output=output)
+        render_context_usage(result.model_telemetry, output=output)
         return status
     if result.final_text:
         record_agent_model_telemetry(result.model_telemetry, glyph=glyph)
-        if not result_has_tool_context_usage(result):
-            render_context_usage(result.model_telemetry, output=output)
         record_agent_final(
             result.final_text,
             glyph=glyph,
@@ -142,6 +139,7 @@ def run_agent_step(
             stream_renderer=stream_renderer,
             trace_state=trace_state,
         )
+        render_context_usage(result.model_telemetry, output=output)
         return 0
     print("Zeta stopped without a final answer.", file=sys.stderr)
     return 1
@@ -279,7 +277,6 @@ def record_agent_event(
         output=output,
         mark_text_separator=trace_state,
     )
-    render_context_usage(event_model_telemetry(persisted), output=output)
     handoff = result_payload.get("handoff")
     if not isinstance(handoff, dict):
         return None
@@ -335,21 +332,6 @@ def model_telemetry_fields(
     if isinstance(context_tokens, int) and not isinstance(context_tokens, bool):
         fields["model_context_tokens"] = context_tokens
     return fields
-
-
-def event_model_telemetry(event: dict[str, Any]) -> dict[str, Any] | None:
-    model_telemetry = event.get("model_telemetry")
-    if isinstance(model_telemetry, dict):
-        return model_telemetry
-    return None
-
-
-def result_has_tool_context_usage(result: AgentTurnResult) -> bool:
-    return any(
-        str(event.get("type") or "") == "tool_result"
-        and event_model_telemetry(event) is not None
-        for event in result.events
-    )
 
 
 def edit_mode_for_glyph(glyph: str) -> EditMode:
