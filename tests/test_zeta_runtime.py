@@ -2244,7 +2244,7 @@ def test_sigil_zeta_step_keeps_trace_off_stdout(monkeypatch) -> None:
     result = CliRunner().invoke(sigil_cli, ["zeta-step", "summarize"])
 
     assert result.exit_code == 0
-    assert result.stdout == "summary\n"
+    assert result.stdout == "\nsummary\n\n"
     assert "❯ read" in result.stderr
     assert "❯ read" not in result.stdout
 
@@ -2293,7 +2293,7 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
 
     assert code == 0
     output = capsys.readouterr()
-    assert output.out == "The answer.\n"
+    assert output.out == "\nThe answer.\n\n"
     assert "❯ read" in output.err
     assert captured["context"] == "ctx"
 
@@ -2322,7 +2322,7 @@ def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
     assert code == 0
     assert cast(list[dict[str, Any]], captured["transcript"]) == []
     assert zeta.transcript_tail()[-1]["type"] == "user_message"
-    assert capsys.readouterr().out == "\ndone\n"
+    assert capsys.readouterr().out == "\ndone\n\n"
 
 
 def test_zeta_agent_step_double_comma_uses_handoff_mode(
@@ -2470,7 +2470,7 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
         code = zeta_runner.run_agent_step("inspect", glyph=glyph)
 
         assert code == 0
-        assert capsys.readouterr().out == "It is a README.\n"
+        assert capsys.readouterr().out == "\nIt is a README.\n\n"
 
 
 def test_zeta_agent_step_streams_text_before_tool_trace(
@@ -2507,7 +2507,7 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
 
     assert code == 0
     output = capsys.readouterr()
-    assert output.out.startswith("I'll inspect README.\n")
+    assert output.out.startswith("\nI'll inspect README.\n\n")
     assert "\nIt is a README.\n" in output.out
     assert "❯ read   README.md" in output.err
 
@@ -2565,7 +2565,72 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
     assert code == 0
     output = capsys.readouterr().out
     assert output == (
-        "I'll inspect README.\n❯ read   README.md  (1 lines)\n\nIt is a README.\n"
+        "\nI'll inspect README.\n\n❯ read   README.md  (1 lines)\n\nIt is a README.\n\n"
+    )
+
+
+def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
+    monkeypatch,
+    capsys,
+) -> None:
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        events = [
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "tool_call_id": "call-1",
+                "name": "read",
+                "input": {"path": "a.md"},
+            },
+            {
+                "type": "tool_result",
+                "tool_call_id": "call-1",
+                "name": "read",
+                "result": {
+                    "ok": True,
+                    "content": [{"type": "text", "text": "A\n"}],
+                },
+            },
+            {
+                "type": "tool_call",
+                "id": "call-2",
+                "tool_call_id": "call-2",
+                "name": "read",
+                "input": {"path": "b.md"},
+            },
+            {
+                "type": "tool_result",
+                "tool_call_id": "call-2",
+                "name": "read",
+                "result": {
+                    "ok": True,
+                    "content": [{"type": "text", "text": "B\n"}],
+                },
+            },
+        ]
+        for event in events:
+            event_sink(event)
+        return zeta_agent.AgentTurnResult(final_text="Done.", events=events)
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.run_agent_step(
+        "inspect",
+        glyph=",,",
+        trace_output=sys.stdout,
+    )
+
+    assert code == 0
+    assert capsys.readouterr().out == (
+        "❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)\n\nDone.\n\n"
     )
 
 
@@ -2605,7 +2670,7 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
 
     assert code == 0
     output = capsys.readouterr()
-    assert output.out == "edited and verified\n"
+    assert output.out == "\nedited and verified\n\n"
     assert "❯ edit   a.txt  (applied · a.txt)" in output.err
 
 
@@ -2951,7 +3016,7 @@ url = "http://127.0.0.1:8082/v1/chat/completions"
     code = zeta_runner.run_agent_step("do work", glyph=",,")
 
     assert code == 0
-    assert capsys.readouterr().out == "\ndone\n"
+    assert capsys.readouterr().out == "\ndone\n\n"
     assert captured["server"] == {
         "selected_url": "http://127.0.0.1:8082/v1/chat/completions",
         "selected_model": "coder-model",
@@ -3358,7 +3423,8 @@ def test_zeta_answer_route_streams_final_text_without_duplicate(
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
         stream_sink = required_stream_sink(kwargs)
-        assert isinstance(stream_sink, sigil_display.TerminalStreamRenderer)
+        assert isinstance(stream_sink, sigil_display.TraceAwareStreamRenderer)
+        assert isinstance(stream_sink.renderer, sigil_display.TerminalStreamRenderer)
         stream_sink.content_delta("streamed answer")
         return zeta_agent.AgentTurnResult(
             final_text="streamed answer",
@@ -3372,7 +3438,7 @@ def test_zeta_answer_route_streams_final_text_without_duplicate(
     code = answers_runner.run_tool_answer("question system", "Question?")
 
     assert code == 0
-    assert capsys.readouterr().out == "streamed answer\n"
+    assert capsys.readouterr().out == "\nstreamed answer\n\n"
 
 
 def test_zeta_answer_route_streams_markdown_with_rich_for_tty(
@@ -3388,7 +3454,8 @@ def test_zeta_answer_route_streams_markdown_with_rich_for_tty(
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
         stream_sink = required_stream_sink(kwargs)
-        assert isinstance(stream_sink, sigil_display.RichStreamRenderer)
+        assert isinstance(stream_sink, sigil_display.TraceAwareStreamRenderer)
+        assert isinstance(stream_sink.renderer, sigil_display.RichStreamRenderer)
         stream_sink.content_delta("**streamed** answer")
         return zeta_agent.AgentTurnResult(
             final_text="streamed answer",
@@ -3459,7 +3526,7 @@ def test_zeta_answer_route_streams_text_before_tool_trace(
     assert code == 0
     output = capsys.readouterr().out
     assert output == (
-        "I'll inspect README.\n❯ read   README.md  (1 lines)\n\nIt is a README.\n"
+        "\nI'll inspect README.\n\n❯ read   README.md  (1 lines)\n\nIt is a README.\n\n"
     )
     assert '{"path"' not in output
 
