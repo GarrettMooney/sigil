@@ -11,7 +11,6 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable, Literal, TextIO
 
-from ..state import append_jsonl
 from ..display import (
     ContextUsageFooter,
     StreamRenderer,
@@ -66,6 +65,7 @@ def run_agent_step(
         stdin_text=stdin_text,
     )
     enabled_tools = enabled_tool_tuple(allowed_tools)
+    prior_transcript = runtime.transcript_tail()
     user_event: dict[str, Any] = {
         "type": "user_message",
         "content": prompt,
@@ -76,8 +76,7 @@ def run_agent_step(
     }
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
-    prior_transcript = runtime.transcript_tail()
-    append_jsonl(runtime.TRANSCRIPT, user_event)
+    runtime.append_transcript(user_event)
     context = runtime.load_project_context()
     trace_state = TraceRenderState()
     context_footer = ContextUsageFooter(output)
@@ -344,7 +343,7 @@ def print_handoff(
 
 
 def append_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
-    return append_jsonl(runtime.TRANSCRIPT, {"type": event_type, **fields})
+    return runtime.append_transcript({"type": event_type, **fields})
 
 
 def record_agent_model_telemetry(

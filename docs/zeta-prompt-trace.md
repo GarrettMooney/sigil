@@ -32,9 +32,9 @@ derivation: SigilPromptBuilder:v1
 derivation: SigilModelResponse:v1
 ```
 
-This graph is the central abstraction. The JSONL transcript remains useful as
-the compatibility and session-continuity layer, but prompt trace is the layer
-that explains how a model request was actually assembled.
+This graph is the central abstraction. Zeta session continuity now points into
+the trace store with refs such as `run/<id>/head`; the user-visible transcript
+is a projection from trace objects, not the primary artifact.
 
 ## Objects And Derivations
 
@@ -65,6 +65,12 @@ Examples:
 - `prompt/current`
 - `prompt/current/system_prompt`
 - `prompt/current/user_objective`
+- `run/<id>/head`
+
+The run head names the latest meaningful trace leaf for a run. In a completed
+model turn this is usually an `assistant_message`. During an interrupted shell
+handoff it may temporarily be a `tool_result`, because that is the leaf the
+next prompt must continue from.
 
 **Derivations** record how an object was produced. They contain the producer
 name, input ids, resolved refs, and parameters.
@@ -230,9 +236,9 @@ of all of that.
 
 There are two useful meanings of replay.
 
-**Prompt replay** is deterministic. Given the transcript, components, refs, and
-builder settings, we can rebuild the prompt payload. Given a prompt object id,
-we can inspect the exact payload that was actually sent.
+**Prompt replay** is deterministic. Given a run head, prompt components, refs,
+and builder settings, we can rebuild the prompt payload. Given a prompt object
+id, we can inspect the exact payload that was actually sent.
 
 **Model replay** means sending a payload to a model again. That is useful, but
 not guaranteed to reproduce the same assistant output unless the model,
@@ -248,8 +254,8 @@ Or did it fail despite a good prompt?
 
 Prompt trace lets us answer the first question directly.
 
-It also enables alternate replay. For example, we can rebuild the same session
-with a different prompt transform policy and ask:
+It also enables alternate replay. For example, we can start from the same run
+head with a different prompt transform policy and ask:
 
 ```text
 What prompt would this run have produced with no context transform?
@@ -369,9 +375,10 @@ Prompt trace does not make model execution deterministic. It records the exact
 payload and the observed output. Replaying the model can still differ if the
 model, backend, sampling, or external state differs.
 
-Prompt trace also does not replace the transcript. The transcript remains the
-compatibility layer for session continuity and user-visible events. The trace
-is the provenance layer for model prompts and derived artifacts.
+Prompt trace also does not mean the user sees the raw graph. The transcript is
+still useful as a display and compatibility format, but for Zeta it is now a
+projection over trace objects. The canonical continuity pointer is the run head,
+and the canonical model input is the prompt object payload.
 
 Finally, the system still needs better user-facing tools. The graph exists, but
 the practical workflow should eventually include commands such as:

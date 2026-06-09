@@ -700,7 +700,12 @@ def test_zeta_render_stub_contract() -> None:
     )
 
 
-def test_zeta_prompt_components_prefix_order() -> None:
+def test_zeta_prompt_components_prefix_order(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
     components = zeta.prompt_components(
         "inspect",
         [{"role": "user", "content": "prior"}],
@@ -3822,6 +3827,43 @@ def test_zeta_transcript_append_and_tail(tmp_path: Path, monkeypatch) -> None:
     data = json.loads(tail.output)
     assert data["events"][0]["type"] == "tool_call"
     assert data["events"][0]["name"] == "read"
+    assert not (tmp_path / "sessions" / "zeta-test" / zeta.TRANSCRIPT).exists()
+    assert zeta.list_trace_refs()[zeta.current_run_head_ref("zeta-test")]
+
+
+def test_zeta_transcript_projects_from_ref_and_object(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+
+    zeta.append_transcript({"type": "user_message", "content": "first"})
+    store = zeta_trace.default_store()
+    first_head = store.get_ref(zeta.current_run_head_ref("zeta-test"))
+    assert first_head is not None
+    store.set_ref("run/custom/head", first_head)
+
+    zeta.append_transcript({"type": "assistant_message", "content": "second"})
+
+    assert [
+        event["content"] for event in zeta.transcript_from_ref("run/custom/head")
+    ] == ["first"]
+    assert [
+        event["content"]
+        for event in zeta.transcript_from_ref(zeta.current_run_head_ref("zeta-test"))
+    ] == ["first", "second"]
+    assert [
+        event["content"]
+        for event in zeta.transcript_from_object(first_head, store=store)
+    ] == ["first"]
+    assert zeta.transcript_from_ref("run/missing/head") == []
+    assert (
+        zeta.transcript_from_ref(zeta.current_run_head_ref("zeta-test"), limit=1)[0][
+            "content"
+        ]
+        == "second"
+    )
 
 
 def test_zeta_transcript_does_not_expose_shell_handoff_verbs() -> None:
