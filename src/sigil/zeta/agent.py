@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-import itertools
 import json
 from dataclasses import dataclass, field
 from types import TracebackType
@@ -29,6 +28,8 @@ EditMode = Literal["review_patch", "direct_replace"]
 ExecutionMode = Literal["handoff", "direct"]
 AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], ContextManager[object]]
+
+DEFAULT_MAX_TURNS = 25
 
 
 @dataclass(frozen=True)
@@ -165,7 +166,7 @@ def agent_allowed_tools(config: AgentConfig) -> tuple[str, ...]:
 
 def turn_indices(max_turns: int | None) -> Iterable[int]:
     if max_turns is None:
-        return itertools.count()
+        max_turns = DEFAULT_MAX_TURNS
     return range(max(max_turns, 0))
 
 

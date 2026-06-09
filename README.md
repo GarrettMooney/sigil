@@ -84,8 +84,8 @@ Useful environment variables:
 ZETA_MODEL_URL=http://127.0.0.1:8080/v1/chat/completions
 ZETA_MODEL_NAME=local-model
 ZETA_MODEL_PATH=/path/to/model.gguf
-# Optional client-side stream idle timeout in seconds; unset or <=0 disables it.
-ZETA_MODEL_IDLE_TIMEOUT_SECONDS=0
+# Client-side stream idle timeout in seconds (default 120); <=0 disables it.
+ZETA_MODEL_IDLE_TIMEOUT_SECONDS=120
 SIGIL_STATE_DIR=$HOME/.sigil
 SIGIL_RUN_CAPTURE_BYTES=6000
 ```
@@ -178,8 +178,8 @@ uv run pytest tests/test_shell_bindings.py
 ```
 
 Sigil keeps session state under `~/.sigil/` so Zeta can resume from recent
-answer turns, handoff transcripts, and command results recorded through `+` or a
-Zeta handoff capture window.
+answer turns, handoff timeline events, and command results recorded through `+`
+or a Zeta handoff capture window.
 
 ## Glyph Reference
 
@@ -209,8 +209,8 @@ history.
 `,,` proposes the next reviewed step. The loop may call local
 tools such as `read`, `ls`, `grep`, `bash`, `edit`, and `write` until the model
 returns a final answer. Tool calls are shown as muted trace lines, and tool
-results are summarized compactly. The full JSON result stays in the Zeta
-transcript for the model.
+results are summarized compactly. The full JSON result stays in the Zeta run
+timeline for the model.
 
 `,,,` does the same tool loop without the confirmation step.
 
@@ -320,7 +320,7 @@ Sigil is not:
 execution proves itself. The shell hooks are intentionally lightweight: they can
 record command metadata, but they should not invisibly interpose on every
 program's terminal output. A future shell frontend would own the prompt and
-transcript boundary, delegate command semantics to the user's real shell, and
+timeline boundary, delegate command semantics to the user's real shell, and
 decide deliberately when a command runs as structured captured output versus an
 interactive terminal session.
 

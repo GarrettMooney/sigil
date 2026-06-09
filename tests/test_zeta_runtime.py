@@ -1127,7 +1127,10 @@ def test_zeta_model_config_uses_zeta_env(monkeypatch) -> None:
 
     assert zeta_model.model_url() == zeta_model.DEFAULT_MODEL_URL
     assert zeta_model.model_name() == zeta_model.DEFAULT_MODEL_NAME
-    assert zeta_model.model_idle_timeout() is None
+    assert (
+        zeta_model.model_idle_timeout() == zeta_model.DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS
+    )
+    assert zeta_model.DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS == 120.0
 
     monkeypatch.setenv("ZETA_MODEL_URL", "http://zeta.invalid/v1/chat/completions")
     monkeypatch.setenv("ZETA_MODEL_NAME", "zeta-model")
@@ -1183,7 +1186,7 @@ def test_zeta_request_chat_completion_streams_final_message(monkeypatch) -> None
     assert body == {"model": "local-model", "messages": []}
     assert captured["body"]["stream"] is True
     assert captured["accept"] == "text/event-stream"
-    assert captured["timeout"] is None
+    assert captured["timeout"] == zeta_model.DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS
     assert response.closed is True
     assert payload["id"] == "chatcmpl-test"
     assert payload["choices"][0]["message"] == {
@@ -2710,6 +2713,41 @@ def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
         event for event in result.events if event.get("type") == "tool_result"
     )
     assert "direct-bash" in tool_result["result"]["content"][0]["text"]
+
+
+def test_zeta_agent_turn_stops_after_default_max_turns(monkeypatch) -> None:
+    requests = 0
+
+    def fake_chat_completion_messages(*args: object, **kwargs: object) -> dict:
+        del args, kwargs
+        nonlocal requests
+        requests += 1
+        return {
+            "tool_calls": [
+                {
+                    "id": f"call-{requests}",
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": '{"path":"."}'},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+    monkeypatch.setattr(
+        zeta_agent, "run_tool", lambda name, params, **kwargs: {"ok": True}
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "test",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("ls",)),
+    )
+
+    assert requests == zeta_agent.DEFAULT_MAX_TURNS
+    assert result.final_text == ""
 
 
 def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> None:

@@ -19,7 +19,7 @@ from ..tty import LOVE, MUTED, RESET
 
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
 DEFAULT_MODEL_NAME = "local-model"
-DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS = None
+DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS = 120.0
 MODEL_METADATA_TIMEOUT_SECONDS = 0.5
 
 USAGE_TOKEN_FIELDS = ("prompt_tokens", "completion_tokens", "total_tokens")
