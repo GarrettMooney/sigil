@@ -40,6 +40,7 @@ from sigil.zeta import models as zeta_models
 from sigil.zeta import trace as zeta_trace
 from sigil.zeta.tools import bash as bash_tool
 from sigil.zeta.tools import grep as grep_tool
+from sigil.zeta.tools import read as read_tool
 from sigil.zeta.tools import validate_tool_args
 
 
@@ -3340,6 +3341,28 @@ def test_zeta_tool_read_limit_past_end_returns_remaining_lines(tmp_path: Path) -
     data = zeta_tools.run_tool("read", {"path": str(target), "offset": 1, "limit": 10})
 
     assert data["content"][0]["text"] == "beta\n"
+
+
+def test_zeta_tool_read_rejects_binary_file(tmp_path: Path) -> None:
+    target = tmp_path / "image.png"
+    target.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+
+    data = zeta_tools.run_tool("read", {"path": str(target)})
+
+    assert data["ok"] is False
+    assert data["error"]["code"] == "binary-file"
+
+
+def test_zeta_tool_read_caps_returned_characters(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(read_tool, "MAX_READ_CHARS", 100)
+    target = tmp_path / "wide.txt"
+    target.write_text("x" * 1_000 + "\n", encoding="utf-8")
+
+    data = zeta_tools.run_tool("read", {"path": str(target)})
+
+    assert data["ok"] is True
+    assert len(data["content"][0]["text"]) == 100
+    assert data["metadata"]["truncated"] is True
 
 
 def test_zeta_tool_grep_reports_total_limited_metadata(tmp_path: Path) -> None:

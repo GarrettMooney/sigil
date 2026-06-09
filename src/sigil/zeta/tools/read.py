@@ -8,6 +8,8 @@ from typing import Any
 from .base import ToolSpec, analysis, effect, error_result, missing
 
 DEFAULT_READ_LIMIT = 2_000
+MAX_READ_CHARS = 50_000
+BINARY_SNIFF_BYTES = 8_192
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -43,13 +45,27 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     offset = int(params.get("offset") or 0)
     limit = int(params.get("limit") or DEFAULT_READ_LIMIT)
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        raw = path.read_bytes()
     except OSError as exc:
         return error_result("read-failed", str(exc))
+    if b"\x00" in raw[:BINARY_SNIFF_BYTES]:
+        return error_result(
+            "binary-file",
+            "file looks binary; read supports UTF-8 text only",
+        )
+    text = raw.decode("utf-8", errors="replace")
     lines = text.splitlines(keepends=True)
     content = "".join(lines[offset : offset + limit])
+    truncated = len(content) > MAX_READ_CHARS
+    if truncated:
+        content = content[:MAX_READ_CHARS]
     return {
         "ok": True,
         "content": [{"type": "text", "text": content}],
-        "metadata": {"path": str(path), "offset": offset, "limit": limit},
+        "metadata": {
+            "path": str(path),
+            "offset": offset,
+            "limit": limit,
+            "truncated": truncated,
+        },
     }
