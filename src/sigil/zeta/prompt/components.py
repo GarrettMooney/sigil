@@ -1,0 +1,260 @@
+"""Prompt component construction for Zeta."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from typing import Any, Iterable
+
+from ..skills import Skill, available_skills, expand_skill_directive
+from ..tools import allowed_tool_names
+from ..trace import Object, ObjectId, Store
+from ..transcript import TranscriptChatMessage, transcript_chat_message_entries
+from .system import system_prompt
+
+
+@dataclass(frozen=True)
+class PromptComponent:
+    """A first-class prompt component that can become a trace object."""
+
+    kind: str
+    data: dict[str, Any] = field(default_factory=dict)
+    message: dict[str, Any] | None = None
+    links: tuple[ObjectId, ...] = ()
+    object_id: ObjectId | None = None
+    ref_name: str | None = None
+
+
+def can_read_skill_files(enabled_tools: Iterable[str]) -> bool:
+    """Return whether enabled tools let the model inspect skill files."""
+    return "read" in tuple(enabled_tools)
+
+
+def zeta_context_message(
+    objective: str,
+    *,
+    context: str = "",
+) -> str:
+    objective = expand_skill_directive(objective)
+    sections = [
+        f"Objective:\n{objective}",
+        f"cwd:\n{os.getcwd()}",
+    ]
+    if context.strip():
+        sections.append(context.strip())
+    return "\n\n".join(sections)
+
+
+def prompt_components(
+    objective: str,
+    transcript: list[dict[str, Any]],
+    *,
+    system: str | None = None,
+    allowed_tools: Iterable[str] | None = None,
+    context: str = "",
+    current_events: Iterable[dict[str, Any]] = (),
+    tools: list[dict[str, Any]] | None = None,
+    include_non_message_components: bool = True,
+) -> list[PromptComponent]:
+    """Return the prompt components in model-message order."""
+    enabled_tools = tuple(allowed_tool_names(allowed_tools))
+    skills = available_skills() if can_read_skill_files(enabled_tools) else []
+    system_content = system_prompt(system, allowed_tools=enabled_tools, skills=skills)
+    components = [
+        PromptComponent(
+            kind="system_prompt",
+            data={
+                "content": system_content,
+                "route_prompt": system,
+                "allowed_tools": list(enabled_tools),
+            },
+            message={"role": "system", "content": system_content},
+            ref_name="prompt/current/system_prompt",
+        )
+    ]
+    if include_non_message_components:
+        components.extend(
+            non_message_components(
+                objective,
+                context=context,
+                tools=tools,
+                enabled_tools=enabled_tools,
+                skills=skills,
+            )
+        )
+    components.extend(
+        transcript_message_components(
+            transcript,
+            default_kind="transcript_message",
+        )
+    )
+    objective_message = zeta_context_message(objective, context=context)
+    components.append(
+        PromptComponent(
+            kind="user_objective",
+            data={
+                "objective": objective,
+                "expanded_objective": expand_skill_directive(objective),
+                "context": context,
+                "message": {"role": "user", "content": objective_message},
+            },
+            message={"role": "user", "content": objective_message},
+            ref_name="prompt/current/user_objective",
+        )
+    )
+    components.extend(
+        transcript_message_components(
+            list(current_events),
+            default_kind=None,
+        )
+    )
+    return components
+
+
+def transcript_message_components(
+    events: list[dict[str, Any]],
+    *,
+    default_kind: str | None,
+) -> list[PromptComponent]:
+    components = []
+    for message_index, entry in enumerate(transcript_chat_message_entries(events)):
+        kind = default_kind or current_event_component_kind(entry.message)
+        components.append(
+            PromptComponent(
+                kind=kind,
+                data=transcript_message_component_data(message_index, entry),
+                message=entry.message,
+            )
+        )
+    return components
+
+
+def transcript_message_component_data(
+    message_index: int,
+    entry: TranscriptChatMessage,
+) -> dict[str, Any]:
+    data = {
+        "index": message_index,
+        "event_index": entry.event_index,
+        "message": entry.message,
+        "source_event_type": str(entry.event.get("type") or ""),
+        "source_event_role": str(entry.event.get("role") or ""),
+    }
+    source_event_value = structured_source_event(entry.event)
+    if source_event_value:
+        data["source_event"] = source_event_value
+    return data
+
+
+def structured_source_event(event: dict[str, Any]) -> dict[str, Any]:
+    event_type = str(event.get("type") or "")
+    if event_type == "tool_result":
+        data: dict[str, Any] = {
+            "type": "tool_result",
+            "tool_call_id": str(event.get("tool_call_id") or ""),
+        }
+        result = event.get("result")
+        if isinstance(result, dict):
+            data["result"] = result
+        return data
+    if event_type == "tool_call":
+        return {
+            "type": "tool_call",
+            "id": str(event.get("id") or ""),
+            "tool_call_id": str(event.get("tool_call_id") or ""),
+            "name": str(event.get("name") or ""),
+            "input": event.get("input") if isinstance(event.get("input"), dict) else {},
+        }
+    if event_type == "assistant_message" and isinstance(event.get("tool_calls"), list):
+        return {
+            "type": "assistant_message",
+            "tool_calls": event.get("tool_calls") or [],
+        }
+    return {}
+
+
+def non_message_components(
+    objective: str,
+    *,
+    context: str,
+    tools: list[dict[str, Any]] | None,
+    enabled_tools: tuple[str, ...],
+    skills: list[Skill],
+) -> list[PromptComponent]:
+    components: list[PromptComponent] = []
+    if skills:
+        components.append(
+            PromptComponent(
+                kind="skill_context",
+                data={
+                    "skills": [
+                        {
+                            "name": skill.name,
+                            "description": skill.description,
+                            "location": str(skill.location),
+                        }
+                        for skill in skills
+                    ]
+                },
+                ref_name="prompt/current/skill_context",
+            )
+        )
+    if context.strip():
+        components.append(
+            PromptComponent(
+                kind="project_context",
+                data={"objective": objective, "content": context.strip()},
+                ref_name="prompt/current/project_context",
+            )
+        )
+    if tools is not None:
+        components.append(
+            PromptComponent(
+                kind="tool_descriptor_set",
+                data={
+                    "allowed_tools": list(enabled_tools),
+                    "tools": tools,
+                },
+                ref_name="prompt/current/tool_descriptor_set",
+            )
+        )
+    return components
+
+
+def current_event_component_kind(message: dict[str, Any]) -> str:
+    if message.get("role") == "tool":
+        return "tool_result"
+    if message.get("role") == "assistant":
+        return "assistant_message"
+    return "transcript_message"
+
+
+def component_messages(components: list[PromptComponent]) -> list[dict[str, Any]]:
+    return [
+        component.message for component in components if component.message is not None
+    ]
+
+
+def prompt_component_object(component: PromptComponent) -> Object:
+    data = dict(component.data)
+    if component.message is not None and "message" not in data:
+        data["message"] = component.message
+    return Object(
+        kind=component.kind,
+        schema="zeta.prompt_component.v1",
+        data=data,
+        links=component.links,
+    )
+
+
+def update_component_refs(
+    store: Store,
+    components: list[PromptComponent],
+) -> dict[str, ObjectId]:
+    resolved_refs: dict[str, ObjectId] = {}
+    for component in components:
+        if component.ref_name is None or component.object_id is None:
+            continue
+        store.set_ref(component.ref_name, component.object_id)
+        resolved_refs[component.ref_name] = component.object_id
+    return resolved_refs

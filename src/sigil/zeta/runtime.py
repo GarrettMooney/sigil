@@ -3,17 +3,29 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Iterable, TextIO
 
 from . import tools as tool_registry
 from .context import load_project_context
-from .prompt import system_prompt
+from .prompt import (
+    NoOpPromptTransform,
+    PreparedPrompt,
+    PromptBuilder,
+    PromptComponent,
+    PromptTransform,
+    StructuralTrimPromptTransform,
+    can_read_skill_files,
+    component_messages,
+    prompt_components,
+    system_prompt,
+    zeta_context_message,
+)
 from .skills import (
     available_skills,
     discover_skills,
     expand_skill_directive,
 )
+from .trace import PromptTrace
 from .transcript import (
     DEFAULT_TAIL_LIMIT,
     TRANSCRIPT,
@@ -42,6 +54,13 @@ __all__ = [
     "expand_skill_directive",
     "load_project_context",
     "model_tool_descriptors",
+    "NoOpPromptTransform",
+    "PreparedPrompt",
+    "PromptBuilder",
+    "PromptComponent",
+    "PromptTransform",
+    "PromptTrace",
+    "StructuralTrimPromptTransform",
     "read_json_stdin",
     "record_tool_call_ids",
     "role_chat_message",
@@ -101,23 +120,8 @@ def zeta_system_prompt(
     allowed_tools: Iterable[str] | None = None,
 ) -> str:
     enabled_tools = allowed_tool_names(allowed_tools)
-    skills = available_skills() if "read" in enabled_tools else []
+    skills = available_skills() if can_read_skill_files(enabled_tools) else []
     return system_prompt(route_prompt, allowed_tools=enabled_tools, skills=skills)
-
-
-def zeta_context_message(
-    objective: str,
-    *,
-    context: str = "",
-) -> str:
-    objective = expand_skill_directive(objective)
-    sections = [
-        f"Objective:\n{objective}",
-        f"cwd:\n{os.getcwd()}",
-    ]
-    if context.strip():
-        sections.append(context.strip())
-    return "\n\n".join(sections)
 
 
 def zeta_chat_messages(
@@ -129,18 +133,17 @@ def zeta_chat_messages(
     context: str = "",
     current_events: Iterable[dict[str, Any]] = (),
 ) -> list[dict[str, Any]]:
-    messages = [
-        {
-            "role": "system",
-            "content": zeta_system_prompt(system, allowed_tools=allowed_tools),
-        }
-    ]
-    messages.extend(transcript_chat_messages(transcript))
-    messages.append(
-        {"role": "user", "content": zeta_context_message(objective, context=context)}
+    return component_messages(
+        prompt_components(
+            objective,
+            transcript,
+            system=system,
+            allowed_tools=allowed_tools,
+            context=context,
+            current_events=current_events,
+            include_non_message_components=False,
+        )
     )
-    messages.extend(transcript_chat_messages(list(current_events)))
-    return messages
 
 
 def read_json_stdin(stdin: TextIO) -> dict[str, Any]:

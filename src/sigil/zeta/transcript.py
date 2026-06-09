@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from ..protocols import is_shell_handoff_result, is_shell_prompt_handoff
@@ -10,6 +11,15 @@ from ..state import append_jsonl, read_jsonl
 
 TRANSCRIPT = "zeta-transcript.jsonl"
 DEFAULT_TAIL_LIMIT = 50
+
+
+@dataclass(frozen=True)
+class TranscriptChatMessage:
+    """A rendered chat message plus the transcript event that produced it."""
+
+    event_index: int
+    event: dict[str, Any]
+    message: dict[str, Any]
 
 
 def append_transcript(event: dict[str, Any]) -> dict[str, Any]:
@@ -25,18 +35,24 @@ def transcript_tail(limit: int = DEFAULT_TAIL_LIMIT) -> list[dict[str, Any]]:
 def transcript_chat_messages(
     transcript: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = []
+    return [entry.message for entry in transcript_chat_message_entries(transcript)]
+
+
+def transcript_chat_message_entries(
+    transcript: list[dict[str, Any]],
+) -> list[TranscriptChatMessage]:
+    entries: list[TranscriptChatMessage] = []
     tool_call_ids: set[str] = set()
     resolved_shell_handoffs = resolved_shell_handoff_call_ids(transcript)
     for index, event in enumerate(transcript):
         message = role_chat_message(event)
         if message is not None:
-            messages.append(message)
+            entries.append(chat_message_entry(index, event, message))
             continue
         event_type = str(event.get("type") or "")
         message = event_chat_message(event_type, event)
         if message is not None:
-            messages.append(message)
+            entries.append(chat_message_entry(index, event, message))
             record_tool_call_ids(message, tool_call_ids)
             continue
         if event_type == "tool_call":
@@ -44,14 +60,32 @@ def transcript_chat_messages(
             if tool_call_id and tool_call_id in tool_call_ids:
                 continue
             message = tool_call_message(event, fallback_id=f"call-{index}")
-            messages.append(message)
+            entries.append(chat_message_entry(index, event, message))
             record_tool_call_ids(message, tool_call_ids)
             continue
         if event_type == "tool_result":
             if is_resolved_shell_prompt_handoff(event, resolved_shell_handoffs):
                 continue
-            messages.append(tool_result_message(event, tool_call_ids))
-    return messages
+            entries.append(
+                chat_message_entry(
+                    index,
+                    event,
+                    tool_result_message(event, tool_call_ids),
+                )
+            )
+    return entries
+
+
+def chat_message_entry(
+    event_index: int,
+    event: dict[str, Any],
+    message: dict[str, Any],
+) -> TranscriptChatMessage:
+    return TranscriptChatMessage(
+        event_index=event_index,
+        event=event,
+        message=message,
+    )
 
 
 def resolved_shell_handoff_call_ids(transcript: list[dict[str, Any]]) -> set[str]:

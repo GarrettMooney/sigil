@@ -36,6 +36,7 @@ from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
 from ..zeta.model import ChatCompletionStreamSink, chat_text
 from ..zeta.models import ModelSelection, active_model_selection, model_selection_event
 from ..zeta.server import ensure_server
+from ..zeta.trace import latest_prompt_trace_fields
 
 
 ANSWER_ROUTE = "answer"
@@ -264,6 +265,7 @@ def run_tool_answer(
         )
     )
     answer = result.final_text
+    answer_prompt_traces = result.prompt_traces
     answer_streamed = result.final_text_streamed
     model_telemetry = dict(result.model_telemetry)
     if not answer:
@@ -279,6 +281,7 @@ def run_tool_answer(
         )
         if fallback_telemetry:
             model_telemetry = fallback_telemetry
+        answer_prompt_traces = []
     record_answer(
         input_text=input_text,
         prompt=prompt,
@@ -288,6 +291,7 @@ def run_tool_answer(
         json_output=json_output,
         model=model_selection_event(selected_model) if selected_model else None,
         model_telemetry=model_telemetry,
+        prompt_traces=answer_prompt_traces,
         answer_streamed=answer_streamed,
         stream_renderer=stream_renderer,
         trace_state=trace_state,
@@ -599,12 +603,14 @@ def record_answer(
     json_output: bool,
     model: dict[str, str] | None,
     model_telemetry: dict[str, Any] | None = None,
+    prompt_traces: list[Any] | tuple[Any, ...] = (),
     answer_streamed: bool = False,
     stream_renderer: StreamRenderer | None = None,
     trace_state: TraceRenderState | None = None,
     context_footer: ContextUsageFooter | None = None,
 ) -> None:
     telemetry_fields = model_telemetry_fields(model_telemetry)
+    trace_fields = latest_prompt_trace_fields(prompt_traces)
     answer_event: dict[str, Any] = {
         "type": "answer",
         "input": input_text,
@@ -612,6 +618,7 @@ def record_answer(
         "answer": answer,
         "runtime": "zeta",
         **telemetry_fields,
+        **trace_fields,
     }
     assistant_turn: dict[str, Any] = {
         "role": "assistant",
@@ -621,6 +628,7 @@ def record_answer(
         "follow_up": follow_up,
         "runtime": "zeta",
         **telemetry_fields,
+        **trace_fields,
     }
     if model is not None:
         answer_event["model"] = model
@@ -638,6 +646,7 @@ def record_answer(
                     "tools": tools,
                     "malformed_events": 0,
                     **telemetry_fields,
+                    **trace_fields,
                     **({"model": model} if model is not None else {}),
                 },
                 ensure_ascii=False,

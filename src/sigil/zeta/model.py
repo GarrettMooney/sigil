@@ -523,17 +523,13 @@ def chat_completion_messages(
 ) -> dict[str, Any]:
     """Request one native OpenAI-compatible chat completion message."""
     context_tokens = model_context_tokens(selected_url, selected_model)
-    body: dict[str, Any] = {
-        "model": model_name(selected_model),
-        "messages": messages,
-        "temperature": 0.2,
-        "max_tokens": max_tokens,
-        "stream_options": {"include_usage": True},
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
-    if tools:
-        body["tools"] = tools
-        body["tool_choice"] = tool_choice
+    body = chat_completion_request_body(
+        messages,
+        tools=tools,
+        tool_choice=tool_choice,
+        max_tokens=max_tokens,
+        selected_model=selected_model,
+    )
     request_kwargs: dict[str, Any] = {}
     if selected_url is not None:
         request_kwargs["selected_url"] = selected_url
@@ -549,6 +545,29 @@ def chat_completion_messages(
     if not isinstance(message, dict):
         raise RuntimeError("model request failed: assistant message was invalid")
     return message
+
+
+def chat_completion_request_body(
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] = "auto",
+    max_tokens: int = 1200,
+    selected_model: str | None = None,
+) -> dict[str, Any]:
+    """Build the OpenAI-compatible chat completions request body."""
+    body: dict[str, Any] = {
+        "model": model_name(selected_model),
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
+        "stream_options": {"include_usage": True},
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = tool_choice
+    return body
 
 
 def chat_text(

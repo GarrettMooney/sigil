@@ -16,6 +16,7 @@ from .model import (
     chat_completion_messages,
     model_endpoint_open,
 )
+from .trace import PromptTrace, prompt_trace_payload
 from .tools import (
     allowed_tool_names,
     analyze_tool,
@@ -54,6 +55,7 @@ class AgentTurnResult:
     handoff: dict[str, Any] | None = None
     final_text_streamed: bool = False
     model_telemetry: dict[str, Any] = field(default_factory=dict)
+    prompt_traces: list[PromptTrace] = field(default_factory=list)
 
 
 def run_agent_turn(
@@ -65,38 +67,45 @@ def run_agent_turn(
     event_sink: AgentEventSink | None = None,
     model_status: ModelStatusFactory | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
+    prompt_builder: runtime.PromptBuilder | None = None,
 ) -> AgentTurnResult:
     """Run an assistant/tool loop without mutating session state."""
-    if config.model_url is None:
-        endpoint_open = model_endpoint_open()
-    else:
-        endpoint_open = model_endpoint_open(config.model_url)
-    if not endpoint_open:
+    if not agent_model_endpoint_open(config):
         raise RuntimeError("model endpoint is not reachable")
-    if config.allowed_tools is None:
-        allowed_tools = tuple(allowed_tool_names())
-    else:
-        allowed_tools = tuple(config.allowed_tools)
+    allowed_tools = agent_allowed_tools(config)
     events: list[dict[str, Any]] = []
     latest_model_telemetry: dict[str, Any] = {}
+    prompt_traces: list[PromptTrace] = []
+    builder = prompt_builder or runtime.PromptBuilder()
+    tools = model_tool_descriptors(allowed_tools)
     for _ in turn_indices(config.max_turns):
-        assistant, streamed_content, model_telemetry = request_assistant_message(
-            runtime.zeta_chat_messages(
-                objective,
-                transcript,
-                system=config.system_prompt,
-                allowed_tools=allowed_tools,
-                context=context,
-                current_events=events,
-            ),
+        prepared_prompt = builder.build(
+            objective,
+            transcript,
+            system=config.system_prompt,
             allowed_tools=allowed_tools,
+            context=context,
+            current_events=events,
+            tools=tools,
+            tool_choice="auto",
+            selected_model=config.model_name,
+        )
+        assistant, streamed_content, model_telemetry = request_assistant_message(
+            prepared_prompt.messages,
+            tools=prepared_prompt.tools,
+            tool_choice=prepared_prompt.tool_choice,
             config=config,
             model_status=model_status,
             stream_sink=stream_sink,
         )
+        prompt_trace = builder.record_assistant_message(prepared_prompt, assistant)
+        if prompt_trace is not None:
+            prompt_traces.append(prompt_trace)
         if model_telemetry:
             latest_model_telemetry = model_telemetry
         message_event = assistant_message_event(assistant)
+        if prompt_trace is not None:
+            attach_prompt_trace(message_event, prompt_trace)
         if message_event:
             emit_event(events, message_event, event_sink)
         tool_calls = assistant_tool_calls(assistant)
@@ -106,6 +115,7 @@ def run_agent_turn(
                 events=events,
                 final_text_streamed=streamed_content,
                 model_telemetry=latest_model_telemetry,
+                prompt_traces=prompt_traces,
             )
         for index, tool_call in enumerate(tool_calls):
             result_event = handle_tool_call(
@@ -115,6 +125,7 @@ def run_agent_turn(
                 edit_mode=config.edit_mode,
                 execution_mode=config.execution_mode,
                 model_telemetry=(model_telemetry if index == 0 else None),
+                prompt_trace=(prompt_trace if index == 0 else None),
                 event_sink=event_sink,
             )
             events.extend(result_event.events)
@@ -124,13 +135,31 @@ def run_agent_turn(
                     events=events,
                     handoff=result_event.handoff,
                     model_telemetry=latest_model_telemetry,
+                    prompt_traces=prompt_traces,
                 )
             if result_event.stop:
                 return AgentTurnResult(
                     events=events,
                     model_telemetry=latest_model_telemetry,
+                    prompt_traces=prompt_traces,
                 )
-    return AgentTurnResult(events=events, model_telemetry=latest_model_telemetry)
+    return AgentTurnResult(
+        events=events,
+        model_telemetry=latest_model_telemetry,
+        prompt_traces=prompt_traces,
+    )
+
+
+def agent_model_endpoint_open(config: AgentConfig) -> bool:
+    if config.model_url is None:
+        return model_endpoint_open()
+    return model_endpoint_open(config.model_url)
+
+
+def agent_allowed_tools(config: AgentConfig) -> tuple[str, ...]:
+    if config.allowed_tools is None:
+        return tuple(allowed_tool_names())
+    return tuple(config.allowed_tools)
 
 
 def turn_indices(max_turns: int | None) -> Iterable[int]:
@@ -142,7 +171,8 @@ def turn_indices(max_turns: int | None) -> Iterable[int]:
 def request_assistant_message(
     messages: list[dict[str, Any]],
     *,
-    allowed_tools: tuple[str, ...],
+    tools: list[dict[str, Any]],
+    tool_choice: str | dict[str, Any],
     config: AgentConfig,
     model_status: ModelStatusFactory | None,
     stream_sink: ChatCompletionStreamSink | None,
@@ -168,8 +198,8 @@ def request_assistant_message(
     try:
         assistant = chat_completion_messages(
             messages,
-            tools=model_tool_descriptors(allowed_tools),
-            tool_choice="auto",
+            tools=tools,
+            tool_choice=tool_choice,
             selected_model=config.model_name,
             selected_url=config.model_url,
             stream_sink=turn_stream_sink if stream_sink is not None else None,
@@ -249,6 +279,10 @@ def assistant_tool_calls(assistant: dict[str, Any]) -> list[dict[str, Any]]:
     return [call for call in raw_tool_calls if isinstance(call, dict)]
 
 
+def attach_prompt_trace(event: dict[str, Any], trace: PromptTrace) -> None:
+    event["prompt_trace"] = prompt_trace_payload(trace)
+
+
 def handle_tool_call(
     tool_call: dict[str, Any],
     *,
@@ -257,6 +291,7 @@ def handle_tool_call(
     edit_mode: EditMode = "review_patch",
     execution_mode: ExecutionMode = "handoff",
     model_telemetry: dict[str, Any] | None = None,
+    prompt_trace: PromptTrace | None = None,
     event_sink: AgentEventSink | None = None,
 ) -> ToolCallResult:
     call_id = str(tool_call.get("id") or f"call-{index}")
@@ -269,6 +304,7 @@ def handle_tool_call(
             "invalid-tool-call",
             "tool call did not include a function payload",
             model_telemetry=model_telemetry,
+            prompt_trace=prompt_trace,
             event_sink=event_sink,
         )
     name = str(function.get("name") or "")
@@ -291,6 +327,7 @@ def handle_tool_call(
             parse_error,
             call_event=call_event,
             model_telemetry=model_telemetry,
+            prompt_trace=prompt_trace,
             event_sink=event_sink,
         )
     if name not in allowed_tool_names():
@@ -302,6 +339,7 @@ def handle_tool_call(
             f"unknown tool: {name}",
             call_event=call_event,
             model_telemetry=model_telemetry,
+            prompt_trace=prompt_trace,
             event_sink=event_sink,
         )
     if name not in allowed_tools:
@@ -313,6 +351,7 @@ def handle_tool_call(
             f"tool is not allowed in this route: {name}",
             call_event=call_event,
             model_telemetry=model_telemetry,
+            prompt_trace=prompt_trace,
             event_sink=event_sink,
         )
     schema_errors = validate_tool_args(name, params)
@@ -325,6 +364,7 @@ def handle_tool_call(
             "; ".join(schema_errors),
             call_event=call_event,
             model_telemetry=model_telemetry,
+            prompt_trace=prompt_trace,
             event_sink=event_sink,
         )
     analysis = analyze_tool(name, params)
@@ -346,6 +386,7 @@ def handle_tool_call(
                 name,
                 result,
                 model_telemetry=model_telemetry,
+                prompt_trace=prompt_trace,
             ),
             event_sink,
         )
@@ -370,6 +411,7 @@ def handle_tool_call(
             name,
             result,
             model_telemetry=model_telemetry,
+            prompt_trace=prompt_trace,
         ),
         event_sink,
     )
@@ -422,6 +464,7 @@ def invalid_tool_result(
     *,
     call_event: dict[str, Any] | None = None,
     model_telemetry: dict[str, Any] | None = None,
+    prompt_trace: PromptTrace | None = None,
     event_sink: AgentEventSink | None = None,
 ) -> ToolCallResult:
     event = call_event or {
@@ -440,6 +483,7 @@ def invalid_tool_result(
             name,
             tool_error(code, message),
             model_telemetry=model_telemetry,
+            prompt_trace=prompt_trace,
         ),
         event_sink,
     )
@@ -452,6 +496,7 @@ def tool_result_event(
     result: dict[str, Any],
     *,
     model_telemetry: dict[str, Any] | None = None,
+    prompt_trace: PromptTrace | None = None,
 ) -> dict[str, Any]:
     event = {
         "type": "tool_result",
@@ -461,6 +506,8 @@ def tool_result_event(
     }
     if model_telemetry:
         event["model_telemetry"] = dict(model_telemetry)
+    if prompt_trace is not None:
+        attach_prompt_trace(event, prompt_trace)
     return event
 
 

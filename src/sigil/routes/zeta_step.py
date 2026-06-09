@@ -27,6 +27,7 @@ from ..zeta import runtime
 from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
 from ..zeta.models import active_model_selection, model_selection_event
 from ..zeta.server import ensure_server
+from ..zeta.trace import latest_prompt_trace_fields
 
 HandoffOutput = Literal["detail", "summary", "none"]
 EditMode = Literal["review_patch", "direct_replace"]
@@ -139,11 +140,19 @@ def run_agent_step(
     if status is None:
         status = recorder.status
     if status is not None:
-        record_agent_model_telemetry(result.model_telemetry, glyph=glyph)
+        record_agent_model_telemetry(
+            result.model_telemetry,
+            glyph=glyph,
+            prompt_traces=result.prompt_traces,
+        )
         context_footer.finalize(result.model_telemetry)
         return status
     if result.final_text:
-        record_agent_model_telemetry(result.model_telemetry, glyph=glyph)
+        record_agent_model_telemetry(
+            result.model_telemetry,
+            glyph=glyph,
+            prompt_traces=result.prompt_traces,
+        )
         context_footer.clear()
         record_agent_final(
             result.final_text,
@@ -342,10 +351,13 @@ def record_agent_model_telemetry(
     model_telemetry: dict[str, Any] | None,
     *,
     glyph: str,
+    prompt_traces: list[Any] | tuple[Any, ...] = (),
 ) -> None:
     fields = model_telemetry_fields(model_telemetry)
-    if fields:
-        append_zeta_event("model_usage", **fields, glyph=glyph)
+    if not fields:
+        return
+    fields.update(latest_prompt_trace_fields(prompt_traces))
+    append_zeta_event("model_usage", **fields, glyph=glyph)
 
 
 def model_telemetry_fields(

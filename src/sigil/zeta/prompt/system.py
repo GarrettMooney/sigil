@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from ..protocols import SHELL_HANDOFF_RESULT_SCHEMA
-from .skills import Skill
-from .tools import model_tool_descriptors
+from jinja2 import Environment, StrictUndefined
+
+from ...protocols import SHELL_HANDOFF_RESULT_SCHEMA
+from ..skills import Skill
+from ..tools import model_tool_descriptors
+
+PROMPT_TEMPLATE_ENV = Environment(
+    autoescape=False,
+    lstrip_blocks=True,
+    trim_blocks=False,
+    undefined=StrictUndefined,
+)
 
 BASE_SYSTEM_PROMPT = f"""You are Zeta, a shell-native coding agent.
 
@@ -50,6 +59,39 @@ GREP_TOOL_POLICY = (
     "text/symbol is known."
 )
 
+SYSTEM_PROMPT_TEMPLATE = """{{ base_prompt }}
+
+{{ tool_protocol }}
+{% if grep_tool_policy %}
+
+Tool policy:
+
+- {{ grep_tool_policy }}
+{% endif %}
+{% if skills_prompt %}
+
+{{ skills_prompt }}
+{% endif %}
+
+{{ tools_prompt }}"""
+
+TOOLS_PROMPT_TEMPLATE = """Available tools:{% if tools %}
+{% for tool in tools %}- {{ tool.signature }}{% if tool.description %}: {{ tool.description }}{% endif %}
+{% endfor %}{% else %}
+(none){% endif %}"""
+
+SKILLS_PROMPT_TEMPLATE = """{% if skills -%}
+<available_skills>
+When the task matches a skill description, use `read` to inspect that skill file.
+Resolve relative skill references against the skill directory.
+{% for skill in skills -%}
+- name: {{ skill.name }}
+  description: {{ skill.description }}
+  location: {{ skill.location }}
+{% endfor -%}
+</available_skills>
+{%- endif %}"""
+
 
 def system_prompt(
     route_prompt: str | None = None,
@@ -59,15 +101,16 @@ def system_prompt(
 ) -> str:
     """Build the Zeta system prompt with the active tool registry."""
     active_tools = tuple(allowed_tools) if allowed_tools is not None else None
-    sections = [clean_prompt(route_prompt) or BASE_SYSTEM_PROMPT.strip()]
-    sections.append(TOOL_PROTOCOL_PROMPT.strip())
-    if tool_available("grep", active_tools):
-        sections.append(f"Tool policy:\n\n- {GREP_TOOL_POLICY}")
-    skill_section = skills_prompt(skills)
-    if skill_section:
-        sections.append(skill_section)
-    sections.append(tools_prompt(active_tools))
-    return "\n\n".join(sections)
+    return render_prompt_template(
+        SYSTEM_PROMPT_TEMPLATE,
+        base_prompt=clean_prompt(route_prompt) or BASE_SYSTEM_PROMPT.strip(),
+        tool_protocol=TOOL_PROTOCOL_PROMPT.strip(),
+        grep_tool_policy=GREP_TOOL_POLICY
+        if tool_available("grep", active_tools)
+        else "",
+        skills_prompt=skills_prompt(skills),
+        tools_prompt=tools_prompt(active_tools),
+    )
 
 
 def tool_available(name: str, allowed_tools: Iterable[str] | None = None) -> bool:
@@ -80,27 +123,34 @@ def tool_available(name: str, allowed_tools: Iterable[str] | None = None) -> boo
 
 def tools_prompt(allowed_tools: Iterable[str] | None = None) -> str:
     """Render active tools from the registry into the system prompt."""
-    descriptors = model_tool_descriptors(allowed_tools)
-    lines = ["Available tools:"]
-    if not descriptors:
-        lines.append("(none)")
-        return "\n".join(lines)
-    lines.extend(tool_prompt_line(descriptor) for descriptor in descriptors)
-    return "\n".join(lines)
+    return render_prompt_template(
+        TOOLS_PROMPT_TEMPLATE,
+        tools=tool_prompt_items(allowed_tools),
+    )
 
 
-def tool_prompt_line(descriptor: dict[str, Any]) -> str:
+def tool_prompt_items(
+    allowed_tools: Iterable[str] | None = None,
+) -> list[dict[str, str]]:
+    return [
+        tool_prompt_item(descriptor)
+        for descriptor in model_tool_descriptors(allowed_tools)
+    ]
+
+
+def tool_prompt_item(descriptor: dict[str, Any]) -> dict[str, str]:
     function = descriptor.get("function")
     if not isinstance(function, dict):
-        return "- unknown()"
+        return {"name": "unknown", "signature": "unknown()", "description": ""}
     name = str(function.get("name") or "unknown")
     description = str(function.get("description") or "").strip()
     parameters = function.get("parameters")
     schema = parameters if isinstance(parameters, dict) else {}
-    signature = tool_signature(name, schema)
-    if not description:
-        return f"- {signature}"
-    return f"- {signature}: {description}"
+    return {
+        "name": name,
+        "signature": tool_signature(name, schema),
+        "description": description,
+    }
 
 
 def tool_signature(name: str, schema: dict[str, Any]) -> str:
@@ -128,25 +178,26 @@ def tool_signature(name: str, schema: dict[str, Any]) -> str:
 
 def skills_prompt(skills: Iterable[Skill]) -> str:
     """Render discoverable skills into the system prompt."""
-    items = list(skills)
-    if not items:
-        return ""
-    lines = [
-        "<available_skills>",
-        "Use `read` to load a skill when the task matches its description.",
-        "Resolve relative skill references against the skill directory.",
+    return render_prompt_template(
+        SKILLS_PROMPT_TEMPLATE,
+        skills=skill_prompt_items(skills),
+    )
+
+
+def skill_prompt_items(skills: Iterable[Skill]) -> list[dict[str, str]]:
+    return [
+        {
+            "name": skill.name,
+            "description": skill.description,
+            "location": str(skill.location),
+        }
+        for skill in skills
     ]
-    for skill in items:
-        lines.extend(
-            [
-                f"- name: {skill.name}",
-                f"  description: {skill.description}",
-                f"  location: {skill.location}",
-            ]
-        )
-    lines.append("</available_skills>")
-    return "\n".join(lines)
 
 
 def clean_prompt(prompt: str | None) -> str:
     return (prompt or "").strip()
+
+
+def render_prompt_template(template: str, **context: Any) -> str:
+    return PROMPT_TEMPLATE_ENV.from_string(template).render(**context).strip()
