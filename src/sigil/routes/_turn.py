@@ -1,6 +1,6 @@
 """Shared turn plumbing for the Zeta-backed routes.
 
-Both routes persist agent events to the Zeta transcript, render tool traces
+ Both routes persist agent events to the Zeta run timeline, render tool traces
 and a context-usage footer while the loop runs, and replay any events the
 recorder missed. This module owns that skeleton; the route modules own
 route-specific tagging, logging, and handoff handling.
@@ -22,7 +22,7 @@ from ..display import (
 from ..zeta.agent import AgentTurnResult
 from ..zeta.model import ensure_server
 from ..zeta.models import ModelSelection
-from ..zeta.runtime import append_transcript
+from ..zeta.runtime import record_event
 
 
 def model_server_ready(selected_model: ModelSelection | None) -> bool:
@@ -69,7 +69,7 @@ def build_turn_renderer(
 class TurnEventRecorder:
     """Persist and render agent events as the loop produces them.
 
-    Subclasses set ``tag_fields``/``strip_fields`` for transcript tagging and
+    Subclasses set ``tag_fields``/``strip_fields`` for timeline tagging and
     override ``handle_tool_call``/``handle_tool_result`` for route behavior.
     ``handle_tool_result`` may return an exit status; the last one wins.
     """
@@ -116,7 +116,7 @@ class TurnEventRecorder:
             for key, value in event.items()
             if key != "type" and key not in self.strip_fields
         }
-        return append_zeta_event(event_type, **fields, **self.tag_fields)
+        return record_zeta_event(event_type, **fields, **self.tag_fields)
 
     def handle_tool_call(self, name: str, args: dict[str, Any]) -> None:
         self.render_tool_call(name, args)
@@ -151,8 +151,8 @@ def render_final_text(
     print()
 
 
-def append_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
-    return append_transcript({"type": event_type, **fields})
+def record_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
+    return record_event({"type": event_type, **fields})
 
 
 def model_telemetry_fields(

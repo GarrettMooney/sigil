@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal
 
 from ..skills import Skill, available_skills, expand_skill_directive
+from ..timeline import ChatMessageEntry, _chat_message_entries
 from ..tools import allowed_tool_names
 from ..trace import Object, ObjectId, Store
-from ..transcript import TranscriptChatMessage, transcript_chat_message_entries
 from .system import system_prompt
 
 Representation = Literal["full", "summary", "stub", "absent"]
@@ -51,7 +51,7 @@ def zeta_context_message(
 
 def prompt_components(
     objective: str,
-    transcript: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
     *,
     system: str | None = None,
     allowed_tools: Iterable[str] | None = None,
@@ -63,7 +63,7 @@ def prompt_components(
     """Return prompt components in stable prefix-cache-friendly order.
 
     Public ordering contract: system_prompt, tool descriptors, project context,
-    then volatile transcript/objective/current-turn components.
+    then volatile timeline/objective/current-turn components.
     """
     enabled_tools = tuple(allowed_tool_names(allowed_tools))
     skills = available_skills() if can_read_skill_files(enabled_tools) else []
@@ -91,8 +91,8 @@ def prompt_components(
             )
         )
     components.extend(
-        transcript_message_components(
-            transcript,
+        timeline_message_components(
+            timeline,
             default_kind="transcript_message",
         )
     )
@@ -111,7 +111,7 @@ def prompt_components(
         )
     )
     components.extend(
-        transcript_message_components(
+        timeline_message_components(
             list(current_events),
             default_kind=None,
         )
@@ -119,12 +119,12 @@ def prompt_components(
     return components
 
 
-def transcript_message_components(
+def timeline_message_components(
     events: list[dict[str, Any]],
     *,
     default_kind: str | None,
 ) -> list[PromptComponent]:
-    entries = transcript_chat_message_entries(events)
+    entries = _chat_message_entries(events)
     components = []
     tool_call_names: dict[str, str] = {}
     for message_index, entry in enumerate(entries):
@@ -135,22 +135,22 @@ def transcript_message_components(
         components.append(
             PromptComponent(
                 kind=kind,
-                data=transcript_message_component_data(
+                data=timeline_message_component_data(
                     message_index,
                     entry,
                     tool_name=tool_name,
                 ),
                 message=entry.message,
-                links=transcript_message_component_links(entry.event),
+                links=timeline_message_component_links(entry.event),
             )
         )
         record_tool_call_names(entry.message, tool_call_names)
     return components
 
 
-def transcript_message_component_data(
+def timeline_message_component_data(
     message_index: int,
-    entry: TranscriptChatMessage,
+    entry: ChatMessageEntry,
     *,
     tool_name: str = "",
 ) -> dict[str, Any]:
@@ -169,7 +169,7 @@ def transcript_message_component_data(
     return data
 
 
-def transcript_message_component_links(event: dict[str, Any]) -> tuple[ObjectId, ...]:
+def timeline_message_component_links(event: dict[str, Any]) -> tuple[ObjectId, ...]:
     links: list[ObjectId] = []
     add_trace_link(links, assistant_message_object_id(event))
     for trace_field in ("tool_result_object_id", "tool_call_object_id"):

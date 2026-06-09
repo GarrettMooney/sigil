@@ -57,7 +57,7 @@ class PromptBuilder:
     def build(
         self,
         objective: str,
-        transcript: list[dict[str, Any]],
+        timeline: list[dict[str, Any]],
         *,
         system: str | None = None,
         allowed_tools: Iterable[str] | None = None,
@@ -70,7 +70,7 @@ class PromptBuilder:
     ) -> PreparedPrompt:
         components = prompt_components(
             objective,
-            transcript,
+            timeline,
             system=system,
             allowed_tools=allowed_tools,
             context=context,

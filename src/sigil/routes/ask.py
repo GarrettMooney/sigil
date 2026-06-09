@@ -203,7 +203,7 @@ def run_tool_answer(
     turn_events: list[dict[str, Any]] = [
         dict(turn) for turn in history if turn.get("role") in {"user", "assistant"}
     ]
-    runtime.append_transcript(user_event)
+    runtime.record_event(user_event)
     status_enabled = answer_thinking_status_enabled(json_output)
     result = run_agent_turn(
         prompt,

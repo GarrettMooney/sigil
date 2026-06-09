@@ -1,4 +1,4 @@
-"""Trace-backed transcript projection and chat-message conversion for Zeta."""
+"""Trace-backed run timeline projection and chat-message conversion for Zeta."""
 
 from __future__ import annotations
 
@@ -20,38 +20,32 @@ from .trace import (
     warn_trace_failure_once,
 )
 
-TRANSCRIPT = "zeta-transcript.jsonl"
 DEFAULT_TAIL_LIMIT = 50
-TRANSCRIPT_EVENT_KIND = "transcript_event"
+RUN_EVENT_KIND = "run_event"
 RUN_HEAD_EVENT_TYPES = {"assistant_message", "tool_call", "tool_result"}
 NON_HEAD_EVENT_TYPES = {"model_usage", "tool_analysis"}
 
 
 @dataclass(frozen=True)
-class TranscriptChatMessage:
-    """A rendered chat message plus the transcript event that produced it."""
+class ChatMessageEntry:
+    """A rendered chat message plus the timeline event that produced it."""
 
     event_index: int
     event: dict[str, Any]
     message: dict[str, Any]
 
 
-def append_transcript(event: dict[str, Any]) -> dict[str, Any]:
-    """Append a Zeta event to the trace store and advance the run head.
-
-    The JSONL transcript used to be the runtime continuity layer. The durable
-    state is now the trace graph: prompt/assistant/tool objects carry causality,
-    while this event wrapper preserves compatibility metadata for projections.
-    """
-    payload = transcript_event_payload(event)
+def record_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Record a Zeta event in the trace store and advance the run head."""
+    payload = event_payload(event)
     try:
         store = default_store()
-        previous_event_id = store.get_ref(current_transcript_ref())
-        links = transcript_event_links(payload, previous_event_id)
+        previous_event_id = store.get_ref(event_head_ref())
+        links = event_links(payload, previous_event_id)
         event_id = store.put_object(
             Object(
-                kind=TRANSCRIPT_EVENT_KIND,
-                schema="zeta.transcript_event.v1",
+                kind=RUN_EVENT_KIND,
+                schema="zeta.run_event.v1",
                 data={
                     "event": payload,
                     "previous_event_object_id": previous_event_id or "",
@@ -61,48 +55,48 @@ def append_transcript(event: dict[str, Any]) -> dict[str, Any]:
         )
         store.record_derivation(
             Derivation(
-                producer="SigilTranscriptEvent:v1",
+                producer="SigilRunEvent:v1",
                 output_id=event_id,
                 input_ids=links,
                 params={"type": str(payload.get("type") or "")},
             )
         )
-        store.set_ref(current_transcript_ref(), event_id)
+        store.set_ref(event_head_ref(), event_id)
         head_id = event_domain_object_id(payload) or event_id
         if should_update_run_head(payload):
-            store.set_ref(current_run_head_ref(), head_id)
-        elif store.get_ref(current_run_head_ref()) is None:
-            store.set_ref(current_run_head_ref(), head_id)
+            store.set_ref(run_head_ref(), head_id)
+        elif store.get_ref(run_head_ref()) is None:
+            store.set_ref(run_head_ref(), head_id)
     except Exception as exc:
-        warn_trace_failure_once("append_transcript", exc)
+        warn_trace_failure_once("record_event", exc)
     return payload
 
 
-def transcript_tail(limit: int = DEFAULT_TAIL_LIMIT) -> list[dict[str, Any]]:
+def current_timeline(limit: int = DEFAULT_TAIL_LIMIT) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
     try:
         store = default_store()
-        events = transcript_from_ref(current_run_head_ref(), store=store, limit=limit)
+        events = timeline_from_ref(run_head_ref(), store=store, limit=limit)
         if not events:
-            events = transcript_from_ref(
-                current_transcript_ref(),
+            events = timeline_from_ref(
+                event_head_ref(),
                 store=store,
                 limit=limit,
             )
     except Exception as exc:
-        warn_trace_failure_once("transcript_tail", exc)
+        warn_trace_failure_once("current_timeline", exc)
         return []
     return events
 
 
-def transcript_from_ref(
+def timeline_from_ref(
     ref_name: str,
     *,
     store: Store | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Project a transcript from the object named by a trace ref."""
+    """Project a timeline from the object named by a trace ref."""
     if limit is not None and limit <= 0:
         return []
     try:
@@ -110,56 +104,56 @@ def transcript_from_ref(
         object_id = active_store.get_ref(ref_name)
         if object_id is None:
             return []
-        return transcript_from_object(object_id, store=active_store, limit=limit)
+        return timeline_from_object(object_id, store=active_store, limit=limit)
     except Exception as exc:
-        warn_trace_failure_once("transcript_from_ref", exc)
+        warn_trace_failure_once("timeline_from_ref", exc)
         return []
 
 
-def transcript_from_object(
+def timeline_from_object(
     object_id: ObjectId,
     *,
     store: Store | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Project a transcript by walking backward from a trace object."""
+    """Project a timeline by walking backward from a trace object."""
     if limit is not None and limit <= 0:
         return []
     try:
-        events = transcript_events_from_head(
+        events = timeline_events_from_head(
             store or default_store(),
             object_id,
             seen=set(),
         )
     except Exception as exc:
-        warn_trace_failure_once("transcript_from_object", exc)
+        warn_trace_failure_once("timeline_from_object", exc)
         return []
     if limit is None:
         return events
     return events[-limit:]
 
 
-def current_run_head_ref(run_id: str | None = None) -> str:
+def run_head_ref(run_id: str | None = None) -> str:
     """Return the mutable ref naming the current trace leaf for a run."""
     return f"run/{run_id or session_id()}/head"
 
 
-def current_transcript_ref(run_id: str | None = None) -> str:
-    """Return the compatibility event-chain ref for a run."""
-    return f"run/{run_id or session_id()}/transcript_head"
+def event_head_ref(run_id: str | None = None) -> str:
+    """Return the event-chain fallback ref for a run."""
+    return f"run/{run_id or session_id()}/event_head"
 
 
-def set_current_run_head(object_id: ObjectId, *, store: Store | None = None) -> None:
+def set_run_head(object_id: ObjectId, *, store: Store | None = None) -> None:
     """Move the current run head to a trace object."""
-    (store or default_store()).set_ref(current_run_head_ref(), object_id)
+    (store or default_store()).set_ref(run_head_ref(), object_id)
 
 
-def current_run_head(*, store: Store | None = None) -> ObjectId | None:
+def run_head(*, store: Store | None = None) -> ObjectId | None:
     """Return the current run head object id, if any."""
-    return (store or default_store()).get_ref(current_run_head_ref())
+    return (store or default_store()).get_ref(run_head_ref())
 
 
-def transcript_event_payload(event: dict[str, Any]) -> dict[str, Any]:
+def event_payload(event: dict[str, Any]) -> dict[str, Any]:
     payload = dict(event)
     payload["id"] = str(payload.get("id") or uuid.uuid4())
     payload["time"] = event_time_value(payload.get("time"))
@@ -176,7 +170,7 @@ def event_time_value(value: Any) -> float:
     return time.time()
 
 
-def transcript_event_links(
+def event_links(
     event: dict[str, Any],
     previous_event_id: ObjectId | None,
 ) -> tuple[ObjectId, ...]:
@@ -232,21 +226,21 @@ def trace_object_id(event: dict[str, Any], field: str) -> ObjectId | None:
     return None
 
 
-def transcript_events_from_current_head(store: Store) -> list[dict[str, Any]]:
-    head_id = store.get_ref(current_run_head_ref())
+def timeline_from_current_head(store: Store) -> list[dict[str, Any]]:
+    head_id = store.get_ref(run_head_ref())
     if head_id is None:
         return []
-    return transcript_events_from_head(store, head_id, seen=set())
+    return timeline_events_from_head(store, head_id, seen=set())
 
 
-def transcript_events_from_event_ref(store: Store) -> list[dict[str, Any]]:
-    event_id = store.get_ref(current_transcript_ref())
+def timeline_from_event_ref(store: Store) -> list[dict[str, Any]]:
+    event_id = store.get_ref(event_head_ref())
     if event_id is None:
         return []
-    return transcript_events_from_head(store, event_id, seen=set())
+    return timeline_events_from_head(store, event_id, seen=set())
 
 
-def transcript_events_from_head(
+def timeline_events_from_head(
     store: Store,
     object_id: ObjectId,
     *,
@@ -258,24 +252,24 @@ def transcript_events_from_head(
     obj = store.get_object(object_id)
     if obj is None:
         return []
-    if obj.kind == TRANSCRIPT_EVENT_KIND:
-        return transcript_events_from_event_object(store, obj, seen=seen)
+    if obj.kind == RUN_EVENT_KIND:
+        return timeline_events_from_event_object(store, obj, seen=seen)
     if obj.kind == "assistant_message":
-        return transcript_events_from_assistant_object(
+        return timeline_events_from_assistant_object(
             store,
             object_id,
             obj,
             seen=seen,
         )
     if obj.kind == "tool_call":
-        return transcript_events_from_tool_call_object(
+        return timeline_events_from_tool_call_object(
             store,
             object_id,
             obj,
             seen=seen,
         )
     if obj.kind == "tool_result":
-        return transcript_events_from_tool_result_object(
+        return timeline_events_from_tool_result_object(
             store,
             object_id,
             obj,
@@ -285,7 +279,7 @@ def transcript_events_from_head(
     return [event] if event else []
 
 
-def transcript_events_from_event_object(
+def timeline_events_from_event_object(
     store: Store,
     obj: Object,
     *,
@@ -293,9 +287,7 @@ def transcript_events_from_event_object(
 ) -> list[dict[str, Any]]:
     previous_id = str(obj.data.get("previous_event_object_id") or "")
     events = (
-        transcript_events_from_head(store, previous_id, seen=seen)
-        if previous_id
-        else []
+        timeline_events_from_head(store, previous_id, seen=seen) if previous_id else []
     )
     event = object_event(obj)
     if event:
@@ -303,7 +295,7 @@ def transcript_events_from_event_object(
     return events
 
 
-def transcript_events_from_assistant_object(
+def timeline_events_from_assistant_object(
     store: Store,
     object_id: ObjectId,
     obj: Object,
@@ -318,7 +310,7 @@ def transcript_events_from_assistant_object(
     return events
 
 
-def transcript_events_from_tool_call_object(
+def timeline_events_from_tool_call_object(
     store: Store,
     object_id: ObjectId,
     obj: Object,
@@ -327,7 +319,7 @@ def transcript_events_from_tool_call_object(
 ) -> list[dict[str, Any]]:
     assistant_id = obj.links[0] if obj.links else ""
     events = (
-        transcript_events_from_head(store, assistant_id, seen=seen)
+        timeline_events_from_head(store, assistant_id, seen=seen)
         if assistant_id
         else []
     )
@@ -335,7 +327,7 @@ def transcript_events_from_tool_call_object(
     return events
 
 
-def transcript_events_from_tool_result_object(
+def timeline_events_from_tool_result_object(
     store: Store,
     object_id: ObjectId,
     obj: Object,
@@ -346,14 +338,14 @@ def transcript_events_from_tool_result_object(
     if event:
         previous_id = obj.links[0] if obj.links else ""
         events = (
-            transcript_events_from_head(store, previous_id, seen=seen)
+            timeline_events_from_head(store, previous_id, seen=seen)
             if previous_id
             else []
         )
         events.append(event)
         return events
     call_id = obj.links[0] if obj.links else ""
-    events = transcript_events_from_head(store, call_id, seen=seen) if call_id else []
+    events = timeline_events_from_head(store, call_id, seen=seen) if call_id else []
     events.append(tool_result_event_from_object(object_id, obj))
     return events
 
@@ -506,19 +498,19 @@ def tool_result_event_from_message(message: dict[str, Any]) -> dict[str, Any]:
     return event
 
 
-def transcript_chat_messages(
-    transcript: list[dict[str, Any]],
+def chat_messages(
+    timeline: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    return [entry.message for entry in transcript_chat_message_entries(transcript)]
+    return [entry.message for entry in _chat_message_entries(timeline)]
 
 
-def transcript_chat_message_entries(
-    transcript: list[dict[str, Any]],
-) -> list[TranscriptChatMessage]:
-    entries: list[TranscriptChatMessage] = []
+def _chat_message_entries(
+    timeline: list[dict[str, Any]],
+) -> list[ChatMessageEntry]:
+    entries: list[ChatMessageEntry] = []
     tool_call_ids: set[str] = set()
-    resolved_shell_handoffs = resolved_shell_handoff_call_ids(transcript)
-    for index, event in enumerate(transcript):
+    resolved_shell_handoffs = resolved_shell_handoff_call_ids(timeline)
+    for index, event in enumerate(timeline):
         message = role_chat_message(event)
         if message is not None:
             entries.append(chat_message_entry(index, event, message))
@@ -554,18 +546,18 @@ def chat_message_entry(
     event_index: int,
     event: dict[str, Any],
     message: dict[str, Any],
-) -> TranscriptChatMessage:
-    return TranscriptChatMessage(
+) -> ChatMessageEntry:
+    return ChatMessageEntry(
         event_index=event_index,
         event=event,
         message=message,
     )
 
 
-def resolved_shell_handoff_call_ids(transcript: list[dict[str, Any]]) -> set[str]:
+def resolved_shell_handoff_call_ids(timeline: list[dict[str, Any]]) -> set[str]:
     """Return tool call ids that have a real shell handoff outcome."""
     resolved: set[str] = set()
-    for event in transcript:
+    for event in timeline:
         if str(event.get("type") or "") != "tool_result":
             continue
         result = event.get("result")

@@ -39,8 +39,8 @@ def append_shell_turn(turn: dict[str, Any]) -> dict[str, Any]:
 
 def append_shell_result() -> dict[str, Any]:
     """Append a synthetic tool result for commands run after a shell handoff."""
-    return zeta_runtime.append_transcript(
-        shell_result_event(zeta_runtime.transcript_tail())
+    return zeta_runtime.record_event(
+        shell_result_event(zeta_runtime.current_timeline())
     )
 
 

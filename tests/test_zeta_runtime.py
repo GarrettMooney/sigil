@@ -33,7 +33,7 @@ from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import runtime as zeta
 from sigil.zeta import skills as zeta_skills
 from sigil.zeta import tools as zeta_tools
-from sigil.zeta import transcript as zeta_transcript
+from sigil.zeta import timeline as zeta_timeline
 from sigil.zeta import model as zeta_model
 from sigil.zeta import models as zeta_models
 from sigil.zeta import trace as zeta_trace
@@ -3767,56 +3767,51 @@ def test_zeta_tool_edit_marks_no_newline_exact_replacement(tmp_path: Path) -> No
     assert "+new\n\\ No newline at end of file\n" in patch
 
 
-def test_zeta_transcript_append_and_tail(tmp_path: Path, monkeypatch) -> None:
+def test_zeta_timeline_record_and_tail(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
 
-    zeta.append_transcript({"type": "tool_call", "name": "read"})
+    zeta.record_event({"type": "tool_call", "name": "read"})
 
-    events = zeta.transcript_tail(1)
+    events = zeta.current_timeline(1)
     assert events[0]["type"] == "tool_call"
     assert events[0]["name"] == "read"
-    assert not (
-        tmp_path / "sessions" / "zeta-test" / zeta_transcript.TRANSCRIPT
-    ).exists()
-    assert zeta_trace.default_store().refs()[
-        zeta_transcript.current_run_head_ref("zeta-test")
-    ]
+    assert not (tmp_path / "sessions" / "zeta-test" / "zeta-transcript.jsonl").exists()
+    assert zeta_trace.default_store().refs()[zeta_timeline.run_head_ref("zeta-test")]
 
 
-def test_zeta_transcript_projects_from_ref_and_object(
+def test_zeta_timeline_projects_from_ref_and_object(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
 
-    zeta.append_transcript({"type": "user_message", "content": "first"})
+    zeta.record_event({"type": "user_message", "content": "first"})
     store = zeta_trace.default_store()
-    first_head = store.get_ref(zeta_transcript.current_run_head_ref("zeta-test"))
+    first_head = store.get_ref(zeta_timeline.run_head_ref("zeta-test"))
     assert first_head is not None
     store.set_ref("run/custom/head", first_head)
 
-    zeta.append_transcript({"type": "assistant_message", "content": "second"})
+    zeta.record_event({"type": "assistant_message", "content": "second"})
 
     assert [
-        event["content"]
-        for event in zeta_transcript.transcript_from_ref("run/custom/head")
+        event["content"] for event in zeta_timeline.timeline_from_ref("run/custom/head")
     ] == ["first"]
     assert [
         event["content"]
-        for event in zeta_transcript.transcript_from_ref(
-            zeta_transcript.current_run_head_ref("zeta-test")
+        for event in zeta_timeline.timeline_from_ref(
+            zeta_timeline.run_head_ref("zeta-test")
         )
     ] == ["first", "second"]
     assert [
         event["content"]
-        for event in zeta_transcript.transcript_from_object(first_head, store=store)
+        for event in zeta_timeline.timeline_from_object(first_head, store=store)
     ] == ["first"]
-    assert zeta_transcript.transcript_from_ref("run/missing/head") == []
+    assert zeta_timeline.timeline_from_ref("run/missing/head") == []
     assert (
-        zeta_transcript.transcript_from_ref(
-            zeta_transcript.current_run_head_ref("zeta-test"), limit=1
+        zeta_timeline.timeline_from_ref(
+            zeta_timeline.run_head_ref("zeta-test"), limit=1
         )[0]["content"]
         == "second"
     )
@@ -4132,7 +4127,7 @@ def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
 
     assert code == 0
     assert cast(list[dict[str, Any]], captured["transcript"]) == []
-    assert zeta.transcript_tail()[-1]["type"] == "user_message"
+    assert zeta.current_timeline()[-1]["type"] == "user_message"
     assert capsys.readouterr().out == "\ndone\n\n"
 
 
@@ -4996,7 +4991,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     assert config.model_url == "http://127.0.0.1:8081/v1/chat/completions"
     transcript = cast(list[dict[str, Any]], captured["transcript"])
     assert transcript == []
-    assert zeta.transcript_tail()[-1]["model"] == {
+    assert zeta.current_timeline()[-1]["model"] == {
         "profile": "fast",
         "model": "fast-model",
         "url": "http://127.0.0.1:8081/v1/chat/completions",
@@ -5009,7 +5004,7 @@ def test_append_shell_result_appends_tool_result(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.append_transcript(
+    zeta.record_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -5049,7 +5044,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.append_transcript(
+    zeta.record_event(
         {
             "type": "assistant_message",
             "tool_calls": [
@@ -5064,7 +5059,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
             ],
         }
     )
-    zeta.append_transcript(
+    zeta.record_event(
         {
             "type": "tool_call",
             "id": "call-1",
@@ -5073,7 +5068,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
             "input": {"command": "uv run pytest"},
         }
     )
-    zeta.append_transcript(
+    zeta.record_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -5091,7 +5086,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
     record_turn("uv run pytest", 1, "/repo", stderr_snippet="test failed")
 
     sigil_handoff.append_shell_result()
-    messages = zeta_transcript.transcript_chat_messages(zeta.transcript_tail())
+    messages = zeta_timeline.chat_messages(zeta.current_timeline())
 
     assert messages[0]["role"] == "assistant"
     assert messages[0]["tool_calls"][0]["id"] == "call-1"
@@ -5109,7 +5104,7 @@ def test_sigil_transcript_shell_result_cancels_modified_handoff(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.append_transcript(
+    zeta.record_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -5149,7 +5144,7 @@ def test_sigil_transcript_shell_result_includes_intervening_shell_turns(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.append_transcript(
+    zeta.record_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -5184,7 +5179,7 @@ def test_sigil_transcript_shell_result_does_not_reuse_resolved_handoff(
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-    zeta.append_transcript(
+    zeta.record_event(
         {
             "type": "tool_result",
             "tool_call_id": "call-1",

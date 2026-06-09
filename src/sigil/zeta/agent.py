@@ -60,7 +60,7 @@ class AgentTurnResult:
 
 def run_agent_turn(
     objective: str,
-    transcript: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
     config: AgentConfig,
     *,
     context: str = "",
@@ -81,7 +81,7 @@ def run_agent_turn(
     for _ in turn_indices(config.max_turns):
         prepared_prompt = builder.build(
             objective,
-            transcript,
+            timeline,
             system=config.system_prompt,
             allowed_tools=allowed_tools,
             context=context,

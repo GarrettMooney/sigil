@@ -14,7 +14,7 @@ from typing import Any, Iterable, Literal, TextIO
 from ._turn import (
     TurnEventRecorder,
     TurnRenderer,
-    append_zeta_event,
+    record_zeta_event,
     build_turn_renderer,
     event_model_telemetry,
     model_server_ready,
@@ -60,7 +60,7 @@ def run_agent_step(
         stdin_text=stdin_text,
     )
     enabled_tools = enabled_tool_tuple(allowed_tools)
-    prior_transcript = runtime.transcript_tail()
+    prior_timeline = runtime.current_timeline()
     user_event: dict[str, Any] = {
         "type": "user_message",
         "content": prompt,
@@ -71,7 +71,7 @@ def run_agent_step(
     }
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
-    runtime.append_transcript(user_event)
+    runtime.record_event(user_event)
     context = runtime.load_project_context()
     renderer = build_turn_renderer(output)
     recorder = AgentStepEventRecorder(
@@ -84,7 +84,7 @@ def run_agent_step(
     context_footer = renderer.context_footer
     result = run_agent_turn(
         prompt,
-        prior_transcript,
+        prior_timeline,
         AgentConfig(
             system_prompt=system,
             allowed_tools=enabled_tools,
@@ -220,7 +220,7 @@ def record_agent_model_telemetry(
     if not fields:
         return
     fields.update(latest_prompt_trace_fields(prompt_traces))
-    append_zeta_event("model_usage", **fields, glyph=glyph)
+    record_zeta_event("model_usage", **fields, glyph=glyph)
 
 
 def edit_mode_for_glyph(glyph: str) -> EditMode:

@@ -7,8 +7,19 @@ from typing import Iterable
 from .context import load_project_context  # noqa: F401  (route-facing surface)
 from .prompt import can_read_skill_files, system_prompt
 from .skills import available_skills, expand_skill_directive  # noqa: F401
+from .timeline import (  # noqa: F401
+    DEFAULT_TAIL_LIMIT,
+    chat_messages,
+    current_timeline,
+    event_head_ref,
+    record_event,
+    run_head,
+    run_head_ref,
+    set_run_head,
+    timeline_from_object,
+    timeline_from_ref,
+)
 from .tools import allowed_tool_names
-from .transcript import append_transcript, transcript_tail  # noqa: F401
 
 
 def zeta_system_prompt(
