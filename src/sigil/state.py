@@ -38,6 +38,17 @@ def session_dir() -> Path:
     return state_dir() / "sessions" / session_id()
 
 
+def append_jsonl_line(path: Path, payload: dict[str, Any]) -> None:
+    """Append one JSONL payload as a single unbuffered write.
+
+    Concurrent shells append to the same files; one write(2) call per line
+    keeps lines from interleaving regardless of payload size.
+    """
+    line = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+    with path.open("ab", buffering=0) as f:
+        f.write(line.encode("utf-8"))
+
+
 def append_event(event: dict[str, Any]) -> dict[str, Any]:
     """Append a global audit/debug event with session metadata."""
     root = state_dir()
@@ -49,8 +60,7 @@ def append_event(event: dict[str, Any]) -> dict[str, Any]:
         "session": session_id(),
         **event,
     }
-    with (root / "events.jsonl").open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    append_jsonl_line(root / "events.jsonl", payload)
     return payload
 
 
@@ -87,8 +97,7 @@ def append_jsonl(name: str, event: dict[str, Any]) -> dict[str, Any]:
         "session": session_id(),
         **event,
     }
-    with (root / name).open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    append_jsonl_line(root / name, payload)
     return payload
 
 

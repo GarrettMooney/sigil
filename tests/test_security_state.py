@@ -2,7 +2,10 @@ from __future__ import annotations
 import pytest
 import json
 import os
+import subprocess
+import sys
 import tempfile
+import time
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
@@ -96,6 +99,55 @@ def test_main_rewrites_permission_errors() -> None:
         with redirect_stderr(stderr):
             assert main(["ask", "hello"]) == 1
     assert "permission denied: /nope/events.jsonl" in stderr.getvalue()
+
+
+APPEND_LARGE_EVENTS_SCRIPT = """
+import os
+import sys
+import time
+from sigil.state import append_event
+
+marker, ready_path, start_path = sys.argv[1:4]
+open(ready_path, "w").close()
+while not os.path.exists(start_path):
+    time.sleep(0.001)
+for _ in range(25):
+    append_event({"type": "big", "payload": marker * 65536})
+"""
+
+
+def test_append_event_does_not_interleave_large_lines_across_processes() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {**os.environ, "SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"}
+        start_gate = Path(tmp) / "start"
+        ready_gates = [Path(tmp) / "ready-a", Path(tmp) / "ready-b"]
+        procs = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    APPEND_LARGE_EVENTS_SCRIPT,
+                    marker,
+                    str(ready),
+                    str(start_gate),
+                ],
+                env=env,
+            )
+            for marker, ready in zip(("a", "b"), ready_gates)
+        ]
+        deadline = time.monotonic() + 30
+        while not all(gate.exists() for gate in ready_gates):
+            assert time.monotonic() < deadline
+            time.sleep(0.001)
+        start_gate.touch()
+        for proc in procs:
+            assert proc.wait(timeout=60) == 0
+        lines = (Path(tmp) / "events.jsonl").read_text(encoding="utf-8").splitlines()
+
+    assert len(lines) == 50
+    for line in lines:
+        payload = json.loads(line)["payload"]
+        assert set(payload) in ({"a"}, {"b"})
 
 
 def test_events_default_lists_recent_events() -> None:
