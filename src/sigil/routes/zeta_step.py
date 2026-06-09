@@ -11,21 +11,24 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable, Literal, TextIO
 
+from ._turn import (
+    TurnEventRecorder,
+    TurnRenderer,
+    append_zeta_event,
+    build_turn_renderer,
+    event_model_telemetry,
+    model_server_ready,
+    model_telemetry_fields,
+    render_final_text,
+)
 from ..display import (
-    ContextUsageFooter,
-    StreamRenderer,
-    TraceAwareStreamRenderer,
-    TraceRenderState,
-    create_stream_renderer,
     render_handoff_lines,
     render_tool_result_summary,
-    render_tool_start,
     thinking_status_factory,
 )
 from ..zeta import runtime
-from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
+from ..zeta.agent import AgentConfig, run_agent_turn
 from ..zeta.models import active_model_selection, model_selection_event
-from ..zeta.model import ensure_server
 from ..zeta.trace import latest_prompt_trace_fields
 
 HandoffOutput = Literal["detail", "summary", "none"]
@@ -48,15 +51,7 @@ def run_agent_step(
 ) -> int:
     """Run a Zeta agent step for CLI routes."""
     selected_model = active_model_selection()
-    server_ready = (
-        ensure_server(
-            selected_url=selected_model.url,
-            selected_model=selected_model.model,
-        )
-        if selected_model is not None
-        else ensure_server()
-    )
-    if not server_ready:
+    if not model_server_ready(selected_model):
         return 1
     output = trace_output or sys.stderr
     prompt = agent_prompt(
@@ -78,28 +73,15 @@ def run_agent_step(
         user_event["model"] = model_selection_event(selected_model)
     runtime.append_transcript(user_event)
     context = runtime.load_project_context()
-    trace_state = TraceRenderState()
-    context_footer = ContextUsageFooter(output)
-    base_stream_renderer = create_stream_renderer(sys.stdout)
-    stream_renderer = (
-        TraceAwareStreamRenderer(
-            base_stream_renderer,
-            trace_state,
-            sys.stdout,
-            before_output=context_footer.clear,
-        )
-        if base_stream_renderer is not None
-        else None
-    )
+    renderer = build_turn_renderer(output)
     recorder = AgentStepEventRecorder(
+        renderer,
         glyph=glyph,
         handoff_path=handoff_path,
         handoff_output=handoff_output,
-        output=output,
-        stream_renderer=stream_renderer,
-        trace_state=trace_state,
-        context_footer=context_footer,
+        render_output=output,
     )
+    context_footer = renderer.context_footer
     result = run_agent_turn(
         prompt,
         prior_transcript,
@@ -120,31 +102,21 @@ def run_agent_step(
         event_sink=recorder.record,
         model_status=thinking_status_factory(
             output,
-            before_start=context_footer.clear,
-            detail=context_footer.current_line,
+            before_start=context_footer.clear if context_footer is not None else None,
+            detail=context_footer.current_line if context_footer is not None else None,
         ),
-        stream_sink=stream_renderer,
+        stream_sink=renderer.stream_renderer,
     )
-    status = replay_agent_events(
-        result,
-        glyph=glyph,
-        handoff_path=handoff_path,
-        handoff_output=handoff_output,
-        output=output,
-        skip_event_ids=recorder.recorded_event_ids,
-        stream_renderer=stream_renderer,
-        trace_state=trace_state,
-        context_footer=context_footer,
-    )
-    if status is None:
-        status = recorder.status
+    recorder.replay(result)
+    status = recorder.status
     if status is not None:
         record_agent_model_telemetry(
             result.model_telemetry,
             glyph=glyph,
             prompt_traces=result.prompt_traces,
         )
-        context_footer.finalize(result.model_telemetry)
+        if context_footer is not None:
+            context_footer.finalize(result.model_telemetry)
         return status
     if result.final_text:
         record_agent_model_telemetry(
@@ -152,15 +124,15 @@ def run_agent_step(
             glyph=glyph,
             prompt_traces=result.prompt_traces,
         )
-        context_footer.clear()
-        record_agent_final(
+        if context_footer is not None:
+            context_footer.clear()
+        render_final_text(
             result.final_text,
-            glyph=glyph,
-            answer_streamed=result.final_text_streamed,
-            stream_renderer=stream_renderer,
-            trace_state=trace_state,
+            streamed=result.final_text_streamed,
+            renderer=renderer,
         )
-        context_footer.finalize(result.model_telemetry)
+        if context_footer is not None:
+            context_footer.finalize(result.model_telemetry)
         return 0
     print("Zeta stopped without a final answer.", file=sys.stderr)
     return 1
@@ -172,154 +144,50 @@ def enabled_tool_tuple(allowed_tools: Iterable[str] | None) -> tuple[str, ...]:
     return tuple(allowed_tools)
 
 
-def record_agent_final(
-    content: str,
-    *,
-    glyph: str,
-    answer_streamed: bool = False,
-    stream_renderer: StreamRenderer | None = None,
-    trace_state: TraceRenderState | None = None,
-) -> None:
-    del glyph
-    if not content:
-        return
-    if answer_streamed:
-        if stream_renderer is not None:
-            stream_renderer.finish()
-        return
-    if trace_state is None or not trace_state.render_text_separator(sys.stdout):
-        print()
-    print(content)
-    print()
-
-
-class AgentStepEventRecorder:
-    """Persist and render agent-step events as the agent loop produces them."""
+class AgentStepEventRecorder(TurnEventRecorder):
+    """Persist and render agent-step events, staging shell handoffs."""
 
     def __init__(
         self,
+        renderer: TurnRenderer,
         *,
         glyph: str,
         handoff_path: str | Path | None,
         handoff_output: HandoffOutput,
-        output: TextIO,
-        stream_renderer: StreamRenderer | None = None,
-        trace_state: TraceRenderState | None = None,
-        context_footer: ContextUsageFooter | None = None,
+        render_output: TextIO,
     ) -> None:
-        self.glyph = glyph
+        super().__init__(renderer, render_output=render_output)
+        self.tag_fields = {"glyph": glyph}
         self.handoff_path = handoff_path
         self.handoff_output = handoff_output
-        self.output = output
-        self.stream_renderer = stream_renderer
-        self.trace_state = trace_state
-        self.context_footer = context_footer
-        self.recorded_event_ids: set[int] = set()
-        self.status: int | None = None
 
-    def record(self, event: dict[str, Any]) -> None:
-        self.recorded_event_ids.add(id(event))
-        status = record_agent_event(
-            event,
-            glyph=self.glyph,
-            handoff_path=self.handoff_path,
-            handoff_output=self.handoff_output,
-            output=self.output,
-            stream_renderer=self.stream_renderer,
-            trace_state=self.trace_state,
-            context_footer=self.context_footer,
-        )
-        if status is not None:
-            self.status = status
-
-
-def replay_agent_events(
-    result: AgentTurnResult,
-    *,
-    glyph: str,
-    handoff_path: str | Path | None = None,
-    handoff_output: HandoffOutput = "detail",
-    output: TextIO = sys.stderr,
-    skip_event_ids: set[int] | frozenset[int] = frozenset(),
-    stream_renderer: StreamRenderer | None = None,
-    trace_state: TraceRenderState | None = None,
-    context_footer: ContextUsageFooter | None = None,
-) -> int | None:
-    status: int | None = None
-    for event in result.events:
-        if id(event) in skip_event_ids:
-            continue
-        event_status = record_agent_event(
-            event,
-            glyph=glyph,
-            handoff_path=handoff_path,
-            handoff_output=handoff_output,
-            output=output,
-            stream_renderer=stream_renderer,
-            trace_state=trace_state,
-            context_footer=context_footer,
-        )
-        if event_status is not None:
-            status = event_status
-    return status
-
-
-def record_agent_event(
-    event: dict[str, Any],
-    *,
-    glyph: str,
-    handoff_path: str | Path | None = None,
-    handoff_output: HandoffOutput = "detail",
-    output: TextIO = sys.stderr,
-    stream_renderer: StreamRenderer | None = None,
-    trace_state: TraceRenderState | None = None,
-    context_footer: ContextUsageFooter | None = None,
-) -> int | None:
-    event_type = str(event.get("type") or "")
-    fields = {key: value for key, value in event.items() if key != "type"}
-    persisted = append_zeta_event(event_type, **fields, glyph=glyph)
-    if event_type == "tool_call":
-        if context_footer is not None:
-            context_footer.clear()
-        if stream_renderer is not None:
-            stream_renderer.ensure_trace_boundary()
-        params = persisted.get("input")
-        render_tool_start(
-            str(persisted.get("name") or ""),
-            params if isinstance(params, dict) else {},
-            output=output,
-            newline=False,
-        )
-        return None
-    if event_type != "tool_result":
-        return None
-    name = str(persisted.get("name") or "")
-    result_payload = persisted.get("result")
-    if not isinstance(result_payload, dict):
-        if context_footer is not None:
-            context_footer.clear()
-        print(file=output)
-        if trace_state is not None:
-            trace_state.mark_trace_finished()
-        return None
-    render_tool_result_summary(
-        name,
-        result_payload,
-        output=output,
-        mark_text_separator=trace_state,
-    )
-    handoff = result_payload.get("handoff")
-    status = None
-    if isinstance(handoff, dict):
-        write_handoff(handoff_path, handoff)
-        print_handoff(handoff, mode=handoff_output)
-        status = 0
-    if context_footer is not None:
-        context_footer.update_for_tool_result(
-            event_model_telemetry(persisted),
+    def handle_tool_result(self, persisted: dict[str, Any]) -> int | None:
+        name = str(persisted.get("name") or "")
+        result_payload = persisted.get("result")
+        if not isinstance(result_payload, dict):
+            if self.renderer.context_footer is not None:
+                self.renderer.context_footer.clear()
+            print(file=self.render_output)
+            self.renderer.trace_state.mark_trace_finished()
+            return None
+        render_tool_result_summary(
+            name,
             result_payload,
+            output=self.render_output,
+            mark_text_separator=self.renderer.trace_state,
         )
-    return status
+        handoff = result_payload.get("handoff")
+        status = None
+        if isinstance(handoff, dict):
+            write_handoff(self.handoff_path, handoff)
+            print_handoff(handoff, mode=self.handoff_output)
+            status = 0
+        if self.renderer.context_footer is not None:
+            self.renderer.context_footer.update_for_tool_result(
+                event_model_telemetry(persisted),
+                result_payload,
+            )
+        return status
 
 
 def write_handoff(path: str | Path | None, handoff: dict[str, Any]) -> None:
@@ -342,10 +210,6 @@ def print_handoff(
         print(line)
 
 
-def append_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
-    return runtime.append_transcript({"type": event_type, **fields})
-
-
 def record_agent_model_telemetry(
     model_telemetry: dict[str, Any] | None,
     *,
@@ -357,28 +221,6 @@ def record_agent_model_telemetry(
         return
     fields.update(latest_prompt_trace_fields(prompt_traces))
     append_zeta_event("model_usage", **fields, glyph=glyph)
-
-
-def model_telemetry_fields(
-    model_telemetry: dict[str, Any] | None,
-) -> dict[str, Any]:
-    if not isinstance(model_telemetry, dict):
-        return {}
-    fields: dict[str, Any] = {}
-    usage = model_telemetry.get("usage")
-    if isinstance(usage, dict):
-        fields["usage"] = usage
-    context_tokens = model_telemetry.get("model_context_tokens")
-    if isinstance(context_tokens, int) and not isinstance(context_tokens, bool):
-        fields["model_context_tokens"] = context_tokens
-    return fields
-
-
-def event_model_telemetry(event: dict[str, Any]) -> dict[str, Any] | None:
-    model_telemetry = event.get("model_telemetry")
-    if isinstance(model_telemetry, dict):
-        return model_telemetry
-    return None
 
 
 def edit_mode_for_glyph(glyph: str) -> EditMode:

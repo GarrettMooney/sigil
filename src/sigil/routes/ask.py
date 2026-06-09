@@ -20,22 +20,25 @@ from ..state import (
     read_jsonl,
     write_jsonl,
 )
+from ._turn import (
+    TurnEventRecorder,
+    TurnRenderer,
+    build_turn_renderer,
+    event_model_telemetry,
+    model_server_ready,
+    model_telemetry_fields,
+    render_final_text,
+)
 from ..display import (
-    ContextUsageFooter,
     StreamRenderer,
     ThinkingStatus,
-    TraceAwareStreamRenderer,
-    TraceRenderState,
-    create_stream_renderer,
     render_tool_result_summary,
-    render_tool_start,
     thinking_status_factory,
 )
 from ..zeta import runtime
-from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
+from ..zeta.agent import AgentConfig, run_agent_turn
 from ..zeta.model import ChatCompletionStreamSink, chat_text
 from ..zeta.models import ModelSelection, active_model_selection, model_selection_event
-from ..zeta.model import ensure_server
 from ..zeta.trace import latest_prompt_trace_fields
 
 
@@ -183,36 +186,12 @@ def run_tool_answer(
     """Run a read-only Zeta answer turn and persist answer state."""
     if selected_model is None:
         selected_model = active_model_selection()
-    server_ready = (
-        ensure_server(
-            selected_url=selected_model.url,
-            selected_model=selected_model.model,
-        )
-        if selected_model is not None
-        else ensure_server()
-    )
-    if not server_ready:
+    if not model_server_ready(selected_model):
         return 1
     enabled_tools = tuple(allowed_tools)
-    trace_state = TraceRenderState()
-    base_stream_renderer = create_stream_renderer(sys.stdout, json_output=json_output)
-    context_footer = None if json_output else ContextUsageFooter(sys.stdout)
-    stream_renderer = (
-        TraceAwareStreamRenderer(
-            base_stream_renderer,
-            trace_state,
-            sys.stdout,
-            before_output=context_footer.clear if context_footer is not None else None,
-        )
-        if base_stream_renderer is not None
-        else None
-    )
-    recorder = AnswerEventRecorder(
-        json_output=json_output,
-        stream_renderer=stream_renderer,
-        trace_state=trace_state,
-        context_footer=context_footer,
-    )
+    renderer = build_turn_renderer(sys.stdout, json_output=json_output)
+    context_footer = renderer.context_footer
+    recorder = AnswerEventRecorder(renderer, json_output=json_output)
     user_event: dict[str, Any] = {
         "type": "user_message",
         "content": prompt,
@@ -250,20 +229,11 @@ def run_tool_answer(
             before_start=context_footer.clear if context_footer is not None else None,
             detail=context_footer.current_line if context_footer is not None else None,
         ),
-        stream_sink=stream_renderer,
+        stream_sink=renderer.stream_renderer,
     )
     turn_events.extend(result.events)
+    recorder.replay(result)
     tool_events = list(recorder.tool_events)
-    tool_events.extend(
-        replay_answer_events(
-            result,
-            json_output=json_output,
-            skip_event_ids=recorder.recorded_event_ids,
-            stream_renderer=stream_renderer,
-            trace_state=trace_state,
-            context_footer=context_footer,
-        )
-    )
     answer = result.final_text
     answer_prompt_traces = result.prompt_traces
     answer_streamed = result.final_text_streamed
@@ -277,7 +247,7 @@ def run_tool_answer(
             turn_events,
             selected_model,
             status_enabled=status_enabled,
-            stream_renderer=stream_renderer,
+            stream_renderer=renderer.stream_renderer,
         )
         if fallback_telemetry:
             model_telemetry = fallback_telemetry
@@ -293,9 +263,7 @@ def run_tool_answer(
         model_telemetry=model_telemetry,
         prompt_traces=answer_prompt_traces,
         answer_streamed=answer_streamed,
-        stream_renderer=stream_renderer,
-        trace_state=trace_state,
-        context_footer=context_footer,
+        renderer=renderer,
     )
     return 0
 
@@ -306,106 +274,45 @@ def answer_thinking_status_enabled(json_output: bool) -> bool | None:
     return None
 
 
-class AnswerEventRecorder:
-    """Persist and render answer-route events as the agent loop produces them."""
+class AnswerEventRecorder(TurnEventRecorder):
+    """Persist and render answer-route events, logging the tool timeline."""
 
-    def __init__(
-        self,
-        *,
-        json_output: bool,
-        stream_renderer: StreamRenderer | None = None,
-        trace_state: TraceRenderState | None = None,
-        context_footer: ContextUsageFooter | None = None,
-    ) -> None:
+    tag_fields = {"route": ANSWER_ROUTE}
+    strip_fields = frozenset({"route"})
+
+    def __init__(self, renderer: TurnRenderer, *, json_output: bool) -> None:
+        super().__init__(renderer, render_output=sys.stdout)
         self.json_output = json_output
-        self.stream_renderer = stream_renderer
-        self.trace_state = trace_state
-        self.context_footer = context_footer
-        self.recorded_event_ids: set[int] = set()
         self.tool_events: list[dict[str, Any]] = []
 
-    def record(self, event: dict[str, Any]) -> None:
-        self.recorded_event_ids.add(id(event))
-        tool_events = record_answer_event(
-            event,
-            json_output=self.json_output,
-            stream_renderer=self.stream_renderer,
-            trace_state=self.trace_state,
-            context_footer=self.context_footer,
-        )
-        self.tool_events.extend(tool_events)
-
-
-def replay_answer_events(
-    result: AgentTurnResult,
-    *,
-    json_output: bool,
-    skip_event_ids: set[int] | frozenset[int] = frozenset(),
-    stream_renderer: StreamRenderer | None = None,
-    trace_state: TraceRenderState | None = None,
-    context_footer: ContextUsageFooter | None = None,
-) -> list[dict[str, Any]]:
-    tool_events: list[dict[str, Any]] = []
-    for event in result.events:
-        if id(event) in skip_event_ids:
-            continue
-        event_tool_events = record_answer_event(
-            event,
-            json_output=json_output,
-            stream_renderer=stream_renderer,
-            trace_state=trace_state,
-            context_footer=context_footer,
-        )
-        tool_events.extend(event_tool_events)
-    return tool_events
-
-
-def record_answer_event(
-    event: dict[str, Any],
-    *,
-    json_output: bool,
-    stream_renderer: StreamRenderer | None = None,
-    trace_state: TraceRenderState | None = None,
-    context_footer: ContextUsageFooter | None = None,
-) -> list[dict[str, Any]]:
-    event_type = str(event.get("type") or "")
-    fields = {
-        key: value for key, value in event.items() if key not in {"type", "route"}
-    }
-    trace = append_zeta_event(event_type, **fields, route=ANSWER_ROUTE)
-    if event_type == "tool_call":
-        name = str(trace.get("name") or "")
-        params = trace.get("input")
-        args = params if isinstance(params, dict) else {}
+    def handle_tool_call(self, name: str, args: dict[str, Any]) -> None:
         append_jsonl(
             "last-tools.jsonl", {"type": "tool_start", "tool": name, "args": args}
         )
-        if not json_output:
-            if context_footer is not None:
-                context_footer.clear()
-            if stream_renderer is not None:
-                stream_renderer.ensure_trace_boundary()
-            render_tool_start(name, args, output=sys.stdout, newline=False)
-        return []
-    if event_type != "tool_result":
-        return []
-    name = str(trace.get("name") or "")
-    result_payload = trace.get("result")
-    if not isinstance(result_payload, dict):
-        result_payload = {}
-    telemetry = event_model_telemetry(trace)
-    if not json_output:
-        render_tool_result_summary(
-            name,
-            result_payload,
-            output=sys.stdout,
-            mark_text_separator=trace_state,
-        )
-        if context_footer is not None:
-            context_footer.update_for_tool_result(telemetry, result_payload)
-    tool_event = {"type": "tool_end", "tool": name, "result": result_payload}
-    append_jsonl("last-tools.jsonl", tool_event)
-    return [tool_event]
+        if not self.json_output:
+            self.render_tool_call(name, args)
+
+    def handle_tool_result(self, persisted: dict[str, Any]) -> int | None:
+        name = str(persisted.get("name") or "")
+        result_payload = persisted.get("result")
+        if not isinstance(result_payload, dict):
+            result_payload = {}
+        if not self.json_output:
+            render_tool_result_summary(
+                name,
+                result_payload,
+                output=self.render_output,
+                mark_text_separator=self.renderer.trace_state,
+            )
+            if self.renderer.context_footer is not None:
+                self.renderer.context_footer.update_for_tool_result(
+                    event_model_telemetry(persisted),
+                    result_payload,
+                )
+        tool_event = {"type": "tool_end", "tool": name, "result": result_payload}
+        append_jsonl("last-tools.jsonl", tool_event)
+        self.tool_events.append(tool_event)
+        return None
 
 
 def fallback_turn_context(prompt: str, turn_events: list[dict[str, Any]]) -> str:
@@ -605,9 +512,7 @@ def record_answer(
     model_telemetry: dict[str, Any] | None = None,
     prompt_traces: list[Any] | tuple[Any, ...] = (),
     answer_streamed: bool = False,
-    stream_renderer: StreamRenderer | None = None,
-    trace_state: TraceRenderState | None = None,
-    context_footer: ContextUsageFooter | None = None,
+    renderer: TurnRenderer | None = None,
 ) -> None:
     telemetry_fields = model_telemetry_fields(model_telemetry)
     trace_fields = latest_prompt_trace_fields(prompt_traces)
@@ -654,42 +559,23 @@ def record_answer(
             )
         )
         return
+    context_footer = renderer.context_footer if renderer is not None else None
     if answer_streamed:
-        if stream_renderer is not None:
-            stream_renderer.finish()
+        if renderer is not None:
+            render_final_text(answer, streamed=True, renderer=renderer)
         if context_footer is not None:
             context_footer.finalize(model_telemetry)
         return
     if context_footer is not None:
         context_footer.clear()
-    if trace_state is None or not trace_state.render_text_separator(sys.stdout):
+    if renderer is not None:
+        render_final_text(answer, streamed=False, renderer=renderer)
+    else:
         print()
-    print(answer)
-    print()
+        print(answer)
+        print()
     if context_footer is not None:
         context_footer.finalize(model_telemetry)
-
-
-def model_telemetry_fields(
-    model_telemetry: dict[str, Any] | None,
-) -> dict[str, Any]:
-    if not isinstance(model_telemetry, dict):
-        return {}
-    fields: dict[str, Any] = {}
-    usage = model_telemetry.get("usage")
-    if isinstance(usage, dict):
-        fields["usage"] = usage
-    context_tokens = model_telemetry.get("model_context_tokens")
-    if isinstance(context_tokens, int) and not isinstance(context_tokens, bool):
-        fields["model_context_tokens"] = context_tokens
-    return fields
-
-
-def event_model_telemetry(event: dict[str, Any]) -> dict[str, Any] | None:
-    model_telemetry = event.get("model_telemetry")
-    if isinstance(model_telemetry, dict):
-        return model_telemetry
-    return None
 
 
 class StreamDeltaTracker:
@@ -711,7 +597,3 @@ class StreamDeltaTracker:
             self.before_first_delta()
         self.streamed_content = True
         self.stream_sink.content_delta(text)
-
-
-def append_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
-    return runtime.append_transcript({"type": event_type, **fields})

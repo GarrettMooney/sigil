@@ -21,6 +21,7 @@ from sigil.protocols import (
     SHELL_HANDOFF_RESULT_TYPE,
     SHELL_PROMPT_HANDOFF_TYPE,
 )
+from sigil.routes import _turn as turn_routes
 from sigil.routes import ask as answers_runner
 from sigil.routes import zeta_step as zeta_runner
 from sigil import handoff as sigil_handoff
@@ -3827,7 +3828,7 @@ def test_sigil_zeta_step_writes_handoff_file(
 ) -> None:
     handoff_file = tmp_path / "handoff.json"
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
@@ -3877,7 +3878,7 @@ def test_sigil_zeta_step_writes_handoff_file(
 
 
 def test_sigil_zeta_step_keeps_trace_off_stdout(monkeypatch) -> None:
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
@@ -3948,7 +3949,7 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
             ],
         )
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
     monkeypatch.setattr(zeta_runner.runtime, "load_project_context", lambda: "ctx")
 
@@ -3986,7 +3987,7 @@ def test_zeta_agent_step_renders_context_usage_on_trace_stream(
             model_telemetry=telemetry,
         )
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = zeta_runner.run_agent_step("answer me", glyph=",,")
@@ -4019,7 +4020,7 @@ def test_zeta_agent_step_renders_context_usage_after_buffered_answer(
             model_telemetry=telemetry,
         )
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = zeta_runner.run_agent_step("answer me", glyph=",,", trace_output=sys.stdout)
@@ -4091,7 +4092,7 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
             },
         )
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = zeta_runner.run_agent_step(
@@ -4124,7 +4125,7 @@ def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
         captured["transcript"] = transcript
         return zeta_agent.AgentTurnResult(final_text="done")
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = zeta_runner.run_agent_step("answer me", glyph=",,")
@@ -4151,7 +4152,7 @@ def test_zeta_agent_step_double_comma_uses_handoff_mode(
         captured["config"] = config
         return zeta_agent.AgentTurnResult(final_text="done")
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = zeta_runner.run_agent_step("review", glyph=",,")
@@ -4176,7 +4177,7 @@ def test_zeta_answer_route_has_no_default_step_budget(monkeypatch) -> None:
         captured["config"] = config
         return zeta_agent.AgentTurnResult(final_text="done")
 
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = answers_runner.run_tool_answer("system", "question")
@@ -4210,7 +4211,7 @@ def test_zeta_agent_step_double_comma_stages_bash_handoff(
         ]
     )
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_agent,
@@ -4273,7 +4274,7 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
             events=[tool_call, tool_result],
         )
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
     for glyph in (",,", ",,,"):
@@ -4310,7 +4311,7 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
             events=[tool_call],
         )
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = zeta_runner.run_agent_step("inspect", glyph=",,")
@@ -4363,7 +4364,7 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
             final_text_streamed=True,
         )
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = zeta_runner.run_agent_step(
@@ -4429,7 +4430,7 @@ def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
             event_sink(event)
         return zeta_agent.AgentTurnResult(final_text="Done.", events=events)
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = zeta_runner.run_agent_step(
@@ -4481,7 +4482,7 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
             pass
         return zeta_agent.AgentTurnResult(final_text="Done.", events=[])
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = zeta_runner.run_agent_step(
@@ -4500,7 +4501,7 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
     monkeypatch,
     capsys,
 ) -> None:
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",
@@ -4831,7 +4832,7 @@ def test_zeta_skill_directive_expands_through_agent_step_route(
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
-    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_agent,
@@ -4882,7 +4883,7 @@ url = "http://127.0.0.1:8082/v1/chat/completions"
         captured["config"] = config
         return zeta_agent.AgentTurnResult(final_text="done")
 
-    monkeypatch.setattr(zeta_runner, "ensure_server", fake_ensure_server)
+    monkeypatch.setattr(turn_routes, "ensure_server", fake_ensure_server)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = zeta_runner.run_agent_step("do work", glyph=",,")
@@ -4924,7 +4925,7 @@ def test_zeta_skill_directive_expands_through_answer_route(
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
         zeta_agent,
@@ -4979,7 +4980,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
         captured["config"] = config
         return zeta_agent.AgentTurnResult(final_text="answered")
 
-    monkeypatch.setattr(answers_runner, "ensure_server", fake_ensure_server)
+    monkeypatch.setattr(turn_routes, "ensure_server", fake_ensure_server)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = answers_runner.run_tool_answer("system", "prompt")
@@ -5265,7 +5266,7 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
             ],
         )
 
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = answers_runner.run_tool_answer(
@@ -5306,7 +5307,7 @@ def test_zeta_answer_route_prints_context_usage_and_records_telemetry(
             model_telemetry=telemetry,
         )
 
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = answers_runner.run_tool_answer(
@@ -5351,7 +5352,7 @@ def test_zeta_answer_route_json_includes_context_telemetry(
             model_telemetry=telemetry,
         )
 
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = answers_runner.run_tool_answer(
@@ -5389,7 +5390,7 @@ def test_zeta_answer_route_streams_final_text_without_duplicate(
             final_text_streamed=True,
         )
 
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = answers_runner.run_tool_answer("question system", "Question?")
@@ -5421,7 +5422,7 @@ def test_zeta_answer_route_streams_markdown_with_rich_for_tty(
         )
 
     monkeypatch.setattr(answers_runner.sys, "stdout", output)
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = answers_runner.run_tool_answer(
@@ -5475,7 +5476,7 @@ def test_zeta_answer_route_streams_text_before_tool_trace(
             final_text_streamed=True,
         )
 
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = answers_runner.run_tool_answer("question system", "Question?")
@@ -5551,7 +5552,7 @@ def test_zeta_answer_route_renders_context_usage_at_bottom_after_tools(
             model_telemetry=telemetry,
         )
 
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = answers_runner.run_tool_answer("question system", "Question?")
@@ -5586,7 +5587,7 @@ def test_zeta_answer_route_json_output_disables_live_streaming(
         assert kwargs.get("stream_sink") is None
         return zeta_agent.AgentTurnResult(final_text="buffered answer")
 
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = answers_runner.run_tool_answer(
@@ -5637,7 +5638,7 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
             events=[tool_call, tool_result],
         )
 
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = answers_runner.run_tool_answer(
@@ -5669,7 +5670,7 @@ def test_zeta_question_loop_passes_follow_up_history_as_turns(
             events=[{"type": "assistant_message", "content": "follow-up answer"}],
         )
 
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
     monkeypatch.setattr(answers_runner.runtime, "load_project_context", lambda: "ctx")
 
@@ -5727,7 +5728,7 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
             ]
         )
 
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     def fake_chat_text(
@@ -5848,7 +5849,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
         captured["selected_url"] = selected_url
         return "Fallback answer."
 
-    monkeypatch.setattr(answers_runner, "ensure_server", lambda **kwargs: True)
+    monkeypatch.setattr(turn_routes, "ensure_server", lambda **kwargs: True)
     monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
     monkeypatch.setattr(answers_runner, "chat_text", fake_chat_text)
 
