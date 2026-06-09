@@ -118,7 +118,11 @@ def write_jsonl(name: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 def read_jsonl(name: str) -> list[dict[str, Any]]:
     """Read a session-scoped JSONL file, skipping malformed lines."""
-    path = session_dir() / name
+    return read_jsonl_path(session_dir() / name)
+
+
+def read_jsonl_path(path: Path) -> list[dict[str, Any]]:
+    """Read a JSONL file at an explicit path, skipping malformed lines."""
     if not path.exists():
         return []
     events: list[dict[str, Any]] = []

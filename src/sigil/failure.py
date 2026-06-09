@@ -141,30 +141,6 @@ def last_failure_or_none() -> dict[str, Any] | None:
     return failure
 
 
-def latest_active_failure() -> dict[str, Any] | None:
-    """Return the last failure only when it is still the latest shell turn."""
-    from .session import recent_turns
-
-    failure = last_failure_or_none()
-    if failure is None:
-        return None
-    turns = recent_turns(limit=1)
-    if not turns:
-        return failure
-    status = turns[-1].get("status")
-    if isinstance(status, int) and status != 0:
-        return failure
-    return None
-
-
-def active_failure_context() -> str:
-    """Return last-failure context when the latest shell command failed."""
-    failure = latest_active_failure()
-    if failure is None:
-        return ""
-    return "Last failed command context:\n" + failure_context_prompt(failure)
-
-
 def failure_context_prompt(failure: dict[str, Any]) -> str:
     """Build proposal context from a failed command without inventing output."""
     context = failure.get("context") if isinstance(failure.get("context"), dict) else {}

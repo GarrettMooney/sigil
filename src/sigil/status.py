@@ -6,7 +6,7 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-from .failure import latest_active_failure
+from .session import latest_active_failure
 from .state import session_id
 
 StatusState = Literal["clean", "attention"]

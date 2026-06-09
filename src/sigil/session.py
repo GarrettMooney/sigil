@@ -1,8 +1,8 @@
-"""Inspection helpers for Sigil's hidden session state.
+"""Session continuity state: inspection helpers and shell turn recording.
 
 Session state is useful only if it can be inspected. These helpers make the
-current shell's continuity files visible without exposing mutation outside the
-explicit `clear` command.
+current shell's continuity files visible, and own the recent-turns buffer the
+shell bindings write through `record_turn`.
 """
 
 from __future__ import annotations
@@ -10,10 +10,24 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
-from .state import ANSWER_TRANSCRIPT, session_dir, session_id, state_dir
+from .failure import (
+    failure_context_prompt,
+    last_failure_or_none,
+    record_failure,
+    truncate_snippet,
+)
+from .state import (
+    ANSWER_TRANSCRIPT,
+    read_jsonl,
+    read_jsonl_path,
+    session_dir,
+    session_id,
+    state_dir,
+)
 
 SESSION_FILES = (
     ANSWER_TRANSCRIPT,
@@ -102,18 +116,7 @@ def read_session_file(path: Path) -> Any:
 
 def read_event_log() -> list[dict[str, Any]]:
     """Read the global event log, skipping malformed lines."""
-    path = state_dir() / "events.jsonl"
-    if not path.exists():
-        return []
-    events = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(event, dict):
-            events.append(event)
-    return events
+    return read_jsonl_path(state_dir() / "events.jsonl")
 
 
 def current_session_snapshot() -> dict[str, Any]:
@@ -145,22 +148,32 @@ RECENT_TURN_SNIPPET_CHARS = 500
 
 def recent_turns(limit: int = RECENT_TURNS_LIMIT) -> list[dict[str, Any]]:
     """Return the most recent shell turns recorded by the bindings."""
-    path = session_dir() / RECENT_TURNS_FILE
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(event, dict):
-            rows.append(event)
+    rows = read_jsonl(RECENT_TURNS_FILE)
     if limit < len(rows):
         return rows[-limit:]
     return rows
+
+
+def latest_active_failure() -> dict[str, Any] | None:
+    """Return the last failure only when it is still the latest shell turn."""
+    failure = last_failure_or_none()
+    if failure is None:
+        return None
+    turns = recent_turns(limit=1)
+    if not turns:
+        return failure
+    status = turns[-1].get("status")
+    if isinstance(status, int) and status != 0:
+        return failure
+    return None
+
+
+def active_failure_context() -> str:
+    """Return last-failure context when the latest shell command failed."""
+    failure = latest_active_failure()
+    if failure is None:
+        return ""
+    return "Last failed command context:\n" + failure_context_prompt(failure)
 
 
 def recent_turns_context(limit: int = RECENT_TURNS_PROMPT_LIMIT) -> str:
@@ -218,12 +231,10 @@ def record_turn(
         return
 
     turn_cwd = cwd or os.getcwd()
-    from .failure import truncate_snippet
-
     stdout_text = truncate_snippet(stdout_snippet)
     stderr_text = truncate_snippet(stderr_snippet)
     entry = {
-        "id": _new_event_id(),
+        "id": str(uuid.uuid4()),
         "time": time.time(),
         "session": session_id(),
         "command": command,
@@ -238,8 +249,6 @@ def record_turn(
     _append_recent_turn(entry)
 
     if status != 0:
-        from .failure import record_failure
-
         record_failure(
             command,
             status,
@@ -247,12 +256,6 @@ def record_turn(
             stdout_snippet=stdout_text,
             stderr_snippet=stderr_text,
         )
-
-
-def _new_event_id() -> str:
-    import uuid
-
-    return str(uuid.uuid4())
 
 
 def _append_recent_turn(entry: dict[str, Any]) -> None:

@@ -12,7 +12,7 @@ import sys
 from types import TracebackType
 from typing import Any, Callable, Iterable
 
-from ..session import recent_turns_context
+from ..session import active_failure_context, recent_turns_context
 from ..state import (
     ANSWER_TRANSCRIPT,
     append_event,
@@ -77,8 +77,6 @@ def discussion_turns() -> list[dict[str, object]]:
 
 def prepend_recent_turns(user_input: str) -> str:
     """Attach recent shell activity to a fresh question prompt."""
-    from ..failure import active_failure_context
-
     sections = []
     context = recent_turns_context()
     if context:
