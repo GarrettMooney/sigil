@@ -96,9 +96,14 @@ def cmd_run(ctx: click.Context, use_shell: bool, argv: tuple[str, ...]) -> int:
     )
     stdout_thread.start()
     stderr_thread.start()
-    status = proc.wait()
+    try:
+        status = proc.wait()
+    except KeyboardInterrupt:
+        status = proc.wait()
     stdout_thread.join()
     stderr_thread.join()
+    if status < 0:
+        status = 128 - status
 
     record_turn(
         command,

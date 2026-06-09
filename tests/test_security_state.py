@@ -7,7 +7,7 @@ import sys
 import tempfile
 import time
 from contextlib import redirect_stderr
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -816,6 +816,61 @@ def test_run_cli_shell_mode_captures_raw_command_string() -> None:
         assert rows[-1]["command"] == "printf 'stdout line\\n' | cat"
         assert rows[-1]["status"] == 0
         assert rows[-1]["stdout_snippet"] == "stdout line\n"
+
+
+def test_run_cli_maps_signal_death_to_shell_exit_code() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            result = CliRunner().invoke(
+                cli,
+                [
+                    "run",
+                    "python",
+                    "-c",
+                    "import os, signal; os.kill(os.getpid(), signal.SIGTERM)",
+                ],
+            )
+
+        assert result.exit_code == 143
+        rows = read_recent_turns(tmp)
+        assert rows[-1]["status"] == 143
+
+
+class InterruptedProcess:
+    """Fake Popen whose first wait raises KeyboardInterrupt, like Ctrl-C."""
+
+    def __init__(self) -> None:
+        self.stdout = BytesIO(b"partial output\n")
+        self.stderr = BytesIO(b"")
+        self.waits = 0
+
+    def wait(self) -> int:
+        self.waits += 1
+        if self.waits == 1:
+            raise KeyboardInterrupt
+        return -2
+
+
+def test_run_cli_records_turn_and_exits_130_on_ctrl_c() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            with patch(
+                "sigil.cli.run.start_process",
+                return_value=InterruptedProcess(),
+            ):
+                result = CliRunner().invoke(cli, ["run", "sleep", "100"])
+
+        assert result.exit_code == 130
+        rows = read_recent_turns(tmp)
+        assert rows[-1]["command"] == "sleep 100"
+        assert rows[-1]["status"] == 130
+        assert rows[-1]["stdout_snippet"] == "partial output\n"
 
 
 def test_run_cli_requires_a_command() -> None:
