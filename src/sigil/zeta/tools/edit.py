@@ -59,7 +59,10 @@ def run_direct(params: dict[str, Any]) -> dict[str, Any]:
     edit = prepare_exact_replacement(params)
     if not isinstance(edit, ExactReplacement):
         return edit
-    Path(edit.location).write_text(edit.updated, encoding="utf-8")
+    try:
+        Path(edit.location).write_text(edit.updated, encoding="utf-8")
+    except OSError as exc:
+        return error_result("write-failed", str(exc))
     artifact = write_temp("zeta-edit-", ".patch", edit.patch)
     return {
         "ok": True,
@@ -92,7 +95,12 @@ def prepare_exact_replacement(
         return error_result("missing-old", "missing old")
     new = str(params.get("new") or "")
     try:
-        text = Path(location).read_text(encoding="utf-8", errors="replace")
+        text = Path(location).read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return error_result(
+            "not-utf8",
+            "file is not valid UTF-8; editing it would corrupt its bytes",
+        )
     except OSError as exc:
         return error_result("read-failed", str(exc))
     matches = text.count(old)

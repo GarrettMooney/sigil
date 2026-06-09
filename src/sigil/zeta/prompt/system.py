@@ -37,8 +37,8 @@ is skipped, say so.
 Project context is ordered from broad to local; later, more local instructions
 override earlier ones when they conflict.
 
-When the transcript contains a {SHELL_HANDOFF_RESULT_SCHEMA} result, treat it as
-the source of truth for what happened after a shell handoff. If the outcome is
+When the run timeline contains a {SHELL_HANDOFF_RESULT_SCHEMA} result, treat it
+as the source of truth for what happened after a shell handoff. If the outcome is
 cancelled, do not assume the proposed command ran; use the recorded shell_turns
 as user-chosen context and explain the cancellation plainly if it matters.
 """

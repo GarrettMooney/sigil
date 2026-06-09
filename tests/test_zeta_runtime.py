@@ -3783,6 +3783,38 @@ def test_zeta_tool_edit_direct_replace_writes_file(tmp_path: Path) -> None:
     assert "+new\n" in artifact.read_text(encoding="utf-8")
 
 
+def test_zeta_tool_edit_rejects_non_utf8_file(tmp_path: Path) -> None:
+    target = tmp_path / "latin1.txt"
+    target.write_bytes(b"caf\xe9 old\n")
+
+    data = zeta_tools.run_tool(
+        "edit",
+        {"location": str(target), "old": "old", "new": "new"},
+        edit_mode="direct_replace",
+    )
+
+    assert data["ok"] is False
+    assert data["error"]["code"] == "not-utf8"
+    assert target.read_bytes() == b"caf\xe9 old\n"
+
+
+def test_zeta_tool_edit_direct_reports_write_failure(tmp_path: Path) -> None:
+    target = tmp_path / "readonly.txt"
+    target.write_text("old\n", encoding="utf-8")
+    target.chmod(0o444)
+
+    data = zeta_tools.run_tool(
+        "edit",
+        {"location": str(target), "old": "old\n", "new": "new\n"},
+        edit_mode="direct_replace",
+    )
+
+    target.chmod(0o644)
+    assert data["ok"] is False
+    assert data["error"]["code"] == "write-failed"
+    assert target.read_text(encoding="utf-8") == "old\n"
+
+
 def test_zeta_tool_edit_rejects_ambiguous_exact_replacement(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("old\nold\n", encoding="utf-8")
