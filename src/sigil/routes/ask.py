@@ -14,7 +14,7 @@ from typing import Any, Callable, Iterable
 
 from ..session import active_failure_context, recent_turns_context
 from ..state import (
-    ANSWER_TRANSCRIPT,
+    ANSWER_HISTORY,
     append_event,
     append_jsonl,
     read_jsonl,
@@ -70,7 +70,7 @@ def discussion_turns() -> list[dict[str, object]]:
     """Load user/assistant turns for explicit follow-up commands."""
     return [
         turn
-        for turn in read_jsonl(ANSWER_TRANSCRIPT)
+        for turn in read_jsonl(ANSWER_HISTORY)
         if turn.get("role") in {"user", "assistant"} and turn.get("content")
     ]
 
@@ -152,9 +152,9 @@ def ask(
         "glyph": glyph,
     }
     if append_transcript:
-        append_jsonl(ANSWER_TRANSCRIPT, user_turn)
+        append_jsonl(ANSWER_HISTORY, user_turn)
     else:
-        write_jsonl(ANSWER_TRANSCRIPT, [user_turn])
+        write_jsonl(ANSWER_HISTORY, [user_turn])
     write_jsonl("last-tools.jsonl", [])
     enabled_tools = parse_tools(tools)
     return run_tool_answer(
@@ -537,7 +537,7 @@ def record_answer(
         answer_event["model"] = model
         assistant_turn["model"] = model
     append_event(answer_event)
-    append_jsonl(ANSWER_TRANSCRIPT, assistant_turn)
+    append_jsonl(ANSWER_HISTORY, assistant_turn)
     if json_output:
         print(
             json.dumps(

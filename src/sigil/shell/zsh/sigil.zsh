@@ -122,7 +122,7 @@ __sigil_zeta_record_shell_turn() {
     "$(__sigil_json_string "$PWD")" \
     "$(__sigil_json_string "$stdout_snippet")" \
     "$(__sigil_json_string "$stderr_snippet")")"
-  printf '%s\n' "$payload" | "$__sigil_bin" transcript shell-turn >/dev/null 2>&1 || true
+  printf '%s\n' "$payload" | "$__sigil_bin" handoff shell-turn >/dev/null 2>&1 || true
   unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
 }
 

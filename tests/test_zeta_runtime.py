@@ -4537,7 +4537,7 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
     assert "❯ edit   a.txt  (applied · a.txt)" in output.err
 
 
-def test_sigil_transcript_shell_turn_records_recent_turn(
+def test_sigil_handoff_shell_turn_records_recent_turn(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -4546,7 +4546,7 @@ def test_sigil_transcript_shell_turn_records_recent_turn(
 
     result = CliRunner().invoke(
         sigil_cli,
-        ["transcript", "shell-turn"],
+        ["handoff", "shell-turn"],
         input=json.dumps(
             {
                 "command": "uv run pytest",

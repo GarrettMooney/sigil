@@ -1,4 +1,4 @@
-"""Internal transcript commands for shell bindings."""
+"""Internal shell-handoff commands for shell bindings."""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ from ._shared import pretty_print_json, read_json_stdin
 from .. import handoff
 
 
-@cli.group("transcript", hidden=True)
-def cmd_transcript() -> None:
-    """Record and reconcile Sigil shell transcript events."""
+@cli.group("handoff", hidden=True)
+def cmd_handoff() -> None:
+    """Record and reconcile shell turns after a Zeta handoff."""
 
 
-@cmd_transcript.command("shell-turn")
-def transcript_shell_turn() -> int:
+@cmd_handoff.command("shell-turn")
+def handoff_shell_turn() -> int:
     """Record one shell command executed after a Zeta handoff."""
     try:
         turn = read_json_stdin(sys.stdin)

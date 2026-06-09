@@ -21,7 +21,7 @@ from .failure import (
     truncate_snippet,
 )
 from .state import (
-    ANSWER_TRANSCRIPT,
+    ANSWER_HISTORY,
     read_jsonl,
     read_jsonl_path,
     session_dir,
@@ -30,7 +30,7 @@ from .state import (
 )
 
 SESSION_FILES = (
-    ANSWER_TRANSCRIPT,
+    ANSWER_HISTORY,
     "last-tools.jsonl",
     "last-failure.json",
     "recent-turns.jsonl",

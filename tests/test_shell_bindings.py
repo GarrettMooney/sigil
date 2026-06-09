@@ -19,12 +19,7 @@ def make_stub(tmp: Path) -> Path:
         textwrap.dedent(
             """\
             #!/usr/bin/env bash
-            if [ "$*" = "transcript append" ]; then
-              cat >/dev/null
-              printf '%s\n' '{"id":"evt"}'
-              exit 0
-            fi
-            if [ "$*" = "transcript shell-turn" ]; then
+            if [ "$*" = "handoff shell-turn" ]; then
               payload="$(cat)"
               printf '%s\t%s\n' "$*" "$payload" >> "$SIGIL_STUB_LOG"
               printf '%s\n' '{"ok":true}'
@@ -191,7 +186,7 @@ def zeta_step_calls() -> list[str]:
 def shell_turn_payloads(tmp: Path) -> list[dict[str, object]]:
     payloads = []
     for line in read_log(tmp):
-        if not line.startswith("transcript shell-turn\t"):
+        if not line.startswith("handoff shell-turn\t"):
             continue
         payloads.append(json.loads(line.split("\t", 1)[1]))
     return payloads

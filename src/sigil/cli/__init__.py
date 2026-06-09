@@ -13,12 +13,12 @@ from ._base import cli, main
 from . import (  # noqa: F401  (imported for command registration side effects)
     ask,
     events,
+    handoff,
     install,
     model,
     run,
     session,
     status,
-    transcript,
     zeta,
     zeta_step,
 )

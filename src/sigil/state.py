@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-ANSWER_TRANSCRIPT = "last-answer.jsonl"
+ANSWER_HISTORY = "last-answer.jsonl"
 
 
 def state_dir() -> Path:
