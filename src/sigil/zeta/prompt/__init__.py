@@ -85,6 +85,7 @@ def trim_threshold_tokens(env: Mapping[str, str]) -> int:
     except ValueError:
         return DEFAULT_TRIM_THRESHOLD_TOKENS
 
+
 __all__ = [
     "BASE_SYSTEM_PROMPT",
     "BudgetThresholdPromptTransform",
