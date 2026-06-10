@@ -1,10 +1,13 @@
 """Root Click group and process entrypoint for the Sigil CLI.
 
 Commands live in sibling modules and register on this group via decorators.
-`__init__` imports those modules so the decorators run.
+The group imports each module on first use: glyphs like `?` and the per-prompt
+shell-turn recording must not pay for the heaviest route's import graph.
 """
 
 from __future__ import annotations
+
+import importlib
 
 import click
 
@@ -13,8 +16,40 @@ from .._version import __version__
 # sysexits EX_UNAVAILABLE: the model endpoint is the service that is down.
 MODEL_ERROR_EXIT_CODE = 69
 
+COMMAND_MODULES = {
+    "ask": "sigil.cli.ask",
+    "doctor": "sigil.cli.install",
+    "events": "sigil.cli.events",
+    "handoff": "sigil.cli.handoff",
+    "install": "sigil.cli.install",
+    "model": "sigil.cli.model",
+    "run": "sigil.cli.run",
+    "session": "sigil.cli.session",
+    "status": "sigil.cli.status",
+    "zeta": "sigil.cli.zeta",
+    "zeta-step": "sigil.cli.zeta_step",
+}
+
+
+class LazyCommandGroup(click.Group):
+    """Import a command's module the first time the command is looked up."""
+
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        return sorted({*super().list_commands(ctx), *COMMAND_MODULES})
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        command = super().get_command(ctx, cmd_name)
+        if command is not None:
+            return command
+        module_name = COMMAND_MODULES.get(cmd_name)
+        if module_name is None:
+            return None
+        importlib.import_module(module_name)
+        return super().get_command(ctx, cmd_name)
+
 
 @click.group(
+    cls=LazyCommandGroup,
     context_settings={"help_option_names": ["-h", "--help"]},
     invoke_without_command=True,
 )

@@ -10,6 +10,7 @@ from contextlib import redirect_stderr
 from io import BytesIO, StringIO
 from pathlib import Path
 
+import click
 from click.testing import CliRunner
 
 from _patch import patch, patch_dict
@@ -81,6 +82,66 @@ def test_top_level_without_command_shows_help() -> None:
     assert result.exit_code == 0
     assert "Common routes:" in result.output
     assert "Commands:" in result.output
+
+
+HEAVY_MODULES_PROBE = (
+    "heavy = [name for name in sys.modules if name.startswith('sigil.routes') "
+    "or name.startswith('sigil.zeta') or name.startswith('rich')]; "
+    "assert not heavy, heavy"
+)
+
+
+def test_cli_import_does_not_load_route_modules() -> None:
+    script = "import sys; import sigil.cli; " + HEAVY_MODULES_PROBE
+    subprocess.run([sys.executable, "-c", script], check=True)
+
+
+def test_status_dispatch_does_not_load_route_modules() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {**os.environ, "SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"}
+        script = (
+            "import sys; from sigil.cli import main; "
+            "code = main(['status']); "
+            "assert code in (0, 1), code; " + HEAVY_MODULES_PROBE
+        )
+        subprocess.run(
+            [sys.executable, "-c", script],
+            env=env,
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+
+
+def test_shell_turn_dispatch_does_not_load_display_or_model() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {**os.environ, "SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"}
+        script = (
+            "import sys; from sigil.cli import main; "
+            "code = main(['handoff', 'shell-turn', '--command', 'ls', "
+            "'--status', '0', '--cwd', '/tmp']); "
+            "assert code == 0, code; "
+            "heavy = [name for name in sys.modules "
+            "if name.startswith('sigil.display') "
+            "or name.startswith('sigil.zeta.agent') "
+            "or name.startswith('sigil.zeta.model') "
+            "or name.startswith('rich')]; "
+            "assert not heavy, heavy"
+        )
+        subprocess.run(
+            [sys.executable, "-c", script],
+            env=env,
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+
+
+def test_every_lazy_command_resolves() -> None:
+    context = click.Context(cli)
+    names = cli.list_commands(context)
+    assert "ask" in names
+    assert "doctor" in names
+    for name in names:
+        assert cli.get_command(context, name) is not None, name
 
 
 def test_main_rewrites_missing_executable_errors() -> None:
