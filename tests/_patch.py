@@ -40,7 +40,10 @@ def patch(
         elif side_effect is not _MISSING:
 
             def replacement(*args: object, **kwargs: object) -> Any:
-                if isinstance(side_effect, BaseException):
+                if isinstance(side_effect, BaseException) or (
+                    isinstance(side_effect, type)
+                    and issubclass(side_effect, BaseException)
+                ):
                     raise side_effect
                 return side_effect(*args, **kwargs)
 

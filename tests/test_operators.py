@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import StringIO
 
+import pytest
 from _patch import patch
 from click.testing import CliRunner
 
@@ -109,3 +110,11 @@ def test_main_reports_model_runtime_error(capsys, monkeypatch) -> None:
     assert code == MODEL_ERROR_EXIT_CODE
     assert "sigil: model request failed: connection reset" in captured.err
     assert "sigil doctor" in captured.err
+
+
+def test_patch_side_effect_raises_exception_classes() -> None:
+    from sigil.cli import ask as ask_module
+
+    with patch("sigil.cli.ask.ask", side_effect=RuntimeError):
+        with pytest.raises(RuntimeError):
+            ask_module.ask("boom")
