@@ -1,8 +1,11 @@
 from __future__ import annotations
 import json
 import os
+import socket
 import tempfile
+import threading
 from contextlib import redirect_stdout
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from io import StringIO
 from pathlib import Path
 
@@ -10,7 +13,12 @@ from click.testing import CliRunner
 
 from _patch import patch, patch_dict
 from sigil.cli import cli, main
-from sigil.install import DoctorCheck, doctor_checks, install_zsh_binding
+from sigil.install import (
+    DoctorCheck,
+    check_endpoint,
+    doctor_checks,
+    install_zsh_binding,
+)
 
 
 def test_install_zsh_binding_copies_binding_and_updates_rc_idempotently() -> None:
@@ -177,3 +185,72 @@ def test_doctor_cli_json_returns_nonzero_for_failures() -> None:
     payload = json.loads(stdout.getvalue())
     assert payload[1]["name"] == "model:endpoint"
     assert payload[1]["status"] == "fail"
+
+
+def serve_one_non_openai_response() -> tuple[socket.socket, int]:
+    server = socket.create_server(("127.0.0.1", 0))
+    port = server.getsockname()[1]
+
+    def accept_once() -> None:
+        try:
+            connection, _ = server.accept()
+        except OSError:
+            return
+        with connection:
+            connection.recv(4096)
+            connection.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/plain\r\n"
+                b"Content-Length: 12\r\n"
+                b"Connection: close\r\n"
+                b"\r\n"
+                b"hello world!"
+            )
+
+    threading.Thread(target=accept_once, daemon=True).start()
+    return server, port
+
+
+class ModelsEndpointHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path != "/v1/models":
+            self.send_error(404)
+            return
+        body = json.dumps({"data": [{"id": "local-model"}]}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+def test_doctor_endpoint_warns_when_listener_is_not_openai_compatible() -> None:
+    server, port = serve_one_non_openai_response()
+    try:
+        check = check_endpoint(
+            {"ZETA_MODEL_URL": f"http://127.0.0.1:{port}/v1/chat/completions"}
+        )
+    finally:
+        server.close()
+
+    assert check.status == "warn"
+    assert "/v1/models" in check.detail
+
+
+def test_doctor_endpoint_ok_when_models_endpoint_answers() -> None:
+    server = HTTPServer(("127.0.0.1", 0), ModelsEndpointHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        check = check_endpoint(
+            {"ZETA_MODEL_URL": f"http://127.0.0.1:{port}/v1/chat/completions"}
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert check.status == "ok"

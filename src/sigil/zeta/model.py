@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import socket
@@ -148,6 +149,7 @@ def request_model_metadata(
     except (
         OSError,
         TimeoutError,
+        http.client.HTTPException,
         urllib.error.URLError,
         json.JSONDecodeError,
         UnicodeDecodeError,

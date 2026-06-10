@@ -18,6 +18,7 @@ from .zeta.model import (
     model_endpoint_valid,
     model_url,
     model_url_from_env,
+    request_model_metadata,
 )
 
 
@@ -244,7 +245,11 @@ def check_state_writable() -> DoctorCheck:
 
 
 def check_endpoint(env: dict[str, str] | None = None) -> DoctorCheck:
-    """Check whether the configured local model endpoint accepts TCP."""
+    """Check that the model endpoint answers like an OpenAI-compatible server.
+
+    A TCP connect alone passes for any listener on the port and the first
+    `,` then fails; doctor is the place to pay for a real GET /v1/models.
+    """
     model_endpoint = model_url() if env is None else model_url_from_env(env)
     if not model_endpoint_valid(model_endpoint):
         return DoctorCheck(
@@ -253,14 +258,22 @@ def check_endpoint(env: dict[str, str] | None = None) -> DoctorCheck:
             f"invalid ZETA_MODEL_URL: {model_endpoint}",
             "Set ZETA_MODEL_URL to an OpenAI-compatible chat completions endpoint.",
         )
-    if endpoint_reachable(model_endpoint):
-        return DoctorCheck("model:endpoint", "ok", model_endpoint)
-    return DoctorCheck(
-        "model:endpoint",
-        "warn",
-        f"not reachable at {model_endpoint}",
-        "Start the local model server or set ZETA_MODEL_URL.",
-    )
+    if not endpoint_reachable(model_endpoint):
+        return DoctorCheck(
+            "model:endpoint",
+            "warn",
+            f"not reachable at {model_endpoint}",
+            "Start the local model server or set ZETA_MODEL_URL.",
+        )
+    if request_model_metadata("/v1/models", selected_url=model_endpoint) is None:
+        return DoctorCheck(
+            "model:endpoint",
+            "warn",
+            f"listening at {model_endpoint} but GET /v1/models failed",
+            "Something is listening but it does not answer like an "
+            "OpenAI-compatible server; check ZETA_MODEL_URL.",
+        )
+    return DoctorCheck("model:endpoint", "ok", model_endpoint)
 
 
 def check_shell_support(shell: str | None) -> DoctorCheck:
