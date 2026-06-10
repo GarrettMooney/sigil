@@ -3,15 +3,19 @@ from __future__ import annotations
 import errno
 import os
 import pty
+import select
 import shutil
+import signal
 import subprocess
 import tempfile
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+SHELL_TIMEOUT_SECONDS = 60.0
 
 
 def make_stub(tmp: Path) -> Path:
@@ -108,6 +112,7 @@ def run_shell(
         text=True,
         capture_output=True,
         check=False,
+        timeout=SHELL_TIMEOUT_SECONDS,
     )
 
 
@@ -128,6 +133,7 @@ def run_shell_args(
         text=True,
         capture_output=True,
         check=False,
+        timeout=SHELL_TIMEOUT_SECONDS,
     )
 
 
@@ -149,11 +155,16 @@ def run_shell_stdin(
         text=True,
         capture_output=True,
         check=False,
+        timeout=SHELL_TIMEOUT_SECONDS,
     )
 
 
 def run_shell_pty(
-    shell: str, script: str, tmp: Path, stub: Path
+    shell: str,
+    script: str,
+    tmp: Path,
+    stub: Path,
+    timeout_seconds: float = SHELL_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["SIGIL_BIN"] = str(stub)
@@ -172,7 +183,20 @@ def run_shell_pty(
 
     os.write(fd, script.encode())
     chunks: list[bytes] = []
+    deadline = time.monotonic() + timeout_seconds
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            os.close(fd)
+            raise TimeoutError(
+                f"pty shell still running after {timeout_seconds}s; "
+                f"output so far:\n{b''.join(chunks).decode(errors='replace')}"
+            )
+        ready, _, _ = select.select([fd], [], [], min(remaining, 1.0))
+        if not ready:
+            continue
         try:
             chunk = os.read(fd, 4096)
         except OSError as exc:
@@ -892,3 +916,18 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         assert "at=0" in result.stdout
         assert "echo=0" in result.stdout
         assert (tmp / "zle.log").read_text(encoding="utf-8") == "user:echo hello\n"
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_pty_harness_kills_a_wedged_shell() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        with pytest.raises(TimeoutError):
+            run_shell_pty(
+                "zsh",
+                "sleep 60\n",
+                tmp,
+                stub,
+                timeout_seconds=1.0,
+            )
