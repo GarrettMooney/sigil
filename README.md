@@ -194,8 +194,8 @@ only captured when you ask for it explicitly with `+`. As with zsh history,
 a command typed with a leading space is not recorded, and `SIGIL_RECORD=0`
 turns recording off; secrets typed into command arguments are exposed
 exactly as they are in `~/.zsh_history`, and the same escape hatches apply.
-Recording feeds the session log; prompts sent to the model only ever include
-a bounded window of recent commands.
+Recording feeds the session log and the delegation ledger; prompts sent to
+the model only ever include a bounded window of recent commands.
 
 ## Glyph Reference
 
@@ -338,6 +338,15 @@ sigil events
 
 Sigil writes event-sourced state under `~/.sigil/` by default. Set
 `SIGIL_STATE_DIR` to move it.
+
+Every delegation leaves a ledger record in `events.jsonl`: one
+`sigil.turn.v1` event per turn — which workflow ran, the objective, the
+enforced tool contract, model cost, the outcome, and the ids of the exact
+prompts the model saw — plus one `sigil.effect.v1` event per side effect:
+files written or edited (with before/after content hashes), commands
+executed (with exit status), and staged handoffs with how they resolved.
+Plain shell commands and `+` runs are recorded as `run` turns with a
+command effect. The log rotates at 10MB, keeping one generation.
 
 Installed zsh bindings set `SIGIL_SESSION_ID` once when the shell
 starts, so separate terminal windows keep separate continuity. Override the

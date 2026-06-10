@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import sys
 from pathlib import Path
@@ -377,7 +378,9 @@ def test_zeta_tool_write_direct_writes_file(tmp_path: Path) -> None:
     )
 
     assert data["ok"] is True
-    assert data["metadata"] == {"mode": "direct", "path": str(target)}
+    metadata = data["metadata"]
+    assert metadata["mode"] == "direct"
+    assert metadata["path"] == str(target)
     assert target.read_text(encoding="utf-8") == "hello\n"
 
 
@@ -608,3 +611,93 @@ def test_zeta_builtin_metadata_declares_effects() -> None:
     assert zeta_tools.tool_metadata("read")["effects"] == ["read"]
     assert zeta_tools.tool_metadata("grep")["effects"] == ["search"]
     assert zeta_tools.tool_metadata("ls")["effects"] == ["read"]
+
+
+def test_zeta_tool_bash_direct_records_duration() -> None:
+    data = zeta_tools.run_tool(
+        "bash",
+        {"command": "printf timed"},
+        execution_mode="direct",
+    )
+
+    duration = data["metadata"]["duration_ms"]
+    assert isinstance(duration, int)
+    assert duration >= 0
+
+
+def test_zeta_tool_write_direct_records_content_hashes(tmp_path: Path) -> None:
+    target = tmp_path / "direct.txt"
+    target.write_text("old\n", encoding="utf-8")
+
+    data = zeta_tools.run_tool(
+        "write",
+        {"path": str(target), "content": "hello\n"},
+        execution_mode="direct",
+    )
+
+    metadata = data["metadata"]
+    assert metadata["before_hash"] == "sha256:" + hashlib.sha256(b"old\n").hexdigest()
+    assert metadata["after_hash"] == "sha256:" + hashlib.sha256(b"hello\n").hexdigest()
+
+
+def test_zeta_tool_write_stage_records_staged_hashes(tmp_path: Path) -> None:
+    target = tmp_path / "staged.txt"
+    target.write_text("old\n", encoding="utf-8")
+
+    data = zeta_tools.run_tool("write", {"path": str(target), "content": "hello\n"})
+
+    assert data["handoff"]["command"].startswith("cp ")
+    metadata = data["metadata"]
+    assert metadata["path"] == str(target)
+    assert metadata["before_hash"] == "sha256:" + hashlib.sha256(b"old\n").hexdigest()
+    assert metadata["after_hash"] == "sha256:" + hashlib.sha256(b"hello\n").hexdigest()
+    assert target.read_text(encoding="utf-8") == "old\n"
+
+
+def test_zeta_tool_write_omits_before_hash_for_new_file(tmp_path: Path) -> None:
+    target = tmp_path / "fresh.txt"
+
+    data = zeta_tools.run_tool(
+        "write",
+        {"path": str(target), "content": "hello\n"},
+        execution_mode="direct",
+    )
+
+    metadata = data["metadata"]
+    assert "before_hash" not in metadata
+    assert metadata["after_hash"] == "sha256:" + hashlib.sha256(b"hello\n").hexdigest()
+
+
+def test_zeta_tool_edit_direct_records_content_hashes(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("hello\nold\nbye\n", encoding="utf-8")
+
+    data = zeta_tools.run_tool(
+        "edit",
+        {"location": str(target), "old": "old\n", "new": "new\n"},
+        edit_mode="direct_replace",
+    )
+
+    metadata = data["metadata"]
+    before = "sha256:" + hashlib.sha256(b"hello\nold\nbye\n").hexdigest()
+    after = "sha256:" + hashlib.sha256(b"hello\nnew\nbye\n").hexdigest()
+    assert metadata["before_hash"] == before
+    assert metadata["after_hash"] == after
+
+
+def test_zeta_tool_edit_stage_records_staged_hashes(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("hello\nold\nbye\n", encoding="utf-8")
+
+    data = zeta_tools.run_tool(
+        "edit", {"location": str(target), "old": "old\n", "new": "new\n"}
+    )
+
+    assert data["handoff"]["command"].startswith("git apply ")
+    metadata = data["metadata"]
+    assert metadata["path"] == str(target)
+    before = "sha256:" + hashlib.sha256(b"hello\nold\nbye\n").hexdigest()
+    after = "sha256:" + hashlib.sha256(b"hello\nnew\nbye\n").hexdigest()
+    assert metadata["before_hash"] == before
+    assert metadata["after_hash"] == after
+    assert target.read_text(encoding="utf-8") == "hello\nold\nbye\n"

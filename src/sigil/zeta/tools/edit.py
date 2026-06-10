@@ -12,8 +12,10 @@ from typing import Any
 from .base import (
     ToolSpec,
     analysis,
+    content_hash,
     effect,
     error_result,
+    file_content_hash,
     handoff,
     missing,
     write_temp,
@@ -51,16 +53,19 @@ def stage(params: dict[str, Any]) -> dict[str, Any]:
     edit = prepare_exact_replacement(params)
     if not isinstance(edit, ExactReplacement):
         return edit
-    return stage_patch(
+    result = stage_patch(
         edit.patch,
         str(params.get("reason") or f"Apply exact replacement in {edit.location}."),
     )
+    result["metadata"] = edit_hashes(edit) | {"path": edit.location}
+    return result
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:
     edit = prepare_exact_replacement(params)
     if not isinstance(edit, ExactReplacement):
         return edit
+    hashes = edit_hashes(edit)
     try:
         Path(edit.location).write_text(edit.updated, encoding="utf-8")
     except OSError as exc:
@@ -75,8 +80,18 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
             "location": edit.location,
             "artifact": str(artifact),
             "mode": "direct_replace",
+            **hashes,
         },
     }
+
+
+def edit_hashes(edit: ExactReplacement) -> dict[str, str]:
+    """Hash the file as it stands and the replacement text."""
+    hashes = {"after_hash": content_hash(edit.updated)}
+    before_hash = file_content_hash(edit.location)
+    if before_hash is not None:
+        hashes["before_hash"] = before_hash
+    return hashes
 
 
 @dataclass(frozen=True)

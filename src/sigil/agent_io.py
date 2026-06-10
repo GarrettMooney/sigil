@@ -9,6 +9,9 @@ workflow-specific tagging, logging, and handoff handling.
 from __future__ import annotations
 
 import sys
+import time
+import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, TextIO
 
@@ -19,10 +22,21 @@ from .display.render import (
     create_stream_renderer,
     render_tool_start,
 )
+from .protocols import (
+    EFFECT_KIND_COMMAND,
+    EFFECT_KIND_FILE_EDIT,
+    EFFECT_KIND_FILE_WRITE,
+    effect_record,
+    is_shell_prompt_handoff,
+    turn_contract,
+    turn_record,
+)
+from .state import append_event
 from .zeta.agent import AgentTurnResult
 from .zeta.model import ensure_server
 from .zeta.models import ModelSelection
 from .zeta.timeline import record_event
+from .zeta.trace import PromptTrace
 
 
 def model_server_ready(selected_model: ModelSelection | None) -> bool:
@@ -66,20 +80,192 @@ def build_turn_renderer(
     return TurnRenderer(trace_state, context_footer, stream_renderer)
 
 
+class TurnLedger:
+    """Accumulate one agent turn's ledger facts and append its records.
+
+    Effects are appended to the global event log as the recorder sees the
+    matching tool results; ``finish`` appends the turn record referencing
+    them.
+    """
+
+    def __init__(
+        self,
+        *,
+        workflow: str,
+        objective: str,
+        allowed_tools: Iterable[str],
+        staged: bool,
+        agent: dict[str, str] | None = None,
+    ) -> None:
+        self.turn_id = str(uuid.uuid4())
+        self.workflow = workflow
+        self.objective = objective
+        self.contract = turn_contract(workflow, allowed_tools, staged=staged)
+        self.agent = agent
+        self.started = time.monotonic()
+        self.effect_ids: list[str] = []
+        self.model_calls: list[dict[str, Any]] = []
+
+    def record_tool_result(self, event: dict[str, Any]) -> None:
+        """Append the effect record a persisted tool result implies, if any."""
+        fields = tool_result_effect_fields(
+            str(event.get("name") or ""),
+            event.get("result"),
+        )
+        if fields is None:
+            return
+        effect_id = str(uuid.uuid4())
+        tool_call_id = str(event.get("tool_call_id") or "")
+        append_event(
+            effect_record(
+                effect_id,
+                turn_id=self.turn_id,
+                tool_call_id=tool_call_id or None,
+                **fields,
+            )
+        )
+        self.effect_ids.append(effect_id)
+
+    def add_model_calls(self, calls: Iterable[dict[str, Any]]) -> None:
+        self.model_calls.extend(call for call in calls if call)
+
+    def finish(
+        self,
+        outcome: str,
+        prompt_traces: Iterable[PromptTrace] = (),
+    ) -> dict[str, Any]:
+        """Append the turn record closing this turn in the ledger."""
+        return append_event(
+            turn_record(
+                self.turn_id,
+                workflow=self.workflow,
+                objective=self.objective,
+                contract=self.contract,
+                outcome=outcome,
+                agent=self.agent,
+                cost=self.cost(),
+                prompt_object_ids=[trace.prompt_object_id for trace in prompt_traces],
+                effect_ids=self.effect_ids,
+            )
+        )
+
+    def cost(self) -> dict[str, int]:
+        wall_ms = int((time.monotonic() - self.started) * 1000)
+        if not self.model_calls:
+            return {"wall_ms": wall_ms}
+        input_tokens = 0
+        output_tokens = 0
+        for call in self.model_calls:
+            usage = call.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            input_tokens += usage_tokens(usage, "prompt_tokens")
+            output_tokens += usage_tokens(usage, "completion_tokens")
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "model_calls": len(self.model_calls),
+            "wall_ms": wall_ms,
+        }
+
+
+def usage_tokens(usage: dict[str, Any], field_name: str) -> int:
+    value = usage.get(field_name)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return 0
+
+
+def tool_result_effect_fields(name: str, result: Any) -> dict[str, Any] | None:
+    """Map one tool result onto ledger effect fields, or None for no effect."""
+    if not isinstance(result, dict):
+        return None
+    metadata = result.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    staged = is_shell_prompt_handoff(result.get("handoff"))
+    if name in {"write", "edit"}:
+        return file_effect_fields(name, result, metadata, staged=staged)
+    if name == "bash":
+        return command_effect_fields(result, metadata, staged=staged)
+    return None
+
+
+def file_effect_fields(
+    name: str,
+    result: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    staged: bool,
+) -> dict[str, Any] | None:
+    if not (staged or result.get("ok") is True):
+        return None
+    path = metadata.get("path") or metadata.get("location")
+    if not isinstance(path, str) or not path:
+        return None
+    fields: dict[str, Any] = {
+        "kind": EFFECT_KIND_FILE_WRITE if name == "write" else EFFECT_KIND_FILE_EDIT,
+        "staged": staged,
+        "path": path,
+    }
+    for key in ("before_hash", "after_hash"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            fields[key] = value
+    return fields
+
+
+def command_effect_fields(
+    result: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    staged: bool,
+) -> dict[str, Any] | None:
+    if staged:
+        handoff = result.get("handoff")
+        command = handoff.get("command") if isinstance(handoff, dict) else ""
+        return {
+            "kind": EFFECT_KIND_COMMAND,
+            "staged": True,
+            "command": str(command or ""),
+        }
+    status = metadata.get("status")
+    if not isinstance(status, int) or isinstance(status, bool):
+        return None
+    fields: dict[str, Any] = {
+        "kind": EFFECT_KIND_COMMAND,
+        "staged": False,
+        "command": str(metadata.get("command") or ""),
+        "exit_status": status,
+    }
+    duration = metadata.get("duration_ms")
+    if isinstance(duration, int) and not isinstance(duration, bool):
+        fields["duration_ms"] = duration
+    return fields
+
+
 class TurnEventRecorder:
     """Persist and render agent events as the loop produces them.
 
     Subclasses set ``tag_fields``/``strip_fields`` for timeline tagging and
     override ``handle_tool_call``/``handle_tool_result`` for workflow behavior.
     ``handle_tool_result`` may return an exit status; the last one wins.
+    A ledger, when given, tags every persisted event with the turn id and
+    receives tool results for effect recording.
     """
 
     tag_fields: dict[str, Any] = {}
     strip_fields: frozenset[str] = frozenset()
 
-    def __init__(self, renderer: TurnRenderer, *, render_output: TextIO) -> None:
+    def __init__(
+        self,
+        renderer: TurnRenderer,
+        *,
+        render_output: TextIO,
+        ledger: TurnLedger | None = None,
+    ) -> None:
         self.renderer = renderer
         self.render_output = render_output
+        self.ledger = ledger
         self.recorded_event_ids: set[int] = set()
         self.status: int | None = None
 
@@ -106,6 +292,8 @@ class TurnEventRecorder:
             return
         if event_type != "tool_result":
             return
+        if self.ledger is not None:
+            self.ledger.record_tool_result(persisted)
         status = self.handle_tool_result(persisted)
         if status is not None:
             self.status = status
@@ -116,6 +304,8 @@ class TurnEventRecorder:
             for key, value in event.items()
             if key != "type" and key not in self.strip_fields
         }
+        if self.ledger is not None:
+            fields["turn_id"] = self.ledger.turn_id
         return record_zeta_event(event_type, **fields, **self.tag_fields)
 
     def handle_tool_call(self, name: str, args: dict[str, Any]) -> None:

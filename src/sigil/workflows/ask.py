@@ -15,6 +15,7 @@ from typing import Any
 
 from ..agent_io import (
     TurnEventRecorder,
+    TurnLedger,
     TurnRenderer,
     build_turn_renderer,
     event_model_telemetry,
@@ -29,6 +30,7 @@ from ..display.render import (
     render_tool_result_summary,
     thinking_status_factory,
 )
+from ..protocols import TURN_OUTCOME_ABORTED, TURN_OUTCOME_ANSWERED
 from ..session import active_failure_context, recent_turns_context
 from ..state import (
     append_event,
@@ -143,7 +145,14 @@ def run_tool_ask(
     enabled_tools = tuple(allowed_tools)
     renderer = build_turn_renderer(sys.stderr, json_output=json_output)
     context_footer = renderer.context_footer
-    recorder = AskEventRecorder(renderer, json_output=json_output)
+    ledger = TurnLedger(
+        workflow=ASK_WORKFLOW,
+        objective=input_text or prompt,
+        allowed_tools=enabled_tools,
+        staged=False,
+        agent=model_selection_event(selected_model) if selected_model else None,
+    )
+    recorder = AskEventRecorder(renderer, json_output=json_output, ledger=ledger)
     user_event: dict[str, Any] = {
         "type": "user_message",
         "content": prompt,
@@ -151,6 +160,7 @@ def run_tool_ask(
         "workflow": ASK_WORKFLOW,
         "system": system,
         "available_tools": list(enabled_tools),
+        "turn_id": ledger.turn_id,
     }
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
@@ -187,6 +197,7 @@ def run_tool_ask(
             stream_sink=renderer.stream_renderer,
         )
         recorder.replay(result)
+        ledger.add_model_calls(result.model_telemetry_calls)
         tool_events = list(recorder.tool_events)
         answer = result.final_text
         answer_prompt_traces = result.prompt_traces
@@ -208,6 +219,7 @@ def run_tool_ask(
             )
             if fallback_telemetry:
                 model_telemetry = fallback_telemetry
+                ledger.add_model_calls([fallback_telemetry])
             answer_prompt_traces = []
             record_event(
                 {
@@ -219,7 +231,9 @@ def run_tool_ask(
             )
     except RuntimeError as error:
         record_turn_abort(error, workflow=ASK_WORKFLOW)
+        ledger.finish(TURN_OUTCOME_ABORTED)
         raise
+    ledger.finish(TURN_OUTCOME_ANSWERED, prompt_traces=answer_prompt_traces)
     record_answer(
         input_text=input_text,
         prompt=prompt,
@@ -247,8 +261,14 @@ class AskEventRecorder(TurnEventRecorder):
     tag_fields = {"workflow": ASK_WORKFLOW}
     strip_fields = frozenset({"workflow"})
 
-    def __init__(self, renderer: TurnRenderer, *, json_output: bool) -> None:
-        super().__init__(renderer, render_output=sys.stderr)
+    def __init__(
+        self,
+        renderer: TurnRenderer,
+        *,
+        json_output: bool,
+        ledger: TurnLedger | None = None,
+    ) -> None:
+        super().__init__(renderer, render_output=sys.stderr, ledger=ledger)
         self.json_output = json_output
         self.tool_events: list[dict[str, Any]] = []
 

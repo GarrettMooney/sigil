@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Any
 
 from .protocols import (
+    EFFECT_KIND_HANDOFF,
     SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
     SHELL_HANDOFF_CANCEL_NO_TURNS,
     SHELL_HANDOFF_OUTCOME_CANCELLED,
@@ -13,10 +15,12 @@ from .protocols import (
     SHELL_HANDOFF_OUTCOME_NO_PENDING,
     SHELL_HANDOFF_RESULT_SCHEMA,
     SHELL_HANDOFF_RESULT_TYPE,
+    effect_record,
     is_shell_handoff_result,
     is_shell_prompt_handoff,
 )
 from .session import event_time, recent_turns, record_turn
+from .state import append_event
 from .zeta.timeline import current_timeline, record_event
 
 
@@ -73,12 +77,38 @@ def shell_handoff_result(
     if matching_turn is None:
         first_turn = turns_after_handoff[0] if turns_after_handoff else {}
         actual = str(first_turn.get("command") or "")
-        return cancelled_shell_result(
+        result = cancelled_shell_result(
             handoff,
             actual,
             turns_after_handoff,
         )
-    return executed_shell_result(handoff, matching_turn, turns_after_handoff)
+    else:
+        result = executed_shell_result(handoff, matching_turn, turns_after_handoff)
+    record_handoff_effect(handoff, result)
+    return result
+
+
+def record_handoff_effect(
+    handoff: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    """Append the ledger effect linking a staged handoff to what actually ran."""
+    command = str(
+        result.get("executed_command") or result.get("expected_command") or ""
+    )
+    status = result.get("status")
+    append_event(
+        effect_record(
+            str(uuid.uuid4()),
+            turn_id=str(handoff.get("turn_id") or ""),
+            kind=EFFECT_KIND_HANDOFF,
+            staged=True,
+            command=command or None,
+            exit_status=status if isinstance(status, int) else None,
+            tool_call_id=str(handoff.get("tool_call_id") or "") or None,
+            resolved_outcome=str(result.get("outcome") or ""),
+        )
+    )
 
 
 def executed_shell_result(
@@ -231,6 +261,7 @@ def latest_unresolved_shell_handoff(
             "reason": str(handoff.get("reason") or ""),
             "artifact": str(handoff.get("artifact") or ""),
             "time": event.get("time"),
+            "turn_id": str(event.get("turn_id") or ""),
         }
     return {}
 

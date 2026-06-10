@@ -23,6 +23,7 @@ from sigil import agent_io
 from sigil import handoff as sigil_handoff
 from sigil.cli import cli as sigil_cli
 from sigil.protocols import (
+    EFFECT_KIND_COMMAND,
     SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
@@ -30,6 +31,15 @@ from sigil.protocols import (
     SHELL_HANDOFF_RESULT_SCHEMA,
     SHELL_HANDOFF_RESULT_TYPE,
     SHELL_PROMPT_HANDOFF_TYPE,
+    TURN_OUTCOME_ABORTED,
+    TURN_OUTCOME_EXECUTED,
+    TURN_OUTCOME_FAILED,
+    TURN_OUTCOME_STAGED,
+    effect_record,
+    is_effect_record,
+    is_turn_record,
+    turn_contract,
+    turn_record,
 )
 from sigil.session import read_event_log, recent_turns, record_turn
 from sigil.state import read_jsonl
@@ -38,6 +48,7 @@ from sigil.workflows import step as zeta_runner
 from sigil.zeta import agent as zeta_agent
 from sigil.zeta import models as zeta_models
 from sigil.zeta import timeline as zeta_timeline
+from sigil.zeta.trace import PromptTrace
 
 
 def test_sigil_zeta_step_writes_handoff_file(
@@ -2036,3 +2047,417 @@ def test_zeta_ask_workflow_keeps_stdout_clean_for_pipes(
     assert "grep-safe answer" in output.out
     assert "❯" not in output.out
     assert "context  [" not in output.out
+
+
+def test_turn_record_carries_schema_contract_and_optional_blocks() -> None:
+    record = turn_record(
+        "turn-1",
+        workflow="propose",
+        objective="fix the failing test",
+        contract=turn_contract("propose", ("bash", "edit"), staged=True),
+        outcome=TURN_OUTCOME_STAGED,
+        agent={"profile": "local", "model": "m", "url": "http://localhost"},
+        cost={"input_tokens": 10, "output_tokens": 2, "model_calls": 1, "wall_ms": 5},
+        prompt_object_ids=["sha256:abc"],
+        effect_ids=["effect-1"],
+    )
+
+    assert record["type"] == "turn"
+    assert record["schema"] == "sigil.turn.v1"
+    assert record["turn_id"] == "turn-1"
+    assert record["contract"] == {
+        "workflow": "propose",
+        "allowed_tools": ["bash", "edit"],
+        "staged": True,
+    }
+    assert record["agent"]["model"] == "m"
+    assert record["cost"]["input_tokens"] == 10
+    assert record["prompt_object_ids"] == ["sha256:abc"]
+    assert record["effect_ids"] == ["effect-1"]
+    assert is_turn_record(record)
+    assert not is_effect_record(record)
+
+
+def test_turn_record_omits_absent_agent_and_cost() -> None:
+    record = turn_record(
+        "turn-1",
+        workflow="run",
+        objective="ls",
+        contract=turn_contract("run", (), staged=False),
+        outcome=TURN_OUTCOME_EXECUTED,
+    )
+
+    assert "agent" not in record
+    assert "cost" not in record
+    assert record["prompt_object_ids"] == []
+    assert record["effect_ids"] == []
+
+
+def test_effect_record_keeps_only_set_optionals() -> None:
+    record = effect_record(
+        "effect-1",
+        turn_id="turn-1",
+        kind=EFFECT_KIND_COMMAND,
+        staged=False,
+        command="ls",
+        exit_status=0,
+    )
+
+    assert record["type"] == "effect"
+    assert record["schema"] == "sigil.effect.v1"
+    assert record["effect_id"] == "effect-1"
+    assert record["turn_id"] == "turn-1"
+    assert record["command"] == "ls"
+    assert record["exit_status"] == 0
+    assert record["staged"] is False
+    for absent in ("path", "before_hash", "after_hash", "resolved_outcome"):
+        assert absent not in record
+    assert is_effect_record(record)
+    assert not is_turn_record(record)
+
+
+def ledger_turns() -> list[dict[str, Any]]:
+    return [event for event in read_event_log() if is_turn_record(event)]
+
+
+def ledger_effects() -> list[dict[str, Any]]:
+    return [event for event in read_event_log() if is_effect_record(event)]
+
+
+def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
+    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
+    monkeypatch.setattr(
+        zeta_runner,
+        "run_agent_turn",
+        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
+            events=[
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "tool_call_id": "call-1",
+                    "name": "bash",
+                    "input": {"command": "uv run pytest", "reason": "Run tests."},
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-1",
+                    "name": "bash",
+                    "result": {
+                        "ok": True,
+                        "handoff": {
+                            "type": SHELL_PROMPT_HANDOFF_TYPE,
+                            "command": "uv run pytest",
+                            "reason": "Run tests.",
+                        },
+                    },
+                },
+            ],
+            handoff={
+                "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "command": "uv run pytest",
+                "reason": "Run tests.",
+            },
+            model_telemetry_calls=[
+                {"usage": {"prompt_tokens": 7, "completion_tokens": 3}},
+                {"usage": {"prompt_tokens": 11, "completion_tokens": 5}},
+            ],
+            prompt_traces=[PromptTrace(prompt_object_id="sha256:p1")],
+        ),
+    )
+
+    code = zeta_runner.run_agent_step("repair the tests", glyph=",,")
+
+    assert code == 0
+    (turn,) = ledger_turns()
+    assert turn["workflow"] == "propose"
+    assert turn["objective"] == "repair the tests"
+    assert turn["outcome"] == TURN_OUTCOME_STAGED
+    assert turn["contract"]["staged"] is True
+    assert "bash" in turn["contract"]["allowed_tools"]
+    assert turn["prompt_object_ids"] == ["sha256:p1"]
+    assert turn["cost"]["input_tokens"] == 18
+    assert turn["cost"]["output_tokens"] == 8
+    assert turn["cost"]["model_calls"] == 2
+    assert turn["cost"]["wall_ms"] >= 0
+    (effect,) = ledger_effects()
+    assert turn["effect_ids"] == [effect["effect_id"]]
+    assert effect["turn_id"] == turn["turn_id"]
+    assert effect["kind"] == EFFECT_KIND_COMMAND
+    assert effect["staged"] is True
+    assert effect["command"] == "uv run pytest"
+    assert effect["tool_call_id"] == "call-1"
+    assert "exit_status" not in effect
+
+
+def test_do_step_records_executed_turn_with_file_effect(monkeypatch) -> None:
+    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
+    monkeypatch.setattr(
+        zeta_runner,
+        "run_agent_turn",
+        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
+            final_text="done",
+            events=[
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "tool_call_id": "call-1",
+                    "name": "write",
+                    "input": {"path": "a.txt", "content": "hello\n"},
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-1",
+                    "name": "write",
+                    "result": {
+                        "ok": True,
+                        "content": [{"type": "text", "text": "wrote a.txt"}],
+                        "metadata": {
+                            "mode": "direct",
+                            "path": "a.txt",
+                            "before_hash": "sha256:before",
+                            "after_hash": "sha256:after",
+                        },
+                    },
+                },
+            ],
+            model_telemetry_calls=[
+                {"usage": {"prompt_tokens": 9, "completion_tokens": 4}}
+            ],
+        ),
+    )
+
+    code = zeta_runner.run_agent_step("write the file", glyph=",,,")
+
+    assert code == 0
+    (turn,) = ledger_turns()
+    assert turn["workflow"] == "do"
+    assert turn["outcome"] == TURN_OUTCOME_EXECUTED
+    assert turn["contract"]["staged"] is False
+    (effect,) = ledger_effects()
+    assert turn["effect_ids"] == [effect["effect_id"]]
+    assert effect["kind"] == "file_write"
+    assert effect["staged"] is False
+    assert effect["path"] == "a.txt"
+    assert effect["before_hash"] == "sha256:before"
+    assert effect["after_hash"] == "sha256:after"
+
+
+def test_zeta_step_tags_timeline_events_with_turn_id(monkeypatch) -> None:
+    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
+    monkeypatch.setattr(
+        zeta_runner,
+        "run_agent_turn",
+        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
+            final_text="done",
+            events=[{"type": "assistant_message", "content": "done"}],
+        ),
+    )
+
+    code = zeta_runner.run_agent_step("answer", glyph=",,")
+
+    assert code == 0
+    (turn,) = ledger_turns()
+    tagged = [
+        event
+        for event in zeta_timeline.current_timeline()
+        if event.get("turn_id") == turn["turn_id"]
+    ]
+    assert tagged
+
+
+def test_zeta_step_records_failed_turn_without_answer(monkeypatch) -> None:
+    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
+    monkeypatch.setattr(
+        zeta_runner,
+        "run_agent_turn",
+        lambda *args, **kwargs: zeta_agent.AgentTurnResult(events=[]),
+    )
+
+    code = zeta_runner.run_agent_step("do nothing", glyph=",,")
+
+    assert code == 1
+    (turn,) = ledger_turns()
+    assert turn["outcome"] == TURN_OUTCOME_FAILED
+
+
+def test_zeta_step_records_aborted_turn_on_runtime_error(monkeypatch) -> None:
+    def raise_runtime_error(*args, **kwargs) -> zeta_agent.AgentTurnResult:
+        raise RuntimeError("model endpoint is not reachable")
+
+    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", raise_runtime_error)
+
+    with pytest.raises(RuntimeError):
+        zeta_runner.run_agent_step("crash", glyph=",,")
+
+    (turn,) = ledger_turns()
+    assert turn["outcome"] == TURN_OUTCOME_ABORTED
+    assert set(turn["cost"]) == {"wall_ms"}
+    assert turn["effect_ids"] == []
+
+
+def test_ask_records_answered_turn_record(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
+    monkeypatch.setattr(
+        ask_runner,
+        "run_agent_turn",
+        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
+            final_text="the answer",
+            events=[{"type": "assistant_message", "content": "the answer"}],
+            model_telemetry_calls=[
+                {"usage": {"prompt_tokens": 21, "completion_tokens": 6}}
+            ],
+            prompt_traces=[PromptTrace(prompt_object_id="sha256:ask1")],
+        ),
+    )
+
+    code = ask_runner.run_tool_ask(
+        "ask system",
+        "Why did it fail?",
+        input_text="Why did it fail?",
+    )
+
+    assert code == 0
+    capsys.readouterr()
+    (turn,) = ledger_turns()
+    assert turn["workflow"] == "ask"
+    assert turn["objective"] == "Why did it fail?"
+    assert turn["outcome"] == "answered"
+    assert turn["contract"]["staged"] is False
+    assert turn["contract"]["allowed_tools"] == ["read", "grep", "ls"]
+    assert turn["prompt_object_ids"] == ["sha256:ask1"]
+    assert turn["cost"]["model_calls"] == 1
+    assert ledger_effects() == []
+
+
+def test_record_turn_emits_run_turn_and_command_effect() -> None:
+    record_turn(
+        "uv run pytest",
+        1,
+        "/repo",
+        stderr_snippet="test failed",
+        duration_ms=42,
+    )
+
+    (turn,) = ledger_turns()
+    assert turn["workflow"] == "run"
+    assert turn["objective"] == "uv run pytest"
+    assert turn["outcome"] == TURN_OUTCOME_FAILED
+    assert turn["contract"] == {
+        "workflow": "run",
+        "allowed_tools": [],
+        "staged": False,
+    }
+    assert "agent" not in turn
+    assert "cost" not in turn
+    assert turn["cwd"] == "/repo"
+    (effect,) = ledger_effects()
+    assert turn["effect_ids"] == [effect["effect_id"]]
+    assert effect["turn_id"] == turn["turn_id"]
+    assert effect["kind"] == EFFECT_KIND_COMMAND
+    assert effect["command"] == "uv run pytest"
+    assert effect["exit_status"] == 1
+    assert effect["duration_ms"] == 42
+    assert effect["staged"] is False
+
+
+def test_record_turn_marks_clean_exit_executed() -> None:
+    record_turn("git status", 0, "/repo")
+
+    (turn,) = ledger_turns()
+    assert turn["outcome"] == TURN_OUTCOME_EXECUTED
+    (effect,) = ledger_effects()
+    assert effect["exit_status"] == 0
+    assert "duration_ms" not in effect
+
+
+def test_record_turn_skips_ledger_for_skippable_commands() -> None:
+    record_turn(", why did this fail", 0, "/repo")
+
+    assert ledger_turns() == []
+    assert ledger_effects() == []
+
+
+def test_shell_handoff_resolution_emits_handoff_effect() -> None:
+    handoff_meta = {
+        "tool_call_id": "call-1",
+        "name": "bash",
+        "command": "uv run pytest",
+        "reason": "Run tests.",
+        "time": 100.0,
+        "turn_id": "turn-stage-1",
+    }
+    turns = [
+        {
+            "id": "t1",
+            "time": 101.0,
+            "command": "uv run pytest",
+            "status": 2,
+            "turn_cwd": "/repo",
+        }
+    ]
+
+    result = sigil_handoff.shell_handoff_result(handoff_meta, turns)
+
+    assert result["outcome"] == SHELL_HANDOFF_OUTCOME_EXECUTED
+    (effect,) = ledger_effects()
+    assert effect["kind"] == "handoff"
+    assert effect["turn_id"] == "turn-stage-1"
+    assert effect["tool_call_id"] == "call-1"
+    assert effect["resolved_outcome"] == SHELL_HANDOFF_OUTCOME_EXECUTED
+    assert effect["command"] == "uv run pytest"
+    assert effect["exit_status"] == 2
+    assert effect["staged"] is True
+
+
+def test_cancelled_handoff_resolution_emits_cancelled_effect() -> None:
+    handoff_meta = {
+        "tool_call_id": "call-1",
+        "name": "bash",
+        "command": "uv run pytest",
+        "reason": "Run tests.",
+        "time": 100.0,
+        "turn_id": "turn-stage-1",
+    }
+    turns = [
+        {
+            "id": "t1",
+            "time": 101.0,
+            "command": "git status",
+            "status": 0,
+            "turn_cwd": "/repo",
+        }
+    ]
+
+    result = sigil_handoff.shell_handoff_result(handoff_meta, turns)
+
+    assert result["outcome"] == SHELL_HANDOFF_OUTCOME_CANCELLED
+    (effect,) = ledger_effects()
+    assert effect["resolved_outcome"] == SHELL_HANDOFF_OUTCOME_CANCELLED
+    assert effect["command"] == "uv run pytest"
+    assert effect["turn_id"] == "turn-stage-1"
+    assert "exit_status" not in effect
+
+
+def test_latest_unresolved_shell_handoff_surfaces_turn_id() -> None:
+    timeline = [
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "bash",
+            "turn_id": "turn-stage-1",
+            "time": 100.0,
+            "result": {
+                "ok": True,
+                "handoff": {
+                    "type": SHELL_PROMPT_HANDOFF_TYPE,
+                    "command": "make",
+                    "reason": "Build.",
+                },
+            },
+        }
+    ]
+
+    handoff_meta = sigil_handoff.latest_unresolved_shell_handoff(timeline)
+
+    assert handoff_meta["turn_id"] == "turn-stage-1"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 from collections.abc import Callable
@@ -117,6 +118,22 @@ def handoff(
     command: str, reason: str, *, artifact: str | None = None
 ) -> dict[str, Any]:
     return shell_handoff_tool_result(command, reason, artifact=artifact)
+
+
+def content_hash(data: bytes | str) -> str:
+    """Return the sha256 content address of file bytes or UTF-8 text."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def file_content_hash(path: str | Path) -> str | None:
+    """Return the content address of a file, or None if it cannot be read."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return None
+    return content_hash(data)
 
 
 def write_temp(prefix: str, suffix: str, content: str) -> Path:

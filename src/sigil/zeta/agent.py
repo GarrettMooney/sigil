@@ -57,6 +57,7 @@ class AgentTurnResult:
     handoff: dict[str, Any] | None = None
     final_text_streamed: bool = False
     model_telemetry: dict[str, Any] = field(default_factory=dict)
+    model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
     prompt_traces: list[PromptTrace] = field(default_factory=list)
 
 
@@ -77,6 +78,7 @@ def run_agent_turn(
     allowed_tools = agent_allowed_tools(config)
     events: list[dict[str, Any]] = []
     latest_model_telemetry: dict[str, Any] = {}
+    model_telemetry_calls: list[dict[str, Any]] = []
     prompt_traces: list[PromptTrace] = []
     builder = prompt_builder or PromptBuilder(transform=prompt_transform_from_env())
     tools = model_tool_descriptors(allowed_tools)
@@ -105,6 +107,7 @@ def run_agent_turn(
             prompt_traces.append(prompt_trace)
         if model_telemetry:
             latest_model_telemetry = model_telemetry
+            model_telemetry_calls.append(model_telemetry)
         message_event = assistant_message_event(assistant)
         if prompt_trace is not None:
             attach_prompt_trace(message_event, prompt_trace)
@@ -117,6 +120,7 @@ def run_agent_turn(
                 events=events,
                 final_text_streamed=streamed_content,
                 model_telemetry=latest_model_telemetry,
+                model_telemetry_calls=model_telemetry_calls,
                 prompt_traces=prompt_traces,
             )
         for index, tool_call in enumerate(tool_calls):
@@ -138,17 +142,20 @@ def run_agent_turn(
                     events=events,
                     handoff=result_event.handoff,
                     model_telemetry=latest_model_telemetry,
+                    model_telemetry_calls=model_telemetry_calls,
                     prompt_traces=prompt_traces,
                 )
             if result_event.stop:
                 return AgentTurnResult(
                     events=events,
                     model_telemetry=latest_model_telemetry,
+                    model_telemetry_calls=model_telemetry_calls,
                     prompt_traces=prompt_traces,
                 )
     return AgentTurnResult(
         events=events,
         model_telemetry=latest_model_telemetry,
+        model_telemetry_calls=model_telemetry_calls,
         prompt_traces=prompt_traces,
     )
 

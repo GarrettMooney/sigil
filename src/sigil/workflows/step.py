@@ -13,6 +13,7 @@ from typing import Any, Literal, TextIO
 
 from ..agent_io import (
     TurnEventRecorder,
+    TurnLedger,
     TurnRenderer,
     build_turn_renderer,
     event_model_telemetry,
@@ -24,6 +25,13 @@ from ..agent_io import (
 )
 from ..display.render import render_tool_result_summary, thinking_status_factory
 from ..display.summarize import render_handoff_lines
+from ..protocols import (
+    TURN_OUTCOME_ABORTED,
+    TURN_OUTCOME_ANSWERED,
+    TURN_OUTCOME_EXECUTED,
+    TURN_OUTCOME_FAILED,
+    TURN_OUTCOME_STAGED,
+)
 from ..zeta.agent import AgentConfig, run_agent_turn
 from ..zeta.context import load_project_context
 from ..zeta.models import active_model_selection, model_selection_event
@@ -62,6 +70,13 @@ def run_agent_step(
         stdin_text=stdin_text,
     )
     enabled_tools = enabled_tool_tuple(allowed_tools)
+    ledger = TurnLedger(
+        workflow=workflow_for_glyph(glyph),
+        objective=objective,
+        allowed_tools=enabled_tools,
+        staged=execution_mode_for_glyph(glyph) == "handoff",
+        agent=model_selection_event(selected_model) if selected_model else None,
+    )
     prior_timeline = current_timeline()
     user_event: dict[str, Any] = {
         "type": "user_message",
@@ -70,6 +85,7 @@ def run_agent_step(
         "runtime": "zeta",
         "system": system_prompt(system, allowed_tools=enabled_tools),
         "available_tools": list(enabled_tools),
+        "turn_id": ledger.turn_id,
     }
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
@@ -82,6 +98,7 @@ def run_agent_step(
         handoff_path=handoff_path,
         handoff_output=handoff_output,
         render_output=output,
+        ledger=ledger,
     )
     context_footer = renderer.context_footer
     try:
@@ -116,8 +133,10 @@ def run_agent_step(
         )
     except RuntimeError as error:
         record_turn_abort(error, glyph=glyph)
+        ledger.finish(TURN_OUTCOME_ABORTED)
         raise
     recorder.replay(result)
+    ledger.add_model_calls(result.model_telemetry_calls)
     status = recorder.status
     if status is not None:
         record_agent_model_telemetry(
@@ -125,6 +144,7 @@ def run_agent_step(
             glyph=glyph,
             prompt_traces=result.prompt_traces,
         )
+        ledger.finish(TURN_OUTCOME_STAGED, prompt_traces=result.prompt_traces)
         if context_footer is not None:
             context_footer.finalize(result.model_telemetry)
         return status
@@ -132,6 +152,10 @@ def run_agent_step(
         record_agent_model_telemetry(
             result.model_telemetry,
             glyph=glyph,
+            prompt_traces=result.prompt_traces,
+        )
+        ledger.finish(
+            TURN_OUTCOME_EXECUTED if ledger.effect_ids else TURN_OUTCOME_ANSWERED,
             prompt_traces=result.prompt_traces,
         )
         if context_footer is not None:
@@ -144,6 +168,7 @@ def run_agent_step(
         if context_footer is not None:
             context_footer.finalize(result.model_telemetry)
         return 0
+    ledger.finish(TURN_OUTCOME_FAILED, prompt_traces=result.prompt_traces)
     print("Zeta stopped without a final answer.", file=sys.stderr)
     return 1
 
@@ -165,8 +190,9 @@ class AgentStepEventRecorder(TurnEventRecorder):
         handoff_path: str | Path | None,
         handoff_output: HandoffOutput,
         render_output: TextIO,
+        ledger: TurnLedger | None = None,
     ) -> None:
-        super().__init__(renderer, render_output=render_output)
+        super().__init__(renderer, render_output=render_output, ledger=ledger)
         self.tag_fields = {"glyph": glyph}
         self.handoff_path = handoff_path
         self.handoff_output = handoff_output
@@ -238,6 +264,14 @@ def edit_mode_for_glyph(glyph: str) -> EditMode:
     if glyph == ",,,":
         return "direct_replace"
     return "review_patch"
+
+
+def workflow_for_glyph(glyph: str) -> str:
+    if glyph == ",,,":
+        return "do"
+    if glyph == ",,":
+        return "propose"
+    return glyph
 
 
 def execution_mode_for_glyph(glyph: str) -> ExecutionMode:

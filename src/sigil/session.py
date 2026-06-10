@@ -21,7 +21,16 @@ from .failure import (
     record_failure,
     truncate_snippet,
 )
+from .protocols import (
+    EFFECT_KIND_COMMAND,
+    TURN_OUTCOME_EXECUTED,
+    TURN_OUTCOME_FAILED,
+    effect_record,
+    turn_contract,
+    turn_record,
+)
 from .state import (
+    append_event,
     append_jsonl_line,
     read_jsonl,
     read_jsonl_path,
@@ -30,6 +39,8 @@ from .state import (
     state_dir,
     write_text_atomic,
 )
+
+RUN_WORKFLOW = "run"
 
 SESSION_FILES = (
     "last-tools.jsonl",
@@ -243,6 +254,7 @@ def record_turn(
     cwd: str | None = None,
     stdout_snippet: str | None = None,
     stderr_snippet: str | None = None,
+    duration_ms: int | None = None,
 ) -> None:
     """Persist one shell turn and fan out to failure recording on non-zero exit."""
     if turn_is_skippable(command):
@@ -265,6 +277,7 @@ def record_turn(
     if stderr_text:
         entry["stderr_snippet"] = stderr_text
     _append_recent_turn(entry)
+    record_run_ledger(command, status, turn_cwd, duration_ms)
 
     if status != 0:
         record_failure(
@@ -274,6 +287,38 @@ def record_turn(
             stdout_snippet=stdout_text,
             stderr_snippet=stderr_text,
         )
+
+
+def record_run_ledger(
+    command: str,
+    status: int,
+    cwd: str,
+    duration_ms: int | None,
+) -> None:
+    """Append the run-workflow turn and command effect for one shell command."""
+    turn_id = str(uuid.uuid4())
+    effect_id = str(uuid.uuid4())
+    append_event(
+        effect_record(
+            effect_id,
+            turn_id=turn_id,
+            kind=EFFECT_KIND_COMMAND,
+            staged=False,
+            command=command,
+            exit_status=status,
+            duration_ms=duration_ms,
+        )
+    )
+    turn = turn_record(
+        turn_id,
+        workflow=RUN_WORKFLOW,
+        objective=command,
+        contract=turn_contract(RUN_WORKFLOW, (), staged=False),
+        outcome=TURN_OUTCOME_EXECUTED if status == 0 else TURN_OUTCOME_FAILED,
+        effect_ids=[effect_id],
+    )
+    turn["cwd"] = cwd
+    append_event(turn)
 
 
 def _append_recent_turn(entry: dict[str, Any]) -> None:

@@ -6,7 +6,17 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from .base import ToolSpec, analysis, effect, error_result, handoff, missing, write_temp
+from .base import (
+    ToolSpec,
+    analysis,
+    content_hash,
+    effect,
+    error_result,
+    file_content_hash,
+    handoff,
+    missing,
+    write_temp,
+)
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -41,11 +51,13 @@ def stage(params: dict[str, Any]) -> dict[str, Any]:
         return error_result("missing-path", "missing path")
     content = str(params.get("content") or "")
     path = write_temp("zeta-write-", ".tmp", content)
-    return handoff(
+    result = handoff(
         f"cp {shlex.quote(str(path))} {shlex.quote(dest)}",
         str(params.get("reason") or f"Write {dest}."),
         artifact=str(path),
     )
+    result["metadata"] = write_hashes(dest, content) | {"path": dest}
+    return result
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:
@@ -53,6 +65,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     if not dest:
         return error_result("missing-path", "missing path")
     content = str(params.get("content") or "")
+    hashes = write_hashes(dest, content)
     try:
         Path(dest).write_text(content, encoding="utf-8")
     except OSError as exc:
@@ -60,5 +73,14 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
         "content": [{"type": "text", "text": f"wrote {dest}"}],
-        "metadata": {"mode": "direct", "path": dest},
+        "metadata": {"mode": "direct", "path": dest, **hashes},
     }
+
+
+def write_hashes(dest: str, content: str) -> dict[str, str]:
+    """Hash the current file (when readable) and the content replacing it."""
+    hashes = {"after_hash": content_hash(content)}
+    before_hash = file_content_hash(dest)
+    if before_hash is not None:
+        hashes["before_hash"] = before_hash
+    return hashes

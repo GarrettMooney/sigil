@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 from typing import BinaryIO, Protocol
 
 import click
@@ -71,6 +72,7 @@ def cmd_run(ctx: click.Context, use_shell: bool, argv: tuple[str, ...]) -> int:
     stdout_tail = TailBuffer(capture_bytes)
     stderr_tail = TailBuffer(capture_bytes)
     command = command_text(argv, use_shell)
+    started = time.monotonic()
 
     try:
         proc = start_process(argv, command, use_shell)
@@ -121,6 +123,7 @@ def cmd_run(ctx: click.Context, use_shell: bool, argv: tuple[str, ...]) -> int:
         os.getcwd(),
         stdout_snippet=stdout_tail.text(),
         stderr_snippet=stderr_tail.text(),
+        duration_ms=int((time.monotonic() - started) * 1000),
     )
     ctx.exit(status)
 

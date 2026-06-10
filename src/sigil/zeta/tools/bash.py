@@ -6,6 +6,7 @@ import os
 import shlex
 import signal
 import subprocess
+import time
 from typing import Any
 
 from .base import ToolSpec, analysis, effect, error_result, handoff, missing
@@ -55,6 +56,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     command = str(params.get("command") or "").strip()
     if not command:
         return error_result("missing-command", "missing command")
+    started = time.monotonic()
     try:
         proc = subprocess.Popen(
             command,
@@ -72,6 +74,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
         timed_out = True
         kill_process_group(proc)
         stdout_bytes, stderr_bytes = proc.communicate()
+    duration_ms = int((time.monotonic() - started) * 1000)
     stdout, stdout_truncated = bounded_output(decode_output(stdout_bytes))
     stderr, stderr_truncated = bounded_output(decode_output(stderr_bytes))
     status = proc.returncode
@@ -89,6 +92,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
             "mode": "direct",
             "command": command,
             "status": status,
+            "duration_ms": duration_ms,
             "timed_out": timed_out,
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
