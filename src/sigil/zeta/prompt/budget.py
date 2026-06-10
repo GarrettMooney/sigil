@@ -10,13 +10,6 @@ from .components import PromptComponent
 
 
 @dataclass(frozen=True)
-class ContextBudget:
-    """Maximum prompt budget in approximate tokens."""
-
-    max_tokens: int
-
-
-@dataclass(frozen=True)
 class ComponentUsage:
     """Estimated token usage for one prompt component."""
 

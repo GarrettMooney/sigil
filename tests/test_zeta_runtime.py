@@ -436,22 +436,6 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
     assert reopened.stats().object_count == 2
 
 
-def test_zeta_trace_conditional_ref_moves_protect_against_outdated_writers() -> None:
-    store = zeta_trace.InMemoryStore()
-    first_id = store.put_object(
-        zeta_trace.Object(kind="value", schema="v1", data={"value": 1})
-    )
-    second_id = store.put_object(
-        zeta_trace.Object(kind="value", schema="v1", data={"value": 2})
-    )
-
-    assert store.move_ref("value/current", first_id, expected_id=None) is True
-    assert store.move_ref("value/current", second_id, expected_id=None) is False
-    assert store.get_ref("value/current") == first_id
-    assert store.move_ref("value/current", second_id, expected_id=first_id) is True
-    assert store.get_ref("value/current") == second_id
-
-
 def test_sigil_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
     store = zeta_trace.InMemoryStore()
     parent_id = store.put_object(
@@ -613,33 +597,11 @@ def test_zeta_prompt_transform_factory_from_env() -> None:
     )
 
     assert isinstance(transform, zeta_prompt.BudgetThresholdPromptTransform)
-    assert transform.budget == zeta_prompt.ContextBudget(7)
+    assert transform.max_tokens == 7
     assert isinstance(transform.transform, zeta_prompt.StructuralTrimPromptTransform)
     assert isinstance(
         zeta_prompt.prompt_transform_from_env({}), zeta_prompt.NoOpPromptTransform
     )
-
-
-def test_zeta_chained_transform_applies_in_order() -> None:
-    class AppendKind:
-        def __init__(self, suffix: str) -> None:
-            self.suffix = suffix
-
-        def apply(
-            self,
-            components: list[zeta_prompt.PromptComponent],
-        ) -> list[zeta_prompt.PromptComponent]:
-            return [
-                zeta_prompt.PromptComponent(
-                    kind=component.kind + self.suffix,
-                    message=component.message,
-                )
-                for component in components
-            ]
-
-    chained = zeta_prompt.ChainedTransform((AppendKind("a"), AppendKind("b")))
-
-    assert chained.apply([zeta_prompt.PromptComponent(kind="x")])[0].kind == "xab"
 
 
 def test_zeta_render_stub_contract() -> None:

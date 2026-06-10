@@ -5,7 +5,6 @@ from collections.abc import Mapping
 
 from .budget import (
     ComponentUsage,
-    ContextBudget,
     ContextUsage,
     estimated_tokens,
     estimated_tokens_for_text,
@@ -47,7 +46,6 @@ from .compaction import (
 )
 from .transforms import (
     BudgetThresholdPromptTransform,
-    ChainedTransform,
     NoOpPromptTransform,
     PromptTransform,
 )
@@ -67,12 +65,12 @@ def prompt_transform_from_env(
     if mode == "structural":
         return BudgetThresholdPromptTransform(
             StructuralTrimPromptTransform(),
-            ContextBudget(threshold),
+            threshold,
         )
     if mode == "task_state":
         return BudgetThresholdPromptTransform(
             TaskStateExtractionPromptTransform(),
-            ContextBudget(threshold),
+            threshold,
         )
     return NoOpPromptTransform()
 
@@ -90,9 +88,7 @@ def trim_threshold_tokens(env: Mapping[str, str]) -> int:
 __all__ = [
     "BASE_SYSTEM_PROMPT",
     "BudgetThresholdPromptTransform",
-    "ChainedTransform",
     "ComponentUsage",
-    "ContextBudget",
     "ContextUsage",
     "DEFAULT_TRIM_THRESHOLD_TOKENS",
     "GREP_TOOL_POLICY",

@@ -87,13 +87,6 @@ class Store(Protocol):
     def get_object(self, object_id: ObjectId) -> Object | None: ...
     def set_ref(self, name: str, object_id: ObjectId) -> None: ...
     def get_ref(self, name: str) -> ObjectId | None: ...
-    def move_ref(
-        self,
-        name: str,
-        object_id: ObjectId,
-        *,
-        expected_id: ObjectId | None,
-    ) -> bool: ...
     def record_derivation(self, derivation: Derivation) -> str: ...
     def derivations_for_output(self, output_id: ObjectId) -> list[Derivation]: ...
     def graph_closure(self, roots: list[ObjectId]) -> dict[ObjectId, Object]: ...
@@ -221,18 +214,6 @@ class InMemoryStore(StoreBase):
 
     def get_ref(self, name: str) -> ObjectId | None:
         return self._refs.get(name)
-
-    def move_ref(
-        self,
-        name: str,
-        object_id: ObjectId,
-        *,
-        expected_id: ObjectId | None,
-    ) -> bool:
-        if self._refs.get(name) != expected_id:
-            return False
-        self._refs[name] = object_id
-        return True
 
     def record_derivation(self, derivation: Derivation) -> str:
         stored = normalize_derivation(derivation)
@@ -366,34 +347,6 @@ class SqliteStore(StoreBase):
         if row is None:
             return None
         return str(row["object_id"])
-
-    def move_ref(
-        self,
-        name: str,
-        object_id: ObjectId,
-        *,
-        expected_id: ObjectId | None,
-    ) -> bool:
-        with self._write_lock:
-            with self.connection:
-                row = self.connection.execute(
-                    "SELECT object_id FROM refs WHERE name = ?",
-                    (name,),
-                ).fetchone()
-                current_id = None if row is None else str(row["object_id"])
-                if current_id != expected_id:
-                    return False
-                if row is None:
-                    self.connection.execute(
-                        "INSERT INTO refs (name, object_id) VALUES (?, ?)",
-                        (name, object_id),
-                    )
-                else:
-                    self.connection.execute(
-                        "UPDATE refs SET object_id = ? WHERE name = ?",
-                        (object_id, name),
-                    )
-        return True
 
     def record_derivation(self, derivation: Derivation) -> str:
         stored = normalize_derivation(derivation)

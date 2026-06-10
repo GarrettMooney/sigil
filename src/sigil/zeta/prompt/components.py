@@ -13,7 +13,7 @@ from ..tools import allowed_tool_names
 from ..trace import Object, ObjectId
 from .system import can_read_skill_files, system_prompt
 
-Representation = Literal["full", "summary", "stub", "absent"]
+Representation = Literal["full", "summary", "stub"]
 
 
 @dataclass(frozen=True)
