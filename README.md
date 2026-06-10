@@ -274,12 +274,19 @@ sigil run [--shell] COMMAND [ARGS...]
 sigil status [--json]
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear] [--json]
+sigil model [list|use|show|clear]
+sigil zeta trace [show|closure|refs|prompts]
 sigil install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--json]
 ```
 
 The bundled Zeta agent runtime is an internal Python package; Sigil routes run
 it in-process. There is no separate `zeta` command.
+
+From shells without the zsh binding, agent steps can be scripted through the
+same command the binding uses: `sigil zeta-step --glyph ",," "OBJECTIVE"`
+stages reviewed shell work and `sigil zeta-step --continue` resumes a pending
+handoff (hidden from `--help` because the binding is the primary surface).
 
 Copy-pasteable examples:
 

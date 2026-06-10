@@ -361,15 +361,15 @@ trace objects. The canonical continuity pointer is the run head, and the
 canonical model input is the payload rebuilt from the prompt object's
 components and verified by its stored hash.
 
-Finally, the system still needs better user-facing tools. The graph exists, but
-the practical workflow should eventually include commands such as:
+Finally, the system still needs better user-facing tools. The graph is
+inspectable today with:
 
 ```text
-sigil zeta trace show --prompt-id ...
-sigil zeta trace replay --prompt-id ...
-sigil zeta trace diff --prompt-id ... --against noop
-sigil zeta trace closure --object-id ...
+sigil zeta trace show OBJECT_ID
+sigil zeta trace closure OBJECT_ID
+sigil zeta trace refs
+sigil zeta trace prompts
 ```
 
-Those tools would turn the stored graph into a day-to-day debugging and
-evaluation surface.
+Replay and diff commands do not exist yet; they are the next step toward
+turning the stored graph into a day-to-day debugging and evaluation surface.
