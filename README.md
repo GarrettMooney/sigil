@@ -305,6 +305,22 @@ sigil run cargo test
 sigil events
 ```
 
+### Exit Codes
+
+- `sigil run` mirrors the exit status of the command it ran: 127 when the
+  command is missing, 128+N when it died from signal N (so 130 after
+  Ctrl-C).
+- `sigil status` (`?`) exits 1 when the session needs attention — the last
+  recorded command failed — and 0 when clean.
+- `sigil ask` and `sigil zeta-step` (`,`, `,,`, `,,,`) exit 69 when the
+  model endpoint is down or fails mid-answer (sysexits `EX_UNAVAILABLE`);
+  `sigil doctor` diagnoses the endpoint.
+- `sigil model list` exits 1 when the profile config has diagnostics, and
+  `sigil doctor` exits 1 when a check fails, even though both still print
+  their report.
+- Any command exits 127 when an executable it needs is missing and 1 on
+  filesystem permission errors.
+
 ## State
 
 Sigil writes event-sourced state under `~/.sigil/` by default. Set
