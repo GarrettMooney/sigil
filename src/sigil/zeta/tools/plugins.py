@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from .base import ToolSpec, analysis, diagnostic, error_result
+from .base import EFFECT_KINDS, ToolSpec, analysis, diagnostic, error_result
 
 DEFAULT_TIMEOUT_MS = 30_000
 MAX_STDERR_LENGTH = 2_000
@@ -198,6 +198,7 @@ def tool_spec_from_metadata(value: Any) -> tuple[ToolSpec | None, str]:
     description = value.get("description")
     schema = value.get("schema")
     interactive = value.get("interactive")
+    effects = value.get("effects", [])
     if not isinstance(name, str) or not name:
         return None, "metadata.name must be a non-empty string"
     if not isinstance(description, str):
@@ -206,7 +207,10 @@ def tool_spec_from_metadata(value: Any) -> tuple[ToolSpec | None, str]:
         return None, "metadata.schema must be an object"
     if not isinstance(interactive, bool):
         return None, "metadata.interactive must be a boolean"
-    return ToolSpec(name, description, schema, interactive), ""
+    if not isinstance(effects, list) or not set(effects) <= EFFECT_KINDS:
+        kinds = ", ".join(sorted(EFFECT_KINDS))
+        return None, f"metadata.effects must be an array drawn from: {kinds}"
+    return ToolSpec(name, description, schema, interactive, tuple(effects)), ""
 
 
 def run_plugin_json(

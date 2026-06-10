@@ -451,7 +451,7 @@ def handle_tool_call(
     emit_event(events, call_event, event_sink)
     emit_event(events, analysis_event, event_sink)
     try:
-        result = run_tool_for_mode(
+        result = run_tool(
             name,
             params,
             edit_mode=edit_mode,
@@ -495,25 +495,6 @@ def parse_tool_arguments(arguments: Any) -> tuple[dict[str, Any], str]:
     if not isinstance(params, dict):
         return {}, "function arguments JSON was not an object"
     return cast(dict[str, Any], params), ""
-
-
-def run_tool_for_mode(
-    name: str,
-    params: dict[str, Any],
-    *,
-    edit_mode: EditMode,
-    execution_mode: ExecutionMode,
-) -> dict[str, Any]:
-    if execution_mode == "direct":
-        return run_tool(
-            name,
-            params,
-            edit_mode=edit_mode,
-            execution_mode=execution_mode,
-        )
-    if name == "edit":
-        return run_tool(name, params, edit_mode=edit_mode)
-    return run_tool(name, params)
 
 
 def invalid_tool_result(

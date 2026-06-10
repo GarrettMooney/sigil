@@ -46,6 +46,7 @@ SPEC = ToolSpec(
         "symbols, errors, strings, or definitions."
     ),
     SCHEMA,
+    effects=("search",),
 )
 
 

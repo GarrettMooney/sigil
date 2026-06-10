@@ -80,7 +80,9 @@ def test_zeta_plugin_tool_flows_through_registry(
     assert analysis["valid"] is True
     assert analysis["effects"][0]["target"] == "install"
 
-    data = zeta_tools.run_tool("docs_search", {"query": "install"})
+    data = zeta_tools.run_tool(
+        "docs_search", {"query": "install"}, execution_mode="direct"
+    )
     assert data["ok"] is True
     assert data["content"][0]["text"] == "docs:install"
 
@@ -153,7 +155,9 @@ def test_zeta_plugin_nonzero_execution_returns_tool_error(
     write_tools_config(home, [sys.executable, str(script)])
     monkeypatch.setenv("HOME", str(home))
 
-    data = zeta_tools.run_tool("docs_search", {"query": "install"})
+    data = zeta_tools.run_tool(
+        "docs_search", {"query": "install"}, execution_mode="direct"
+    )
     assert data["ok"] is False
     assert data["error"]["code"] == "plugin-run-failed"
     assert "status 7" in data["error"]["message"]
@@ -546,3 +550,61 @@ def test_zeta_bash_analysis_accepts_shell_grammar_without_diagnostics() -> None:
     assert data["resolved"] is True
     assert [item["kind"] for item in data["effects"]] == ["execute"]
     assert data["diagnostics"] == []
+
+
+def test_zeta_plugin_without_declared_effects_is_refused_in_propose_mode(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    script = tmp_path / "plugin.py"
+    write_cli_plugin(script)
+    write_tools_config(home, [sys.executable, str(script)])
+    monkeypatch.setenv("HOME", str(home))
+
+    data = zeta_tools.run_tool("docs_search", {"query": "install"})
+
+    assert data["ok"] is False
+    assert data["error"]["code"] == "staging-unsupported"
+
+
+def test_zeta_plugin_with_read_only_effects_runs_in_propose_mode(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    script = tmp_path / "plugin.py"
+    write_cli_plugin(script, effects=["search"])
+    write_tools_config(home, [sys.executable, str(script)])
+    monkeypatch.setenv("HOME", str(home))
+
+    data = zeta_tools.run_tool("docs_search", {"query": "install"})
+
+    assert data["ok"] is True
+    assert data["content"][0]["text"] == "docs:install"
+
+
+def test_zeta_plugin_with_invalid_effects_reports_diagnostic(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    script = tmp_path / "plugin.py"
+    write_cli_plugin(script, effects=["network"])
+    write_tools_config(home, [sys.executable, str(script)])
+    monkeypatch.setenv("HOME", str(home))
+
+    data = zeta_tools.tools_list()
+    names = {tool["name"] for tool in data["tools"]}
+
+    assert "docs_search" not in names
+    assert data["diagnostics"][0]["code"] == "plugin-metadata-invalid"
+
+
+def test_zeta_builtin_metadata_declares_effects() -> None:
+    assert zeta_tools.tool_metadata("bash")["effects"] == ["execute"]
+    assert zeta_tools.tool_metadata("write")["effects"] == ["write"]
+    assert zeta_tools.tool_metadata("edit")["effects"] == ["write"]
+    assert zeta_tools.tool_metadata("read")["effects"] == ["read"]
+    assert zeta_tools.tool_metadata("grep")["effects"] == ["search"]
+    assert zeta_tools.tool_metadata("ls")["effects"] == ["read"]

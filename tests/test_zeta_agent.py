@@ -515,7 +515,9 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
         lambda name, params: {"valid": True, "resolved": True},
     )
 
-    def fake_run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
+    def fake_run_tool(
+        name: str, params: dict[str, Any], **kwargs: object
+    ) -> dict[str, Any]:
         ran.append((name, params))
         return {"ok": True, "content": [{"type": "text", "text": name}]}
 
@@ -741,8 +743,10 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
         lambda name, params: {"valid": True, "resolved": True},
     )
 
-    def fake_run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
-        del name, params
+    def fake_run_tool(
+        name: str, params: dict[str, Any], **kwargs: object
+    ) -> dict[str, Any]:
+        del name, params, kwargs
         assert [event.get("type") for event in streamed] == [
             "assistant_message",
             "tool_call",
@@ -801,7 +805,7 @@ def test_zeta_agent_turn_stops_after_handoff_tool(monkeypatch) -> None:
     monkeypatch.setattr(
         zeta_agent,
         "run_tool",
-        lambda name, params: {
+        lambda name, params, **kwargs: {
             "ok": True,
             "handoff": {
                 "type": SHELL_PROMPT_HANDOFF_TYPE,

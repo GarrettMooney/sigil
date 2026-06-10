@@ -14,6 +14,9 @@ from ...protocols import shell_handoff_tool_result
 EffectKind = Literal["read", "write", "delete", "execute", "search"]
 Resource = Literal["path", "process", "session"]
 
+EFFECT_KINDS = frozenset({"read", "write", "delete", "execute", "search"})
+READ_ONLY_EFFECT_KINDS = frozenset({"read", "search"})
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -23,6 +26,17 @@ class ToolSpec:
     description: str
     schema: dict[str, Any]
     interactive: bool = False
+    effects: tuple[EffectKind, ...] = ()
+
+    def mutates(self) -> bool:
+        """Whether the tool declares effects beyond reading.
+
+        Undeclared effects count as mutating so an unannotated tool can
+        never run unreviewed in propose mode.
+        """
+        if not self.effects:
+            return True
+        return any(kind not in READ_ONLY_EFFECT_KINDS for kind in self.effects)
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -34,6 +48,7 @@ class ToolSpec:
                 "analysis_schema": "zeta.analysis.v1",
             },
             "interactive": self.interactive,
+            "effects": list(self.effects),
         }
 
 
@@ -47,6 +62,7 @@ class ToolImpl:
     spec: ToolSpec
     analyze: ToolFunction
     run: ToolFunction
+    stage: ToolFunction | None = None
 
 
 def analysis(

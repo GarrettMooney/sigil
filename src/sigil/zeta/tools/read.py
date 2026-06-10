@@ -30,7 +30,7 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = ToolSpec("read", "Read a UTF-8 text file.", SCHEMA)
+SPEC = ToolSpec("read", "Read a UTF-8 text file.", SCHEMA, effects=("read",))
 
 
 def analyze(params: dict[str, Any]) -> dict[str, Any]:

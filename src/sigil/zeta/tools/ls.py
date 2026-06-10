@@ -30,7 +30,7 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
-SPEC = ToolSpec("ls", "List files with type and byte sizes.", SCHEMA)
+SPEC = ToolSpec("ls", "List files with type and byte sizes.", SCHEMA, effects=("read",))
 
 
 def analyze(params: dict[str, Any]) -> dict[str, Any]:

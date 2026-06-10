@@ -27,7 +27,8 @@ SPEC = ToolSpec(
     "bash",
     "Execute or stage a shell command, depending on the active workflow.",
     SCHEMA,
-    True,
+    interactive=True,
+    effects=("execute",),
 )
 
 
@@ -43,14 +44,14 @@ def analyze(params: dict[str, Any]) -> dict[str, Any]:
     return analysis(effects=[effect("execute", target, resource="process")])
 
 
-def run(params: dict[str, Any]) -> dict[str, Any]:
+def stage(params: dict[str, Any]) -> dict[str, Any]:
     command = str(params.get("command") or "").strip()
     if not command:
         return error_result("missing-command", "missing command")
     return handoff(command, str(params.get("reason") or "Run the proposed command."))
 
 
-def run_direct(params: dict[str, Any]) -> dict[str, Any]:
+def run(params: dict[str, Any]) -> dict[str, Any]:
     command = str(params.get("command") or "").strip()
     if not command:
         return error_result("missing-command", "missing command")

@@ -362,8 +362,9 @@ def write_cli_plugin(
     invalid_metadata: bool = False,
     sleep_metadata: bool = False,
     fail_run: bool = False,
+    effects: list[str] | None = None,
 ) -> None:
-    metadata = {
+    metadata: dict[str, object] = {
         "name": name,
         "description": "Search project docs.",
         "schema": {
@@ -374,6 +375,8 @@ def write_cli_plugin(
         },
         "interactive": False,
     }
+    if effects is not None:
+        metadata["effects"] = effects
     script = f"""
 from __future__ import annotations
 

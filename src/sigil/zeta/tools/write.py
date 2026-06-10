@@ -23,7 +23,8 @@ SPEC = ToolSpec(
     "write",
     "Write content directly or stage a cp handoff, depending on the active workflow.",
     SCHEMA,
-    True,
+    interactive=True,
+    effects=("write",),
 )
 
 
@@ -34,7 +35,7 @@ def analyze(params: dict[str, Any]) -> dict[str, Any]:
     return analysis(effects=[effect("write", path)])
 
 
-def run(params: dict[str, Any]) -> dict[str, Any]:
+def stage(params: dict[str, Any]) -> dict[str, Any]:
     dest = str(params.get("path") or "")
     if not dest:
         return error_result("missing-path", "missing path")
@@ -47,7 +48,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def run_direct(params: dict[str, Any]) -> dict[str, Any]:
+def run(params: dict[str, Any]) -> dict[str, Any]:
     dest = str(params.get("path") or "")
     if not dest:
         return error_result("missing-path", "missing path")

@@ -35,7 +35,8 @@ SPEC = ToolSpec(
     "edit",
     "Edit a file by exact replacement using location, old text, and new text.",
     SCHEMA,
-    True,
+    interactive=True,
+    effects=("write",),
 )
 
 
@@ -46,7 +47,7 @@ def analyze(params: dict[str, Any]) -> dict[str, Any]:
     return analysis(effects=[effect("write", location)])
 
 
-def run(params: dict[str, Any]) -> dict[str, Any]:
+def stage(params: dict[str, Any]) -> dict[str, Any]:
     edit = prepare_exact_replacement(params)
     if not isinstance(edit, ExactReplacement):
         return edit
@@ -56,7 +57,7 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def run_direct(params: dict[str, Any]) -> dict[str, Any]:
+def run(params: dict[str, Any]) -> dict[str, Any]:
     edit = prepare_exact_replacement(params)
     if not isinstance(edit, ExactReplacement):
         return edit

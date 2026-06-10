@@ -16,12 +16,12 @@ from .plugins import load_cli_plugins, user_tools_config_path
 ExecutionMode = Literal["handoff", "direct"]
 
 BUILTIN_TOOL_IMPLS: dict[str, ToolImpl] = {
-    bash.SPEC.name: ToolImpl(bash.SPEC, bash.analyze, bash.run),
-    edit.SPEC.name: ToolImpl(edit.SPEC, edit.analyze, edit.run),
+    bash.SPEC.name: ToolImpl(bash.SPEC, bash.analyze, bash.run, bash.stage),
+    edit.SPEC.name: ToolImpl(edit.SPEC, edit.analyze, edit.run, edit.stage),
     grep.SPEC.name: ToolImpl(grep.SPEC, grep.analyze, grep.run),
     ls.SPEC.name: ToolImpl(ls.SPEC, ls.analyze, ls.run),
     read.SPEC.name: ToolImpl(read.SPEC, read.analyze, read.run),
-    write.SPEC.name: ToolImpl(write.SPEC, write.analyze, write.run),
+    write.SPEC.name: ToolImpl(write.SPEC, write.analyze, write.run, write.stage),
 }
 
 BUILTIN_TOOL_SPECS: dict[str, ToolSpec] = {
@@ -167,16 +167,26 @@ def run_tool(
     edit_mode: str = "review_patch",
     execution_mode: ExecutionMode = "handoff",
 ) -> dict[str, Any]:
+    """Run one tool call under the staging contract its spec declares.
+
+    Read-only tools always run. Mutating tools run in direct mode; in
+    handoff mode they stage their work for review, and a mutating tool
+    without a staging implementation (any plugin) is refused.
+    """
     ensure_registry_loaded()
     tool = TOOL_IMPLS.get(name)
     if tool is None:
         return error_result("unknown-tool", f"unknown tool: {name}")
-    if name == bash.SPEC.name and execution_mode == "direct":
-        return bash.run_direct(params)
-    if name == write.SPEC.name and execution_mode == "direct":
-        return write.run_direct(params)
-    if name == edit.SPEC.name and (
-        edit_mode == "direct_replace" or execution_mode == "direct"
-    ):
-        return edit.run_direct(params)
-    return tool.run(params)
+    direct = execution_mode == "direct" or (
+        name == edit.SPEC.name and edit_mode == "direct_replace"
+    )
+    if direct or not tool.spec.mutates():
+        return tool.run(params)
+    if tool.stage is None:
+        declared = ", ".join(tool.spec.effects) or "undeclared"
+        return error_result(
+            "staging-unsupported",
+            f"tool {name} has effects ({declared}) that cannot be staged "
+            "for review; rerun in the do workflow (,,,)",
+        )
+    return tool.stage(params)
