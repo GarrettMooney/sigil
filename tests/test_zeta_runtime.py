@@ -6526,3 +6526,11 @@ def test_zeta_trim_env_modes_build_escalation_ladders() -> None:
     assert [type(t).__name__ for t in task_state.escalation] == [
         "DropOldestPromptTransform",
     ]
+
+
+def test_zeta_trim_unknown_mode_warns_loudly(caplog) -> None:
+    with caplog.at_level("WARNING", logger="sigil.zeta.prompt"):
+        transform = zeta_prompt.prompt_transform_from_env({"ZETA_TRIM": "structurall"})
+
+    assert isinstance(transform, zeta_prompt.NoOpPromptTransform)
+    assert any("ZETA_TRIM" in record.getMessage() for record in caplog.records)

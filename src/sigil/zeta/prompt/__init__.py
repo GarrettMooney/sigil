@@ -1,5 +1,6 @@
 """Prompt construction APIs for Zeta."""
 
+import logging
 import os
 from collections.abc import Mapping
 
@@ -52,6 +53,7 @@ from .transforms import (
 )
 
 DEFAULT_TRIM_THRESHOLD_TOKENS = 100_000
+LOGGER = logging.getLogger("sigil.zeta.prompt")
 
 
 def prompt_transform_from_env(
@@ -78,6 +80,11 @@ def prompt_transform_from_env(
             threshold,
             escalation=(DropOldestPromptTransform(max_tokens=threshold),),
         )
+    LOGGER.warning(
+        "unknown ZETA_TRIM mode %r; compaction disabled "
+        "(expected off, structural, or task_state)",
+        mode,
+    )
     return NoOpPromptTransform()
 
 
