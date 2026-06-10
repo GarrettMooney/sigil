@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import json
-import sys
-
 import click
 
 from ._base import cli
-from ._shared import pretty_print_json, read_json_stdin
+from ._shared import pretty_print_json
 from .. import handoff
 
 
@@ -18,11 +15,10 @@ def cmd_handoff() -> None:
 
 
 @cmd_handoff.command("shell-turn")
-def handoff_shell_turn() -> int:
+@click.option("--command", required=True, help="Command text the user executed.")
+@click.option("--status", type=int, required=True, help="Command exit status.")
+@click.option("--cwd", default=None, help="Working directory of the command.")
+def handoff_shell_turn(command: str, status: int, cwd: str | None) -> int:
     """Record one shell command executed after a Zeta handoff."""
-    try:
-        turn = read_json_stdin(sys.stdin)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise click.BadParameter(str(exc), param_hint="stdin") from exc
-    pretty_print_json(handoff.append_shell_turn(turn))
+    pretty_print_json(handoff.append_shell_turn(command, status, cwd))
     return 0

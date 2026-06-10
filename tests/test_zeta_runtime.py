@@ -4800,15 +4800,16 @@ def test_sigil_handoff_shell_turn_records_recent_turn(
 
     result = CliRunner().invoke(
         sigil_cli,
-        ["handoff", "shell-turn"],
-        input=json.dumps(
-            {
-                "command": "uv run pytest",
-                "status": 1,
-                "cwd": "/repo",
-                "stderr_snippet": "test failed",
-            }
-        ),
+        [
+            "handoff",
+            "shell-turn",
+            "--command",
+            "uv run pytest",
+            "--status",
+            "1",
+            "--cwd",
+            "/repo",
+        ],
     )
 
     assert result.exit_code == 0
@@ -4820,7 +4821,6 @@ def test_sigil_handoff_shell_turn_records_recent_turn(
     assert turns[0]["command"] == "uv run pytest"
     assert turns[0]["status"] == 1
     assert turns[0]["turn_cwd"] == "/repo"
-    assert turns[0]["stderr_snippet"] == "test failed"
 
 
 def test_zeta_edit_analysis_reports_location() -> None:

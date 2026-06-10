@@ -60,11 +60,6 @@ __sigil_zeta_prompt_command() {
   print -r -- "+ $command"
 }
 
-__sigil_json_string() {
-  emulate -L zsh
-  python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"
-}
-
 __sigil_json_get() {
   emulate -L zsh
   python3 -c '
@@ -123,17 +118,10 @@ __sigil_zeta_record_shell_turn() {
   emulate -L zsh
   local command="$1"
   local exit_status="$2"
-  local payload stdout_snippet stderr_snippet
-  stdout_snippet="${SIGIL_FAILURE_STDOUT:-}"
-  stderr_snippet="${SIGIL_FAILURE_STDERR:-}"
-  payload="$(printf '{"command":%s,"status":%s,"cwd":%s,"stdout_snippet":%s,"stderr_snippet":%s}' \
-    "$(__sigil_json_string "$command")" \
-    "$exit_status" \
-    "$(__sigil_json_string "$PWD")" \
-    "$(__sigil_json_string "$stdout_snippet")" \
-    "$(__sigil_json_string "$stderr_snippet")")"
-  printf '%s\n' "$payload" | "$__sigil_bin" handoff shell-turn >/dev/null 2>&1 || true
-  unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
+  "$__sigil_bin" handoff shell-turn \
+    --command "$command" \
+    --status "$exit_status" \
+    --cwd "$PWD" >/dev/null 2>&1 || true
 }
 
 __sigil_zeta_before_command() {

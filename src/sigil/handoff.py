@@ -20,20 +20,20 @@ from .protocols import (
 from .zeta import runtime as zeta_runtime
 
 
-def append_shell_turn(turn: dict[str, Any]) -> dict[str, Any]:
+def append_shell_turn(
+    command: str,
+    status: int,
+    cwd: str | None = None,
+) -> dict[str, Any]:
     """Record one user shell command for the current Zeta continuation."""
-    command = str(turn.get("command") or "")
-    status = int(turn.get("status") or 0)
-    cwd = str(turn.get("cwd") or os.getcwd())
-    stdout = optional_text(turn.get("stdout_snippet"))
-    stderr = optional_text(turn.get("stderr_snippet"))
-    record_turn(command, status, cwd, stdout_snippet=stdout, stderr_snippet=stderr)
+    turn_cwd = cwd or os.getcwd()
+    record_turn(command, status, turn_cwd)
     return {
         "ok": True,
         "type": "shell_turn_recorded",
         "command": command,
         "status": status,
-        "cwd": cwd,
+        "cwd": turn_cwd,
     }
 
 
@@ -246,7 +246,3 @@ def normalize_shell_turn(turn: dict[str, Any]) -> dict[str, Any]:
     if isinstance(stderr, str) and stderr:
         normalized["stderr_snippet"] = stderr
     return normalized
-
-
-def optional_text(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None

@@ -1,6 +1,5 @@
 from __future__ import annotations
 import errno
-import json
 import pytest
 import os
 import pty
@@ -19,9 +18,8 @@ def make_stub(tmp: Path) -> Path:
         textwrap.dedent(
             """\
             #!/usr/bin/env bash
-            if [ "$*" = "handoff shell-turn" ]; then
-              payload="$(cat)"
-              printf '%s\t%s\n' "$*" "$payload" >> "$SIGIL_STUB_LOG"
+            if [ "$1" = "handoff" ] && [ "$2" = "shell-turn" ]; then
+              printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
               printf '%s\n' '{"ok":true}'
               exit 0
             fi
@@ -183,13 +181,8 @@ def zeta_step_calls() -> list[str]:
     return ["zeta-step"]
 
 
-def shell_turn_payloads(tmp: Path) -> list[dict[str, object]]:
-    payloads = []
-    for line in read_log(tmp):
-        if not line.startswith("handoff shell-turn\t"):
-            continue
-        payloads.append(json.loads(line.split("\t", 1)[1]))
-    return payloads
+def shell_turn_calls(tmp: Path) -> list[str]:
+    return [line for line in read_log(tmp) if line.startswith("handoff shell-turn ")]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -509,11 +502,36 @@ def test_zsh_records_turns_only_after_zeta_handoff() -> None:
             stub,
         )
         assert_success(result)
-        payloads = shell_turn_payloads(tmp)
-        assert len(payloads) == 1
-        assert payloads[0]["command"] == "echo edited"
-        assert payloads[0]["status"] == 0
-        assert payloads[0]["cwd"] == str(ROOT)
+        calls = shell_turn_calls(tmp)
+        assert len(calls) == 1
+        assert "--command echo edited" in calls[0]
+        assert "--status 0" in calls[0]
+        assert f"--cwd {ROOT}" in calls[0]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_shell_turn_recording_does_not_spawn_python3() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/shell/zsh/sigil.zsh
+                function python3() { print -- "python3 used" >> "$ZLE_LOG"; return 127 }
+                __sigil_zeta_record_shell_turn "echo hi" 3
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        calls = shell_turn_calls(tmp)
+        assert len(calls) == 1
+        assert "--command echo hi" in calls[0]
+        assert "--status 3" in calls[0]
+        assert not (tmp / "zle.log").exists()
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
