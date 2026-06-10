@@ -117,9 +117,6 @@ def event_workflow(event: dict[str, object]) -> str:
     workflow = event.get("workflow")
     if isinstance(workflow, str) and workflow:
         return workflow
-    legacy_route = event.get("route")
-    if isinstance(legacy_route, str) and legacy_route:
-        return legacy_route
     return "-"
 
 
@@ -127,7 +124,6 @@ def event_label(event_type: str) -> str:
     """Return the lifecycle label without workflow information."""
     labels = {
         "ask_requested": "ask request",
-        "answer_requested": "ask request",
         "answer": "answer",
         "tool_start": "tool start",
         "tool_end": "tool end",
@@ -138,7 +134,7 @@ def event_label(event_type: str) -> str:
 
 def event_detail(event: dict[str, object], event_type: str) -> str:
     """Return the most useful human summary available on an event."""
-    if event_type in {"ask_requested", "answer_requested"}:
+    if event_type == "ask_requested":
         return clean_summary_text(event.get("input")) or "ask request"
     if event_type == "tool_start":
         tool = clean_summary_text(event.get("tool")) or "tool"

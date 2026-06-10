@@ -57,7 +57,12 @@ def cmd_zeta_step(
         render_shell_result(sigil_handoff.append_shell_result(), output=sys.stderr)
         if not objective:
             objective = CONTINUE_OBJECTIVE
-    run_step = run_do_step if glyph == ",,," else run_propose_step
+    if glyph == ",,,":
+        run_step = run_do_step
+    elif glyph == ",,":
+        run_step = run_propose_step
+    else:
+        raise click.UsageError("--glyph must be ',,' or ',,,'")
     return run_step(
         objective,
         handoff_path=handoff_file,
