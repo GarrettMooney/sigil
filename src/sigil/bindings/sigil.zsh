@@ -311,9 +311,8 @@ __sigil_install_lifecycle_hooks
 
 # ── History Filtering ────────────────────────────────────────────────────
 
-# The history file should stay a list of things the shell can re-run. Sigil
-# instructions are prompts, not shell commands — but they stay on the internal
-# history list (return 2) so up-arrow can recall and edit them in-session.
+# Glyph lines are prompts, not commands the shell can re-run: keep them out
+# of the history file, but recallable with up-arrow during the session.
 if __sigil_glyphs_enabled; then
   __sigil_zshaddhistory() {
     emulate -L zsh
