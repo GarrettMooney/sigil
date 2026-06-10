@@ -640,7 +640,7 @@ def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> No
     assert len(prompt_messages) == 1
 
 
-def test_zeta_agent_turn_orders_follow_up_history_before_current_events(
+def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
     monkeypatch,
 ) -> None:
     captured: list[list[dict[str, Any]]] = []

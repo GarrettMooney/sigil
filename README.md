@@ -283,7 +283,7 @@ sigil events
 The glyphs are thin shell functions over a regular CLI:
 
 ```text
-sigil ask [--follow-up] [--json] [QUESTION]
+sigil ask [--json] [QUESTION]
 sigil run [--shell] COMMAND [ARGS...]
 sigil status [--json]
 sigil events [--limit N] [--json] [--raw]

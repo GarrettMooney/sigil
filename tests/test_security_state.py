@@ -26,16 +26,13 @@ from sigil.session import (
 )
 from sigil.state import (
     append_event,
-    read_jsonl,
     session_dir,
     session_id,
     state_dir,
-    write_jsonl,
 )
 from sigil.workflows.ask import (
     ASK_SYSTEM_PROMPT,
     ask,
-    discussion_turns,
 )
 
 
@@ -407,10 +404,9 @@ def test_question_workflows_record_glyph_and_local_tools() -> None:
 
             with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
                 assert ask("what is sigil?", json_output=True) == 0
-            fresh_turn = read_jsonl("last-ask.jsonl")[0]
-            assert fresh_turn["glyph"] == "ask"
             request_event = read_event_log()[-1]
             assert request_event["type"] == "ask_requested"
+            assert request_event["glyph"] == "ask"
             assert request_event["input"] == "what is sigil?"
             assert "question" not in request_event
             with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
@@ -423,8 +419,8 @@ def test_question_workflows_record_glyph_and_local_tools() -> None:
                     )
                     == 0
                 )
-            comma_turn = read_jsonl("last-ask.jsonl")[-1]
-            assert comma_turn["glyph"] == ","
+            comma_event = read_event_log()[-1]
+            assert comma_event["glyph"] == ","
             assert len(calls) == 2
             assert calls[0][0][0] == ASK_SYSTEM_PROMPT
             assert "available tools are read, grep, and ls only" in calls[0][0][0]
@@ -1108,44 +1104,6 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
 
     prompt = captured["prompt"]
     assert "Last failed command context:" not in prompt
-
-
-def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            record_turn("ls -la", 0, "/repo")
-            write_jsonl(
-                "last-ask.jsonl",
-                [
-                    {"role": "user", "content": "first", "event_id": "q1"},
-                    {"role": "assistant", "content": "ans", "event_id": "a1"},
-                ],
-            )
-            captured: dict[str, str] = {}
-
-            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
-                del system, kwargs
-                captured["prompt"] = prompt
-                return 0
-
-            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
-                assert (
-                    ask(
-                        "follow up",
-                        glyph="ask",
-                        tools="read,grep,ls",
-                        follow_up=True,
-                        json_output=True,
-                        history=discussion_turns(),
-                    )
-                    == 0
-                )
-
-    prompt = captured["prompt"]
-    assert "Recent shell activity" not in prompt
 
 
 def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:

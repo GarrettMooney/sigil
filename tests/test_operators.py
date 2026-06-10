@@ -46,35 +46,6 @@ def test_ask_verb_accepts_piped_input() -> None:
     ]
 
 
-def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
-    calls = []
-
-    def fake_ask(*args: object, **kwargs: object) -> int:
-        calls.append((args, kwargs))
-        return 0
-
-    with patch("sigil.cli.ask.ask", side_effect=fake_ask):
-        result = CliRunner().invoke(
-            cli,
-            ["ask", "--follow-up", "review"],
-            input="diff\n",
-        )
-
-    assert result.exit_code == 0
-    assert calls == [
-        (
-            ("review\n\nPiped input:\ndiff\n",),
-            {
-                "glyph": "ask",
-                "tools": "read,grep,ls",
-                "follow_up": True,
-                "history": [],
-                "json_output": False,
-            },
-        )
-    ]
-
-
 def test_ask_without_question_uses_default_summary_prompt() -> None:
     calls = []
 

@@ -17,7 +17,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-ASK_HISTORY = "last-ask.jsonl"
 EVENT_LOG_MAX_BYTES = 10 * 1024 * 1024
 SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 

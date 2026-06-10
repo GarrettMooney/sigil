@@ -22,7 +22,6 @@ from .failure import (
     truncate_snippet,
 )
 from .state import (
-    ASK_HISTORY,
     append_jsonl_line,
     read_jsonl,
     read_jsonl_path,
@@ -33,7 +32,6 @@ from .state import (
 )
 
 SESSION_FILES = (
-    ASK_HISTORY,
     "last-tools.jsonl",
     "last-failure.json",
     "recent-turns.jsonl",

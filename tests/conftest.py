@@ -13,8 +13,9 @@ def isolate_sigil_state(
 ) -> None:
     """Point Sigil state and session dirs at a temp dir for every test.
 
-    Without this, helpers like `discussion_turns()` read the developer's real
-    `~/.sigil` state, so tests pass only on machines with no recorded history.
+    Without this, helpers like `recent_turns()` and the zeta trace store read
+    the developer's real `~/.sigil` state, so tests pass only on machines with
+    no recorded history.
     The same applies to `HOME`: project context, skills, tool plugins, and
     model profiles are discovered under `~/.zeta` and `~/.agents`.
     """

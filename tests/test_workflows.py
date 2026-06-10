@@ -1483,8 +1483,9 @@ def test_zeta_ask_workflow_streams_markdown_with_rich_for_tty(
 
     assert code == 0
     assert "streamed answer" in visible_terminal_text(output.getvalue())
-    turns = ask_runner.discussion_turns()
-    assert [turn["content"] for turn in turns] == ["streamed answer"]
+    timeline = zeta_timeline.current_timeline()
+    assert timeline[-1]["type"] == "assistant_message"
+    assert timeline[-1]["content"] == "streamed answer"
 
 
 def test_zeta_ask_workflow_streams_text_before_tool_trace(
@@ -1702,7 +1703,7 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
     assert "\nIt is a README.\n" in capsys.readouterr().out
 
 
-def test_zeta_question_loop_passes_follow_up_history_as_turns(
+def test_zeta_question_loop_passes_prior_timeline_as_turns(
     monkeypatch,
 ) -> None:
     transcripts: list[list[dict[str, Any]]] = []
@@ -1726,26 +1727,25 @@ def test_zeta_question_loop_passes_follow_up_history_as_turns(
     monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
     monkeypatch.setattr(ask_runner, "load_project_context", lambda: "ctx")
 
+    zeta_timeline.record_event({"type": "user_message", "content": "summarize README"})
+    zeta_timeline.record_event(
+        {"type": "assistant_message", "content": "It is a Sigil README."}
+    )
+
     code = ask_runner.run_tool_ask(
         "question system",
         "and why?",
-        history=[
-            {"role": "user", "content": "summarize README"},
-            {"role": "assistant", "content": "It is a Sigil README."},
-        ],
     )
 
     assert code == 0
-    assert transcripts[0][:2] == [
-        {"role": "user", "content": "summarize README"},
-        {"role": "assistant", "content": "It is a Sigil README."},
-    ]
-    assert not any(turn.get("content") == "and why?" for turn in transcripts[0][:2])
-    assert transcripts[0][-1] == {
-        "type": "assistant_message",
-        "content": "follow-up answer",
-    }
+    contents = [str(event.get("content") or "") for event in transcripts[0]]
+    assert contents == ["summarize README", "It is a Sigil README."]
     assert captured["context"] == "ctx"
+    timeline = zeta_timeline.current_timeline()
+    assert [event["content"] for event in timeline[-2:]] == [
+        "and why?",
+        "follow-up answer",
+    ]
 
 
 def test_zeta_question_loop_falls_back_instead_of_budget_message(
@@ -1807,6 +1807,9 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
     assert "\nIt contains Sigil docs.\n" in output
     assert "It contains Sigil docs." in output
     assert "question tool budget" not in output
+    timeline = zeta_timeline.current_timeline()
+    assert timeline[-1]["type"] == "assistant_message"
+    assert timeline[-1]["content"] == "It contains Sigil docs."
 
 
 def test_zeta_answer_fallback_formats_evidence_instead_of_raw_json(
@@ -1832,8 +1835,10 @@ def test_zeta_answer_fallback_formats_evidence_instead_of_raw_json(
         "question system",
         "How would you improve it?",
         [
-            {"role": "user", "content": "What is this vault about?"},
-            {"role": "assistant", "content": "It is a CEO vault."},
+            {"type": "user_message", "content": "What is this vault about?"},
+            {"type": "assistant_message", "content": "It is a CEO vault."},
+        ],
+        [
             {
                 "type": "tool_result",
                 "tool_call_id": "call-1",
@@ -1937,10 +1942,6 @@ def test_zeta_answer_model_failure_records_turn_abort(
     messages = zeta_timeline.chat_messages(timeline)
     assert messages[-1]["role"] == "assistant"
     assert "turn aborted" in messages[-1]["content"]
-    history = read_jsonl("last-ask.jsonl")
-    assert history[-1]["role"] == "assistant"
-    assert history[-1]["aborted"] is True
-    assert "model stream failed" in history[-1]["content"]
 
 
 def test_zeta_step_model_failure_records_turn_abort(
