@@ -8,8 +8,8 @@ put in front of the model, why it was there, what it came from, and how the
 next turn reused it.
 
 This makes a Zeta run inspectable after the fact. It also gives us a substrate
-for prompt diffs, replay, context compaction, freshness checks, and future
-model-controlled context management.
+for prompt diffs, replay, context compaction, and future model-controlled
+context management.
 
 ## Core Idea
 
@@ -309,7 +309,7 @@ future, a model could propose context operations as structured actions:
 - drop this component from future prompts
 - replace these messages with a task-state object
 - rehydrate this compacted source
-- refresh this stale project context
+- replace this project context with a newer object
 - pin this decision or constraint for the rest of the run
 
 Those operations become much safer if they produce trace objects rather than
@@ -331,26 +331,6 @@ model proposes context edit
 This turns "the model manages its context" from an informal behavior into an
 auditable protocol.
 
-### Freshness And Substitution
-
-Refs and derivations give us the pieces needed for freshness checks.
-
-If a prompt component was derived from a mutable ref, the derivation can record
-which object id that ref pointed to at build time. Later, if the ref points to
-a different object, the derived object can be marked stale.
-
-That matters for project context, skills, tool descriptors, or any future
-summarized state. A task-state component is only useful if we know what it was
-derived from and whether those sources have changed.
-
-Once freshness is available, substitution becomes principled:
-
-```text
-fresh task_state exists      -> reuse it
-stale task_state exists      -> regenerate it
-missing task_state           -> build raw prompt or extract one
-```
-
 ## What The Trace Enables
 
 The prompt trace substrate gives us:
@@ -362,7 +342,6 @@ The prompt trace substrate gives us:
 - assistant output attribution to the prompt that produced it
 - tool call and tool result attribution
 - context compaction without losing provenance
-- freshness checks for derived context
 - safer future model-controlled context editing
 - evaluation harnesses that compare prompt policies on the same sessions
 

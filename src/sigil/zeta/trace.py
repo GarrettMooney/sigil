@@ -10,12 +10,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Protocol, cast
 
 from ..state import session_dir
 
 ObjectId = str
-FreshnessStatus = Literal["fresh", "stale", "unknown"]
 DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
 LOGGER = logging.getLogger("sigil.zeta.trace")
 _WARNED_FAILURES: set[str] = set()
@@ -40,15 +39,6 @@ class Derivation:
     input_ids: tuple[ObjectId, ...] = ()
     resolved_refs: dict[str, ObjectId] = field(default_factory=dict)
     params: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class FreshnessReport:
-    """Freshness of a derived object against currently maintained refs."""
-
-    status: FreshnessStatus
-    stale_refs: dict[str, tuple[ObjectId, ObjectId]] = field(default_factory=dict)
-    unknown_refs: dict[str, ObjectId] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -111,12 +101,6 @@ class Store(Protocol):
     def refs(self) -> dict[str, ObjectId]: ...
     def prompt_object_ids(self) -> list[ObjectId]: ...
     def stats(self) -> TraceStats: ...
-    def freshness(
-        self,
-        output_id: ObjectId,
-        *,
-        maintained_ref_prefixes: tuple[str, ...],
-    ) -> FreshnessReport: ...
 
 
 def default_sqlite_path() -> Path:
@@ -199,7 +183,7 @@ def normalize_json(value: Any) -> Any:
 
 
 class StoreBase:
-    """Shared graph and freshness helpers for concrete stores."""
+    """Shared graph helpers for concrete stores."""
 
     def graph_closure(self, roots: list[ObjectId]) -> dict[ObjectId, Object]:
         store = cast(Store, self)
@@ -215,43 +199,6 @@ class StoreBase:
             closure[object_id_value] = obj
             pending.extend(reversed(obj.links))
         return closure
-
-    def freshness(
-        self,
-        output_id: ObjectId,
-        *,
-        maintained_ref_prefixes: tuple[str, ...],
-    ) -> FreshnessReport:
-        store = cast(Store, self)
-        derivations = store.derivations_for_output(output_id)
-        if not derivations:
-            return FreshnessReport(status="unknown")
-        derivation = derivations[-1]
-        tracked_refs = {
-            name: expected_id
-            for name, expected_id in derivation.resolved_refs.items()
-            if ref_is_maintained(name, maintained_ref_prefixes)
-        }
-        if not tracked_refs:
-            return FreshnessReport(status="unknown")
-        stale_refs: dict[str, tuple[ObjectId, ObjectId]] = {}
-        unknown_refs: dict[str, ObjectId] = {}
-        for name, expected_id in tracked_refs.items():
-            current_id = store.get_ref(name)
-            if current_id is None:
-                unknown_refs[name] = expected_id
-            elif current_id != expected_id:
-                stale_refs[name] = (expected_id, current_id)
-        if stale_refs:
-            return FreshnessReport(status="stale", stale_refs=stale_refs)
-        if unknown_refs:
-            return FreshnessReport(status="unknown", unknown_refs=unknown_refs)
-        return FreshnessReport(status="fresh")
-
-
-def ref_is_maintained(name: str, prefixes: tuple[str, ...]) -> bool:
-    """Return whether a ref participates in freshness checks."""
-    return any(name.startswith(prefix) for prefix in prefixes)
 
 
 class InMemoryStore(StoreBase):

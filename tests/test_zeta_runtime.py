@@ -437,7 +437,7 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
     assert reopened.stats().object_count == 2
 
 
-def test_zeta_trace_conditional_ref_moves_protect_against_stale_writers() -> None:
+def test_zeta_trace_conditional_ref_moves_protect_against_outdated_writers() -> None:
     store = zeta_trace.InMemoryStore()
     first_id = store.put_object(
         zeta_trace.Object(kind="value", schema="v1", data={"value": 1})
@@ -511,62 +511,6 @@ def test_sigil_zeta_trace_cli_smoke_with_sqlite_store(
     data = json.loads(result.output)
     assert data["stats"]["object_count"] == 1
     assert data["prompts"][0]["id"] == prompt_id
-
-
-def test_zeta_trace_freshness_reports_fresh_stale_and_unknown() -> None:
-    store = zeta_trace.InMemoryStore()
-    old_id = store.put_object(
-        zeta_trace.Object(kind="input", schema="v1", data={"version": 1})
-    )
-    new_id = store.put_object(
-        zeta_trace.Object(kind="input", schema="v1", data={"version": 2})
-    )
-    output_id = store.put_object(
-        zeta_trace.Object(kind="output", schema="v1", data={}, links=(old_id,))
-    )
-    store.set_ref("inputs/source", old_id)
-    store.record_derivation(
-        zeta_trace.Derivation(
-            producer="test:v1",
-            output_id=output_id,
-            input_ids=(old_id,),
-            resolved_refs={"inputs/source": old_id},
-        )
-    )
-
-    assert store.freshness(output_id, maintained_ref_prefixes=("inputs/",)).status == (
-        "fresh"
-    )
-    store.set_ref("inputs/source", new_id)
-    stale = store.freshness(output_id, maintained_ref_prefixes=("inputs/",))
-    assert stale.status == "stale"
-    assert stale.stale_refs == {"inputs/source": (old_id, new_id)}
-
-    unknown_id = store.put_object(
-        zeta_trace.Object(kind="output", schema="v1", data={}, links=(old_id,))
-    )
-    store.record_derivation(
-        zeta_trace.Derivation(
-            producer="test:v1",
-            output_id=unknown_id,
-            input_ids=(old_id,),
-            resolved_refs={"inputs/missing": old_id},
-        )
-    )
-    assert (
-        store.freshness(
-            unknown_id,
-            maintained_ref_prefixes=("inputs/",),
-        ).status
-        == "unknown"
-    )
-    assert (
-        store.freshness(
-            "sha256:missing",
-            maintained_ref_prefixes=("inputs/",),
-        ).status
-        == "unknown"
-    )
 
 
 def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:
