@@ -7,8 +7,10 @@ context.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 import uuid
@@ -17,6 +19,7 @@ from typing import Any
 
 ASK_HISTORY = "last-ask.jsonl"
 EVENT_LOG_MAX_BYTES = 10 * 1024 * 1024
+SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 
 
 def state_dir() -> Path:
@@ -28,8 +31,16 @@ def state_dir() -> Path:
 
 
 def session_id() -> str:
-    """Return the current shell session identifier."""
-    return os.environ.get("SIGIL_SESSION_ID") or "default"
+    """Return the current shell session identifier.
+
+    The id becomes a path component under the state directory, so values
+    that could escape it (separators, `..`, control characters) map to a
+    deterministic digest instead of being used verbatim.
+    """
+    raw = os.environ.get("SIGIL_SESSION_ID") or "default"
+    if SESSION_ID_PATTERN.fullmatch(raw) and raw not in {".", ".."}:
+        return raw
+    return "unsafe-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def session_dir() -> Path:

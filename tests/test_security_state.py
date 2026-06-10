@@ -24,7 +24,14 @@ from sigil.session import (
     recent_turns_context,
     record_turn,
 )
-from sigil.state import append_event, read_jsonl, write_jsonl
+from sigil.state import (
+    append_event,
+    read_jsonl,
+    session_dir,
+    session_id,
+    state_dir,
+    write_jsonl,
+)
 from sigil.workflows.ask import (
     ASK_SYSTEM_PROMPT,
     ask,
@@ -1277,3 +1284,30 @@ def test_run_cli_passes_trailing_flags_to_the_command() -> None:
         assert result.stdout == "hello --shell\n"
         rows = read_recent_turns(tmp)
         assert rows[-1]["command"] == "echo hello --shell"
+
+
+def test_session_dir_with_traversal_id_stays_inside_state_dir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "../../escape")
+    sessions_root = (state_dir() / "sessions").resolve()
+    assert session_dir().resolve().is_relative_to(sessions_root)
+
+
+def test_safe_session_id_is_used_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "ttys003-1234")
+    assert session_id() == "ttys003-1234"
+
+
+def test_unsafe_session_id_maps_deterministically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "../../escape")
+    first = session_id()
+    second = session_id()
+    monkeypatch.setenv("SIGIL_SESSION_ID", "../../other")
+    other = session_id()
+    assert first == second
+    assert first != other
+    assert "/" not in first
+    assert first not in {".", ".."}
