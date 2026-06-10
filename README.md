@@ -28,7 +28,7 @@ changes.
 ## Why Sigil?
 
 Most shell assistants blur together three very different operations:
-suggesting, executing, and explaining. Sigil keeps those routes separate.
+suggesting, executing, and explaining. Sigil keeps those workflows separate.
 
 | Verb | Glyph | What happens |
 | --- | --- | --- |
@@ -75,7 +75,7 @@ without duplicating the rc block.
 - Python 3.11+
 - zsh for shell bindings
 - A local OpenAI-compatible chat completions endpoint for command generation
-  and Zeta-backed answer/agent routes (default
+  and Zeta-backed ask/agent workflows (default
   `http://127.0.0.1:8080/v1/chat/completions`)
 
 Useful environment variables:
@@ -159,7 +159,7 @@ git diff --name-only | , what should I test?
 ```
 
 Read-only comma uses piped input directly because it has no execute path.
-Agent-step routes are driven by the prompt text and the current shell session.
+Agent-step workflows are driven by the prompt text and the current shell session.
 
 ## A Typical Flow
 
@@ -178,7 +178,7 @@ uv run pytest tests/test_shell_bindings.py
 ```
 
 Sigil keeps session state under `~/.sigil/` so Zeta can resume from recent
-answer turns, handoff timeline events, and command results recorded through `+`
+ask turns, handoff timeline events, and command results recorded through `+`
 or a Zeta handoff capture window. The capture window expires after
 `SIGIL_ZETA_CAPTURE_TURNS` (default 20) recorded commands when a handoff is
 never resumed. Recording has no off switch; non-positive or non-numeric
@@ -214,9 +214,10 @@ returns a final answer. Tool calls are shown as muted trace lines, and tool
 results are summarized compactly. The full JSON result stays in the Zeta run
 timeline for the model.
 
-`,,,` does the same tool loop without the confirmation step.
+`,,,` does the same tool loop without the confirmation step. This is YOLO
+mode; see the trust note under Workflow Model.
 
-Read-only routes do not expose Bash. If an answer recommends a command, it is
+Read-only workflows do not expose Bash. If an answer recommends a command, it is
 plain answer text, not a tool call or terminal handoff.
 
 `+` runs the command you provide through `sigil run`, streams stdout/stderr live,
@@ -245,17 +246,25 @@ To install the CLI without punctuation shortcuts:
 sigil install --no-glyphs
 ```
 
-## Route Model
+## Workflow Model
 
-Each route has a fixed effect on your system:
+Each workflow has a fixed effect on your system:
 
-| Route | Effect | Rule |
+| Workflow | Effect | Rule |
 | --- | --- | --- |
-| `,` ask | read-only | Local answer route with no Bash tool. |
+| `,` ask | read-only | Local ask workflow with no Bash tool. |
 | `,,` propose | read/write/execute | Read-only tools run directly; Bash/edit/write are staged for review. |
 | `,,,` do | read/write/execute | Read-only tools, Bash, edit, and write run directly. |
 | `+` run | execute | Explicit local command execution with stdout/stderr capture. |
 | `?` status | read-only | Current session status without calling a model. |
+
+`,,,` is YOLO mode: nothing is staged and there is no filesystem boundary.
+Tools run with your user's permissions and can read or write anywhere your
+user can — the trust model is local user, local trust. When you want to
+review every effect before it happens, use `,,`, which stages all writes and
+commands at your prompt. For an OS-enforced boundary, launch the CLI inside
+a sandbox: [bubblewrap](https://github.com/containers/bubblewrap) on Linux,
+or the built-in `sandbox-exec(1)` on macOS.
 
 Sigil stores audit/debug events and per-shell continuity under `~/.sigil/`.
 Inspect the global event log with:
@@ -280,7 +289,7 @@ sigil install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--json]
 ```
 
-The bundled Zeta agent runtime is an internal Python package; Sigil routes run
+The bundled Zeta agent runtime is an internal Python package; Sigil workflows run
 it in-process. There is no separate `zeta` command.
 
 From shells without the zsh binding, agent steps can be scripted through the
