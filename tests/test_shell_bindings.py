@@ -56,6 +56,9 @@ def make_stub(tmp: Path) -> Path:
               else
                 printf '%s\n' "zeta-step" >> "$SIGIL_STUB_LOG"
                 case "$objective" in
+                  *interrupt*) kill -INT $PPID; kill -INT $$ ;;
+                esac
+                case "$objective" in
                   *repair*) command="uv run pytest"; reason="Run tests." ;;
                   *"run it"*) command="echo piped"; reason="Run piped handoff." ;;
                   *) command="echo zeta"; reason="Run zeta handoff." ;;
@@ -119,6 +122,27 @@ def run_shell_args(
         env.pop(leaked, None)
     return subprocess.run(
         [*args, script],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def run_shell_stdin(
+    args: list[str], script: str, tmp: Path, stub: Path
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["SIGIL_BIN"] = str(stub)
+    env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
+    env["SIGIL_SESSION_ID"] = "shell-test"
+    env["ZLE_LOG"] = str(tmp / "zle.log")
+    for leaked in ("SIGIL_TTY", "SIGIL_TTY_FD", "TTY"):
+        env.pop(leaked, None)
+    return subprocess.run(
+        args,
+        input=script,
         cwd=ROOT,
         env=env,
         text=True,
@@ -494,6 +518,32 @@ def test_zsh_binding_preserves_question_mark_globbing() -> None:
         )
         assert_success(result)
         assert result.stdout == "ab\n"
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_interrupted_zeta_step_leaves_no_handoff_file() -> None:
+    # Ctrl-C delivers SIGINT to the whole foreground process group, so zsh
+    # itself aborts __sigil_zeta_turn mid-flight. The stub models that by
+    # signalling its parent shell and itself. An interactive shell is required:
+    # non-interactive zsh dies on SIGINT instead of unwinding to the prompt.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell_stdin(
+            ["zsh", "-f", "-i"],
+            textwrap.dedent(
+                f"""\
+                export TMPDIR={tmp}
+                source src/sigil/bindings/sigil.zsh
+                sigil_agent_step interrupt
+                print -- "survived=yes"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert "survived=yes" in result.stdout
+        assert list(tmp.glob("sigil-handoff.*")) == []
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

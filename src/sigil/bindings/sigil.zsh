@@ -174,20 +174,25 @@ __sigil_zeta_turn() {
   args=()
   objective="$*"
   handoff_file="$(mktemp "${TMPDIR:-/tmp}/sigil-handoff.XXXXXX")" || return 1
-  if [[ -z "$objective" ]]; then
-    __sigil_zeta_consume_capture
-    args+=(--continue)
-  fi
-  "$__sigil_bin" zeta-step --glyph "$glyph" --handoff-file "$handoff_file" "${args[@]}" "$objective"
-  step_status=$?
-  if [[ "$step_status" == "0" && -s "$handoff_file" ]]; then
-    command="$(__sigil_json_get command < "$handoff_file" 2>/dev/null || true)"
-    if [[ -n "$command" ]]; then
-      __sigil_zeta_enable_capture
-      __sigil_prompt_insert "$(__sigil_zeta_prompt_command "$command")"
+  # Ctrl-C during zeta-step aborts this function mid-flight; the always block
+  # is the only cleanup zsh still runs on that path.
+  {
+    if [[ -z "$objective" ]]; then
+      __sigil_zeta_consume_capture
+      args+=(--continue)
     fi
-  fi
-  rm -f "$handoff_file"
+    "$__sigil_bin" zeta-step --glyph "$glyph" --handoff-file "$handoff_file" "${args[@]}" "$objective"
+    step_status=$?
+    if [[ "$step_status" == "0" && -s "$handoff_file" ]]; then
+      command="$(__sigil_json_get command < "$handoff_file" 2>/dev/null || true)"
+      if [[ -n "$command" ]]; then
+        __sigil_zeta_enable_capture
+        __sigil_prompt_insert "$(__sigil_zeta_prompt_command "$command")"
+      fi
+    fi
+  } always {
+    rm -f "$handoff_file"
+  }
   return "$step_status"
 }
 
