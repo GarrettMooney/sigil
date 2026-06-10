@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-ANSWER_HISTORY = "last-answer.jsonl"
+ASK_HISTORY = "last-ask.jsonl"
 EVENT_LOG_MAX_BYTES = 10 * 1024 * 1024
 
 

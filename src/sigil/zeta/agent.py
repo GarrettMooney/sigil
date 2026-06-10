@@ -385,7 +385,7 @@ def handle_tool_call(
             name,
             params,
             "disallowed-tool",
-            f"tool is not allowed in this route: {name}",
+            f"tool is not allowed in this workflow: {name}",
             call_event=call_event,
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,

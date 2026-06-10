@@ -1,11 +1,11 @@
-"""The `ask` verb: answer a shell question, optionally continuing the prior one."""
+"""The `ask` verb: ask about shell context, optionally continuing the prior one."""
 
 from __future__ import annotations
 
 import click
 
-from ..routes.ask import (
-    ZETA_ANSWER_TOOLS,
+from ..workflows.ask import (
+    ZETA_ASK_TOOLS,
     ask,
     discussion_turns,
 )
@@ -17,10 +17,10 @@ DEFAULT_QUESTION = "Inspect and summarize the current shell context."
 
 @cli.command("ask")
 @click.argument("question", required=False)
-@click.option("--follow-up", is_flag=True, help="Continue the previous answer thread.")
+@click.option("--follow-up", is_flag=True, help="Continue the previous ask thread.")
 @click.option("--json", "json_output", is_flag=True, help="Emit the answer as JSON.")
 def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
-    """Answer a shell question, optionally continuing the prior answer."""
+    """Ask a shell question, optionally continuing the prior ask."""
     stdin_text = piped_stdin_text()
     if follow_up:
         prompt = question_with_stdin(question or "", stdin_text or "")
@@ -28,7 +28,7 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
         return ask(
             prompt,
             glyph="ask",
-            tools=ZETA_ANSWER_TOOLS,
+            tools=ZETA_ASK_TOOLS,
             follow_up=True,
             json_output=json_output,
             history=history,
@@ -38,12 +38,12 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
         return ask(
             prompt,
             glyph="ask",
-            tools=ZETA_ANSWER_TOOLS,
+            tools=ZETA_ASK_TOOLS,
             json_output=json_output,
         )
     return ask(
         question or DEFAULT_QUESTION,
         glyph="ask",
-        tools=ZETA_ANSWER_TOOLS,
+        tools=ZETA_ASK_TOOLS,
         json_output=json_output,
     )

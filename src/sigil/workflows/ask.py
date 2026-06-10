@@ -1,7 +1,7 @@
-"""Read-only shell answer routes.
+"""Read-only shell ask workflow.
 
 This module owns discussion continuity. A fresh `sigil ask` resets the session
-answer transcript. Comma glyphs and named ask routes use explicit source
+ask transcript. Comma glyphs and named ask commands use explicit source
 authorization.
 """
 
@@ -13,6 +13,16 @@ from collections.abc import Callable, Iterable
 from types import TracebackType
 from typing import Any
 
+from ..agent_io import (
+    TurnEventRecorder,
+    TurnRenderer,
+    build_turn_renderer,
+    event_model_telemetry,
+    model_server_ready,
+    model_telemetry_fields,
+    record_turn_abort,
+    render_final_text,
+)
 from ..display import (
     StreamRenderer,
     ThinkingStatus,
@@ -21,7 +31,7 @@ from ..display import (
 )
 from ..session import active_failure_context, recent_turns_context
 from ..state import (
-    ANSWER_HISTORY,
+    ASK_HISTORY,
     append_event,
     append_jsonl,
     read_jsonl,
@@ -34,21 +44,11 @@ from ..zeta.models import ModelSelection, active_model_selection, model_selectio
 from ..zeta.skills import expand_skill_directive
 from ..zeta.timeline import record_event
 from ..zeta.trace import latest_prompt_trace_fields
-from ._turn import (
-    TurnEventRecorder,
-    TurnRenderer,
-    build_turn_renderer,
-    event_model_telemetry,
-    model_server_ready,
-    model_telemetry_fields,
-    record_turn_abort,
-    render_final_text,
-)
 
-ANSWER_ROUTE = "answer"
-ANSWER_REQUEST_EVENT = "answer_requested"
+ASK_WORKFLOW = "ask"
+ASK_REQUEST_EVENT = "ask_requested"
 
-ANSWER_SYSTEM_PROMPT = (
+ASK_SYSTEM_PROMPT = (
     "Answer concisely. You are responding to a quick question typed at a shell "
     "prompt. The available tools are read, grep, and ls only. Use read for "
     "files, ls for directory contents, file sizes, and recursive size-filtered "
@@ -60,8 +60,8 @@ ANSWER_SYSTEM_PROMPT = (
     "Do not mutate files or execute commands."
 )
 
-ZETA_ANSWER_TOOLS = "read,grep,ls"
-ANSWER_TOOLS = ("read", "grep", "ls")
+ZETA_ASK_TOOLS = "read,grep,ls"
+ASK_TOOLS = ("read", "grep", "ls")
 
 
 def parse_tools(tools: str) -> tuple[str, ...]:
@@ -73,7 +73,7 @@ def discussion_turns() -> list[dict[str, object]]:
     """Load user/assistant turns for explicit follow-up commands."""
     return [
         turn
-        for turn in read_jsonl(ANSWER_HISTORY)
+        for turn in read_jsonl(ASK_HISTORY)
         if turn.get("role") in {"user", "assistant"} and turn.get("content")
     ]
 
@@ -93,22 +93,22 @@ def prepend_recent_turns(user_input: str) -> str:
     return "\n\n".join(sections)
 
 
-RECENT_ANSWER_TURNS_LIMIT = 4
-RECENT_ANSWER_TURN_CHARS = 500
+RECENT_ASK_TURNS_LIMIT = 4
+RECENT_ASK_TURN_CHARS = 500
 FALLBACK_CONTEXT_CHARS = 32_000
 FALLBACK_EVENT_TEXT_CHARS = 6_000
 
 
-def recent_answer_context(
-    limit: int = RECENT_ANSWER_TURNS_LIMIT,
-    per_turn_chars: int = RECENT_ANSWER_TURN_CHARS,
+def recent_ask_context(
+    limit: int = RECENT_ASK_TURNS_LIMIT,
+    per_turn_chars: int = RECENT_ASK_TURN_CHARS,
 ) -> str:
-    """Return a compact summary of the most recent answer exchange, if any."""
+    """Return a compact summary of the most recent ask exchange, if any."""
     turns = discussion_turns()
     if not turns:
         return ""
     tail = turns[-limit:]
-    lines = ["Recent answer transcript:"]
+    lines = ["Recent ask transcript:"]
     for turn in tail:
         role = str(turn.get("role", "?"))
         content = str(turn.get("content", "")).strip()
@@ -122,19 +122,19 @@ def ask(
     question: str,
     *,
     glyph: str = "ask",
-    tools: str = ZETA_ANSWER_TOOLS,
+    tools: str = ZETA_ASK_TOOLS,
     follow_up: bool = False,
     json_output: bool = False,
     history: Iterable[dict[str, object]] = (),
 ) -> int:
-    """Run Zeta for a shell answer while recording answer history."""
+    """Run Zeta for a shell ask while recording ask history."""
     user_input = question
     selected_model = active_model_selection()
     expanded_input = expand_skill_directive(user_input)
     prompt = expanded_input if follow_up else prepend_recent_turns(expanded_input)
     history_turns = list(history)
     request_payload: dict[str, Any] = {
-        "type": ANSWER_REQUEST_EVENT,
+        "type": ASK_REQUEST_EVENT,
         "input": user_input,
         "prompt": prompt,
         "follow_up": follow_up,
@@ -153,13 +153,13 @@ def ask(
         "glyph": glyph,
     }
     if follow_up:
-        append_jsonl(ANSWER_HISTORY, user_turn)
+        append_jsonl(ASK_HISTORY, user_turn)
     else:
-        write_jsonl(ANSWER_HISTORY, [user_turn])
+        write_jsonl(ASK_HISTORY, [user_turn])
     write_jsonl("last-tools.jsonl", [])
     enabled_tools = parse_tools(tools)
-    return run_tool_answer(
-        ANSWER_SYSTEM_PROMPT,
+    return run_tool_ask(
+        ASK_SYSTEM_PROMPT,
         prompt,
         input_text=user_input,
         follow_up=follow_up,
@@ -170,7 +170,7 @@ def ask(
     )
 
 
-def run_tool_answer(
+def run_tool_ask(
     system: str,
     prompt: str,
     *,
@@ -178,11 +178,11 @@ def run_tool_answer(
     follow_up: bool = False,
     json_output: bool = False,
     max_steps: int | None = None,
-    allowed_tools: Iterable[str] = ANSWER_TOOLS,
+    allowed_tools: Iterable[str] = ASK_TOOLS,
     history: Iterable[dict[str, object]] = (),
     selected_model: ModelSelection | None = None,
 ) -> int:
-    """Run a read-only Zeta answer turn and persist answer state."""
+    """Run a read-only Zeta ask turn and persist answer state."""
     if selected_model is None:
         selected_model = active_model_selection()
     if not model_server_ready(selected_model):
@@ -190,12 +190,12 @@ def run_tool_answer(
     enabled_tools = tuple(allowed_tools)
     renderer = build_turn_renderer(sys.stderr, json_output=json_output)
     context_footer = renderer.context_footer
-    recorder = AnswerEventRecorder(renderer, json_output=json_output)
+    recorder = AskEventRecorder(renderer, json_output=json_output)
     user_event: dict[str, Any] = {
         "type": "user_message",
         "content": prompt,
         "runtime": "zeta",
-        "route": ANSWER_ROUTE,
+        "workflow": ASK_WORKFLOW,
         "system": system,
         "available_tools": list(enabled_tools),
     }
@@ -205,7 +205,7 @@ def run_tool_answer(
         dict(turn) for turn in history if turn.get("role") in {"user", "assistant"}
     ]
     record_event(user_event)
-    status_enabled = answer_thinking_status_enabled(json_output)
+    status_enabled = ask_thinking_status_enabled(json_output)
     try:
         result = run_agent_turn(
             prompt,
@@ -259,7 +259,7 @@ def run_tool_answer(
                 model_telemetry = fallback_telemetry
             answer_prompt_traces = []
     except RuntimeError as error:
-        record_answer_abort(error)
+        record_ask_abort(error)
         raise
     record_answer(
         input_text=input_text,
@@ -277,26 +277,26 @@ def run_tool_answer(
     return 0
 
 
-def record_answer_abort(error: RuntimeError) -> None:
-    """Mark an aborted answer turn in the timeline and the answer history."""
-    record_turn_abort(error, route=ANSWER_ROUTE)
+def record_ask_abort(error: RuntimeError) -> None:
+    """Mark an aborted ask turn in the timeline and ask history."""
+    record_turn_abort(error, workflow=ASK_WORKFLOW)
     append_jsonl(
-        ANSWER_HISTORY,
+        ASK_HISTORY,
         {"role": "assistant", "content": f"(turn aborted: {error})", "aborted": True},
     )
 
 
-def answer_thinking_status_enabled(json_output: bool) -> bool | None:
+def ask_thinking_status_enabled(json_output: bool) -> bool | None:
     if json_output:
         return False
     return None
 
 
-class AnswerEventRecorder(TurnEventRecorder):
-    """Persist and render answer-route events, logging the tool timeline."""
+class AskEventRecorder(TurnEventRecorder):
+    """Persist and render ask workflow events, logging the tool timeline."""
 
-    tag_fields = {"route": ANSWER_ROUTE}
-    strip_fields = frozenset({"route"})
+    tag_fields = {"workflow": ASK_WORKFLOW}
+    strip_fields = frozenset({"workflow"})
 
     def __init__(self, renderer: TurnRenderer, *, json_output: bool) -> None:
         super().__init__(renderer, render_output=sys.stderr)
@@ -353,7 +353,7 @@ def fallback_history_lines(turn_events: list[dict[str, Any]]) -> list[str]:
             continue
         content = str(event.get("content") or "").strip()
         if content:
-            lines.append(f"{role}: {clamp_text(content, RECENT_ANSWER_TURN_CHARS)}")
+            lines.append(f"{role}: {clamp_text(content, RECENT_ASK_TURN_CHARS)}")
     return lines
 
 
@@ -365,7 +365,7 @@ def fallback_observation_blocks(turn_events: list[dict[str, Any]]) -> list[str]:
             content = str(event.get("content") or "").strip()
             if content:
                 blocks.append(
-                    "Assistant note:\n" + clamp_text(content, RECENT_ANSWER_TURN_CHARS)
+                    "Assistant note:\n" + clamp_text(content, RECENT_ASK_TURN_CHARS)
                 )
             continue
         if event_type == "tool_result":
@@ -540,6 +540,7 @@ def record_answer(
         "prompt": prompt,
         "answer": answer,
         "runtime": "zeta",
+        "workflow": ASK_WORKFLOW,
         **telemetry_fields,
         **trace_fields,
     }
@@ -557,7 +558,7 @@ def record_answer(
         answer_event["model"] = model
         assistant_turn["model"] = model
     append_event(answer_event)
-    append_jsonl(ANSWER_HISTORY, assistant_turn)
+    append_jsonl(ASK_HISTORY, assistant_turn)
     if json_output:
         print(
             json.dumps(

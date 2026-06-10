@@ -21,7 +21,7 @@ SCHEMA: dict[str, Any] = {
 
 SPEC = ToolSpec(
     "write",
-    "Write content directly or stage a cp handoff, depending on the active route.",
+    "Write content directly or stage a cp handoff, depending on the active workflow.",
     SCHEMA,
     True,
 )

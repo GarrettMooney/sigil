@@ -11,7 +11,8 @@ import click
 from .. import handoff as sigil_handoff
 from ..display import shell_result_summary
 from ..protocols import SHELL_HANDOFF_RESULT_SCHEMA
-from ..routes.zeta_step import run_agent_step
+from ..workflows.do import run_do_step
+from ..workflows.propose import run_propose_step
 from ._base import cli
 
 CONTINUE_OBJECTIVE = (
@@ -27,7 +28,10 @@ CONTINUE_OBJECTIVE = (
 
 @cli.command("zeta-step", hidden=True)
 @click.option(
-    "--glyph", default=",,", show_default=True, help="Glyph route the step runs as."
+    "--glyph",
+    default=",,",
+    show_default=True,
+    help="Glyph workflow the step runs as.",
 )
 @click.option(
     "--handoff-file",
@@ -53,9 +57,9 @@ def cmd_zeta_step(
         render_shell_result(sigil_handoff.append_shell_result(), output=sys.stderr)
         if not objective:
             objective = CONTINUE_OBJECTIVE
-    return run_agent_step(
+    run_step = run_do_step if glyph == ",,," else run_propose_step
+    return run_step(
         objective,
-        glyph=glyph,
         handoff_path=handoff_file,
         handoff_output="summary",
         trace_output=sys.stderr,

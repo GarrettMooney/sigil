@@ -71,7 +71,7 @@ def prompt_components(
             kind="system_prompt",
             data={
                 "content": system_content,
-                "route_prompt": system,
+                "base_prompt": system,
                 "allowed_tools": list(enabled_tools),
             },
             message={"role": "system", "content": system_content},

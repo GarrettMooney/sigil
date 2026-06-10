@@ -25,7 +25,7 @@ current working directory, environment, history, job control, and command
 handoff. You choose the next small action and then stop.
 
 Work concretely from the available context. Prefer inspection before edits. Use
-read-only tools for local context. Follow the active route instructions for
+read-only tools for local context. Follow the active workflow instructions for
 whether commands and mutations are staged for review or run directly. Keep
 answers concise and do not invent command output, file contents, or tool
 results.
@@ -48,7 +48,7 @@ TOOL_PROTOCOL_PROMPT = """Tool protocol:
 
 - Tools are native Chat Completions function tools exposed by the shell loop.
 - You may request multiple read-only tool calls in one turn when useful.
-- Some routes stage bash, edit, or write as handoffs; some run them directly.
+- Some workflows stage bash, edit, or write as handoffs; some run them directly.
 - For staged handoffs, use one handoff tool at a time and then stop.
 - Use a tool only when its schema matches the needed action.
 - Do not mention unavailable tools.
@@ -95,7 +95,7 @@ Resolve relative skill references against the skill directory.
 
 
 def system_prompt(
-    route_prompt: str | None = None,
+    base_prompt: str | None = None,
     *,
     allowed_tools: Iterable[str] | None = None,
     skills: Iterable[Skill] | None = None,
@@ -108,14 +108,14 @@ def system_prompt(
         else tuple(available_skills() if can_read_skill_files(active_tools) else ())
     )
     return render_system_prompt(
-        route_prompt,
+        base_prompt,
         allowed_tools=active_tools,
         skills=active_skills,
     )
 
 
 def render_system_prompt(
-    route_prompt: str | None = None,
+    base_prompt: str | None = None,
     *,
     allowed_tools: Iterable[str] | None = None,
     skills: Iterable[Skill] = (),
@@ -124,7 +124,7 @@ def render_system_prompt(
     active_tools = tuple(allowed_tools) if allowed_tools is not None else None
     return render_prompt_template(
         SYSTEM_PROMPT_TEMPLATE,
-        base_prompt=clean_prompt(route_prompt) or BASE_SYSTEM_PROMPT.strip(),
+        base_prompt=clean_prompt(base_prompt) or BASE_SYSTEM_PROMPT.strip(),
         tool_protocol=TOOL_PROTOCOL_PROMPT.strip(),
         grep_tool_policy=GREP_TOOL_POLICY
         if tool_available("grep", active_tools)

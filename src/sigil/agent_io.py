@@ -1,9 +1,9 @@
-"""Shared turn plumbing for the Zeta-backed routes.
+"""Shared I/O plumbing for Zeta-backed agent workflows.
 
- Both routes persist agent events to the Zeta run timeline, render tool traces
+Both workflows persist agent events to the Zeta run timeline, render tool traces
 and a context-usage footer while the loop runs, and replay any events the
-recorder missed. This module owns that skeleton; the route modules own
-route-specific tagging, logging, and handoff handling.
+recorder missed. This module owns that skeleton; workflow modules own
+workflow-specific tagging, logging, and handoff handling.
 """
 
 from __future__ import annotations
@@ -12,17 +12,17 @@ import sys
 from dataclasses import dataclass
 from typing import Any, TextIO
 
-from ..display import (
+from .display import (
     ContextUsageFooter,
     TraceAwareStreamRenderer,
     TraceRenderState,
     create_stream_renderer,
     render_tool_start,
 )
-from ..zeta.agent import AgentTurnResult
-from ..zeta.model import ensure_server
-from ..zeta.models import ModelSelection
-from ..zeta.timeline import record_event
+from .zeta.agent import AgentTurnResult
+from .zeta.model import ensure_server
+from .zeta.models import ModelSelection
+from .zeta.timeline import record_event
 
 
 def model_server_ready(selected_model: ModelSelection | None) -> bool:
@@ -37,7 +37,7 @@ def model_server_ready(selected_model: ModelSelection | None) -> bool:
 
 @dataclass(frozen=True)
 class TurnRenderer:
-    """Rendering state shared across one route turn."""
+    """Rendering state shared across one workflow turn."""
 
     trace_state: TraceRenderState
     context_footer: ContextUsageFooter | None
@@ -70,7 +70,7 @@ class TurnEventRecorder:
     """Persist and render agent events as the loop produces them.
 
     Subclasses set ``tag_fields``/``strip_fields`` for timeline tagging and
-    override ``handle_tool_call``/``handle_tool_result`` for route behavior.
+    override ``handle_tool_call``/``handle_tool_result`` for workflow behavior.
     ``handle_tool_result`` may return an exit status; the last one wins.
     """
 

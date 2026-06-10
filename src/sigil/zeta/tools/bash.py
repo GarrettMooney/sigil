@@ -26,7 +26,7 @@ SCHEMA: dict[str, Any] = {
 
 SPEC = ToolSpec(
     "bash",
-    "Execute or stage a shell command, depending on the active route.",
+    "Execute or stage a shell command, depending on the active workflow.",
     SCHEMA,
     True,
 )

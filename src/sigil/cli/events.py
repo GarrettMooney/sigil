@@ -10,8 +10,8 @@ from ..session import read_event_log
 from ._base import cli
 from ._shared import pretty_print_json
 
-EVENT_LIST_COLUMNS = ("time", "route", "event", "session", "detail")
-ROUTE_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})
+EVENT_LIST_COLUMNS = ("time", "workflow", "event", "session", "detail")
+WORKFLOW_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})
 
 
 @cli.command("events")
@@ -50,7 +50,7 @@ def print_events_table(summaries: list[dict[str, object]]) -> None:
     rows = [
         {
             "time": str(summary["time_label"]),
-            "route": str(summary["route"]),
+            "workflow": str(summary["workflow"]),
             "event": str(summary["event"]),
             "session": str(summary["short_session"]),
             "detail": str(summary["detail"]),
@@ -81,14 +81,14 @@ def event_summary(event: dict[str, object]) -> dict[str, object]:
     event_id = str(event.get("id") or "")
     session = str(event.get("session") or "")
     event_type = str(event.get("type") or "event")
-    route = event_route(event)
+    workflow = event_workflow(event)
     return {
         "id": event_id or "-",
         "short_id": short_token(event_id),
         "time": event.get("time"),
         "time_label": format_event_time(event.get("time")),
         "type": event_type,
-        "route": route,
+        "workflow": workflow,
         "event": event_label(event_type),
         "session": session or "-",
         "short_session": short_token(session),
@@ -109,18 +109,25 @@ def format_event_time(value: object) -> str:
     return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def event_route(event: dict[str, object]) -> str:
-    """Return the route glyph for an event."""
+def event_workflow(event: dict[str, object]) -> str:
+    """Return the workflow glyph or name for an event."""
     glyph = event.get("glyph")
-    if isinstance(glyph, str) and glyph in ROUTE_GLYPHS:
+    if isinstance(glyph, str) and glyph in WORKFLOW_GLYPHS:
         return glyph
+    workflow = event.get("workflow")
+    if isinstance(workflow, str) and workflow:
+        return workflow
+    legacy_route = event.get("route")
+    if isinstance(legacy_route, str) and legacy_route:
+        return legacy_route
     return "-"
 
 
 def event_label(event_type: str) -> str:
-    """Return the lifecycle label without route information."""
+    """Return the lifecycle label without workflow information."""
     labels = {
-        "answer_requested": "answer request",
+        "ask_requested": "ask request",
+        "answer_requested": "ask request",
         "answer": "answer",
         "tool_start": "tool start",
         "tool_end": "tool end",
@@ -131,8 +138,8 @@ def event_label(event_type: str) -> str:
 
 def event_detail(event: dict[str, object], event_type: str) -> str:
     """Return the most useful human summary available on an event."""
-    if event_type == "answer_requested":
-        return clean_summary_text(event.get("input")) or "answer request"
+    if event_type in {"ask_requested", "answer_requested"}:
+        return clean_summary_text(event.get("input")) or "ask request"
     if event_type == "tool_start":
         tool = clean_summary_text(event.get("tool")) or "tool"
         detail = clean_summary_text(event.get("detail"))

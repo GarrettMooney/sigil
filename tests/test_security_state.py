@@ -18,11 +18,6 @@ from click.testing import CliRunner
 from sigil.cli import cli, main
 from sigil.display import should_color
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
-from sigil.routes.ask import (
-    ANSWER_SYSTEM_PROMPT,
-    ask,
-    discussion_turns,
-)
 from sigil.session import (
     read_event_log,
     recent_turns,
@@ -30,6 +25,11 @@ from sigil.session import (
     record_turn,
 )
 from sigil.state import append_event, read_jsonl, write_jsonl
+from sigil.workflows.ask import (
+    ASK_SYSTEM_PROMPT,
+    ask,
+    discussion_turns,
+)
 
 
 class TtyStringIO(StringIO):
@@ -38,14 +38,14 @@ class TtyStringIO(StringIO):
 
 
 def test_question_system_prompt_points_zeta_at_events_log_for_older_history() -> None:
-    assert "events.jsonl" in ANSWER_SYSTEM_PROMPT
-    assert "available tools are read, grep, and ls only" in ANSWER_SYSTEM_PROMPT
+    assert "events.jsonl" in ASK_SYSTEM_PROMPT
+    assert "available tools are read, grep, and ls only" in ASK_SYSTEM_PROMPT
 
 
 def test_top_level_help_lists_commands() -> None:
     result = CliRunner().invoke(cli, ["--help"])
     assert result.exit_code == 0
-    assert "Common routes:" in result.output
+    assert "Common workflows:" in result.output
     assert ",      ask from local context" in result.output
     assert ",,     propose one reviewed agent step" in result.output
     assert ",,,    do one auto-approved agent step" in result.output
@@ -81,23 +81,23 @@ def test_top_level_help_lists_commands() -> None:
 def test_top_level_without_command_shows_help() -> None:
     result = CliRunner().invoke(cli, [])
     assert result.exit_code == 0
-    assert "Common routes:" in result.output
+    assert "Common workflows:" in result.output
     assert "Commands:" in result.output
 
 
 HEAVY_MODULES_PROBE = (
-    "heavy = [name for name in sys.modules if name.startswith('sigil.routes') "
+    "heavy = [name for name in sys.modules if name.startswith('sigil.workflows') "
     "or name.startswith('sigil.zeta') or name.startswith('rich')]; "
     "assert not heavy, heavy"
 )
 
 
-def test_cli_import_does_not_load_route_modules() -> None:
+def test_cli_import_does_not_load_workflow_modules() -> None:
     script = "import sys; import sigil.cli; " + HEAVY_MODULES_PROBE
     subprocess.run([sys.executable, "-c", script], check=True)
 
 
-def test_status_dispatch_does_not_load_route_modules() -> None:
+def test_status_dispatch_does_not_load_workflow_modules() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         env = {**os.environ, "SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"}
         script = (
@@ -270,13 +270,13 @@ def test_events_default_lists_recent_events() -> None:
     assert text.exit_code == 0, text.output
     assert text.output.splitlines()[0].split() == [
         "time",
-        "route",
+        "workflow",
         "event",
         "session",
         "detail",
     ]
     assert str(second["id"])[:8] not in text.output
-    assert ",,     failure recorded" in text.output
+    assert ",,        failure recorded" in text.output
     assert "git status --short -> 0" in text.output
     assert first["id"] not in text.output
     assert listed.exit_code == 0, listed.output
@@ -286,7 +286,7 @@ def test_events_default_lists_recent_events() -> None:
         "failure_recorded",
     ]
     assert summaries[-1]["short_id"] == str(second["id"])[:8]
-    assert summaries[-1]["route"] == ",,"
+    assert summaries[-1]["workflow"] == ",,"
     assert summaries[-1]["event"] == "failure recorded"
     assert summaries[-1]["detail"] == "git status --short -> 0"
     assert raw.exit_code == 0, raw.output
@@ -327,7 +327,7 @@ def test_events_failure_recorded_label_is_not_prefixed_as_glyph() -> None:
     assert "false -> 1" in text.output
     assert listed.exit_code == 0, listed.output
     summary = json.loads(listed.output)[0]
-    assert summary["route"] == "-"
+    assert summary["workflow"] == "-"
     assert summary["event"] == "failure recorded"
     assert summary["detail"] == "false -> 1"
 
@@ -373,7 +373,7 @@ def test_session_list_includes_last_event_context() -> None:
     assert "beta\t/other\tbeta_event\t" in text.output
 
 
-def test_question_routes_record_glyph_and_local_tools() -> None:
+def test_question_workflows_record_glyph_and_local_tools() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
@@ -386,15 +386,15 @@ def test_question_routes_record_glyph_and_local_tools() -> None:
                 calls.append((args, kwargs))
                 return 0
 
-            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
                 assert ask("what is sigil?", json_output=True) == 0
-            fresh_turn = read_jsonl("last-answer.jsonl")[0]
+            fresh_turn = read_jsonl("last-ask.jsonl")[0]
             assert fresh_turn["glyph"] == "ask"
             request_event = read_event_log()[-1]
-            assert request_event["type"] == "answer_requested"
+            assert request_event["type"] == "ask_requested"
             assert request_event["input"] == "what is sigil?"
             assert "question" not in request_event
-            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
                 assert (
                     ask(
                         "what is sigil?",
@@ -404,10 +404,10 @@ def test_question_routes_record_glyph_and_local_tools() -> None:
                     )
                     == 0
                 )
-            comma_turn = read_jsonl("last-answer.jsonl")[-1]
+            comma_turn = read_jsonl("last-ask.jsonl")[-1]
             assert comma_turn["glyph"] == ","
             assert len(calls) == 2
-            assert calls[0][0][0] == ANSWER_SYSTEM_PROMPT
+            assert calls[0][0][0] == ASK_SYSTEM_PROMPT
             assert "available tools are read, grep, and ls only" in calls[0][0][0]
             assert calls[0][1]["allowed_tools"] == ("read", "grep", "ls")
             assert calls[1][0][1] == "what is sigil?"
@@ -422,7 +422,7 @@ def test_question_routes_record_glyph_and_local_tools() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
-def test_question_route_requests_tool_calls_on_stdout() -> None:
+def test_question_workflow_requests_tool_calls_on_stdout() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
@@ -435,7 +435,7 @@ def test_question_route_requests_tool_calls_on_stdout() -> None:
                 captured_kwargs.update(kwargs)
                 return 0
 
-            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
                 assert ask("inspect pyproject") == 0
 
     assert captured_kwargs["input_text"] == "inspect pyproject"
@@ -1025,7 +1025,7 @@ def test_fresh_ask_prepends_recent_turns_context_to_zeta_prompt() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
                 assert ask("what should I do next?", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -1054,7 +1054,7 @@ def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
                 assert ask("what does this repo do", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -1084,7 +1084,7 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
                 assert ask("why failed", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -1099,7 +1099,7 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
         ):
             record_turn("ls -la", 0, "/repo")
             write_jsonl(
-                "last-answer.jsonl",
+                "last-ask.jsonl",
                 [
                     {"role": "user", "content": "first", "event_id": "q1"},
                     {"role": "assistant", "content": "ans", "event_id": "a1"},
@@ -1112,7 +1112,7 @@ def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
                 assert (
                     ask(
                         "follow up",
@@ -1142,7 +1142,7 @@ def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
                 captured["prompt"] = prompt
                 return 0
 
-            with patch("sigil.routes.ask.run_tool_answer", side_effect=fake_answer):
+            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
                 assert ask("hello", json_output=True) == 0
 
     prompt = captured["prompt"]
@@ -1221,21 +1221,21 @@ def test_ask_json_uses_the_shared_indented_shape() -> None:
             os.environ,
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
-            from sigil.routes import ask as answers_runner
+            from sigil.workflows import ask as ask_runner
             from sigil.zeta.agent import AgentTurnResult
 
             def fake_run_agent_turn(*args: object, **kwargs: object) -> AgentTurnResult:
                 del args, kwargs
                 return AgentTurnResult(final_text="indented answer")
 
-            with patch("sigil.routes._turn.ensure_server", return_value=True):
+            with patch("sigil.agent_io.ensure_server", return_value=True):
                 with patch(
-                    "sigil.routes.ask.run_agent_turn",
+                    "sigil.workflows.ask.run_agent_turn",
                     side_effect=fake_run_agent_turn,
                 ):
                     stdout = StringIO()
                     with redirect_stdout(stdout):
-                        code = answers_runner.run_tool_answer(
+                        code = ask_runner.run_tool_ask(
                             "system", "question", json_output=True
                         )
 

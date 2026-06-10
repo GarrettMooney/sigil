@@ -2,7 +2,7 @@
 
 Commands live in sibling modules and register on this group via decorators.
 The group imports each module on first use: glyphs like `?` and the per-prompt
-shell-turn recording must not pay for the heaviest route's import graph.
+shell-turn recording must not pay for the heaviest workflow's import graph.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ def cli(ctx: click.Context) -> None:
     Sigil installs punctuation glyphs into your shell, plus named commands for
     setup and inspection.
 
-    Common routes:
+    Common workflows:
 
     \b
       ,      ask from local context

@@ -399,7 +399,7 @@ def test_zsh_does_not_record_sigil_wrapper_commands() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_plus_line_routes_through_capture_widget() -> None:
+def test_zsh_plus_line_goes_through_capture_widget() -> None:
     # End to end through zle: the accept-line widget captures the raw line and
     # hands it to `sigil run --shell` before zsh parses it.
     with tempfile.TemporaryDirectory() as tmp_dir:

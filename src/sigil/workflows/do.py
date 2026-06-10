@@ -1,0 +1,35 @@
+"""Direct agent-step workflow for the `,,,` glyph."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from pathlib import Path
+from typing import TextIO
+
+from .step import HandoffOutput, run_agent_step
+
+
+def run_do_step(
+    objective: str,
+    *,
+    system: str | None = None,
+    stdin_text: str = "",
+    max_steps: int | None = None,
+    allowed_tools: Iterable[str] | None = None,
+    handoff_path: str | Path | None = None,
+    handoff_output: HandoffOutput = "detail",
+    trace_output: TextIO | None = None,
+) -> int:
+    """Run an auto-approved step with direct command and edit execution."""
+    return run_agent_step(
+        objective,
+        glyph=",,,",
+        system=system,
+        stdin_text=stdin_text,
+        max_steps=max_steps,
+        allowed_tools=allowed_tools,
+        handoff_path=handoff_path,
+        handoff_output=handoff_output,
+        trace_output=trace_output,
+        edit_mode="direct_replace",
+    )

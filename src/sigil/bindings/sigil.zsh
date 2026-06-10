@@ -1,7 +1,7 @@
 # Sigil zsh bindings. Core behavior lives in the `sigil` executable.
 #
 # This file should stay boring: it wires zsh lifecycle hooks and punctuation
-# functions to the CLI. The Zeta glyph route keeps prompt insertion and command
+# functions to the CLI. The Zeta glyph workflow keeps prompt insertion and command
 # capture here, but delegates the model/tool loop to Python.
 
 # Exported so `sigil doctor`, which runs as a child process, can tell that an
@@ -145,7 +145,7 @@ __sigil_zeta_after_command_before_prompt() {
 sigil_command() {
   emulate -L zsh
   # `, prompt`: read-only assistant answer. It does not stage commands or mutate
-  # history; `,,` and `,,,` are the routes that can hand a command back to zsh.
+  # history; `,,` and `,,,` are the workflows that can hand a command back to zsh.
   if [[ "$#" == "0" ]]; then
     "$__sigil_bin" ask
   else

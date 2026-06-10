@@ -1,4 +1,4 @@
-"""Terminal display for Sigil routes: rendering machinery and summaries."""
+"""Terminal display for Sigil workflows: rendering machinery and summaries."""
 
 from __future__ import annotations
 

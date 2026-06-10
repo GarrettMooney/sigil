@@ -1,7 +1,7 @@
-"""Python runner for Zeta-backed agent steps.
+"""Generic Python workflow for Zeta-backed agent steps.
 
 The sourced shell bindings own the primary interactive loop. This module keeps
-CLI-routed glyph steps on the same Zeta service layer without an external agent.
+CLI glyph steps on the same Zeta service layer without an external agent.
 """
 
 from __future__ import annotations
@@ -11,6 +11,17 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
+from ..agent_io import (
+    TurnEventRecorder,
+    TurnRenderer,
+    build_turn_renderer,
+    event_model_telemetry,
+    model_server_ready,
+    model_telemetry_fields,
+    record_turn_abort,
+    record_zeta_event,
+    render_final_text,
+)
 from ..display import (
     render_handoff_lines,
     render_tool_result_summary,
@@ -24,17 +35,6 @@ from ..zeta.skills import expand_skill_directive
 from ..zeta.timeline import current_timeline, record_event
 from ..zeta.tools import allowed_tool_names
 from ..zeta.trace import latest_prompt_trace_fields
-from ._turn import (
-    TurnEventRecorder,
-    TurnRenderer,
-    build_turn_renderer,
-    event_model_telemetry,
-    model_server_ready,
-    model_telemetry_fields,
-    record_turn_abort,
-    record_zeta_event,
-    render_final_text,
-)
 
 HandoffOutput = Literal["detail", "summary", "none"]
 EditMode = Literal["review_patch", "direct_replace"]
@@ -54,7 +54,7 @@ def run_agent_step(
     trace_output: TextIO | None = None,
     edit_mode: EditMode | None = None,
 ) -> int:
-    """Run a Zeta agent step for CLI routes."""
+    """Run a Zeta agent step for CLI workflows."""
     selected_model = active_model_selection()
     if not model_server_ready(selected_model):
         return 1
