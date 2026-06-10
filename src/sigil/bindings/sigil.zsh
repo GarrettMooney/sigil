@@ -4,8 +4,8 @@
 # functions to the CLI. The Zeta glyph route keeps prompt insertion and command
 # capture here, but delegates the model/tool loop to Python.
 
-# Exported on purpose: `sigil doctor` runs as a child process and uses this to
-# tell whether an ancestor shell loaded the binding.
+# Exported so `sigil doctor`, which runs as a child process, can tell that an
+# ancestor shell loaded the binding.
 export SIGIL_BINDING_LOADED="zsh"
 
 # ── CLI Resolution ───────────────────────────────────────────────────────
@@ -71,17 +71,17 @@ __sigil_glyphs_enabled() {
 
 # ── Zeta Continuation Capture ────────────────────────────────────────────
 
-# Capture stays open between a handoff and the `,,` that resumes it, but not
-# for the life of the shell: it expires after SIGIL_ZETA_CAPTURE_TURNS (default
-# 20) recorded commands so an abandoned handoff does not record ambiently.
+# Capture stays open between a handoff and the `,,` that resumes it, and
+# expires after SIGIL_ZETA_CAPTURE_TURNS (default 20) recorded commands so an
+# abandoned handoff does not record ambiently.
 typeset -g __sigil_zeta_capture_active="${__sigil_zeta_capture_active:-0}"
 typeset -g __sigil_zeta_capture_remaining="${__sigil_zeta_capture_remaining:-0}"
 typeset -g __sigil_zeta_current_command=""
 
 __sigil_zeta_enable_capture() {
   emulate -L zsh
-  # Recording has no off switch in this alpha: bad or non-positive limits
-  # fall back to the default window.
+  # Recording cannot be disabled: non-numeric or non-positive limits fall
+  # back to the default window.
   local limit="${SIGIL_ZETA_CAPTURE_TURNS:-20}"
   if [[ "$limit" != <-> ]] || (( limit <= 0 )); then
     limit=20
@@ -275,8 +275,8 @@ __sigil_install_plus_capture_widget() {
 
 if __sigil_glyphs_enabled; then
   # Function definitions make the punctuation usable in non-alias contexts.
-  # `+` has neither on purpose: the accept-line widget is its only path, so a
-  # `+ ...` line is never parsed by zsh instead.
+  # `+` is handled solely by the accept-line widget above; it has no function
+  # or alias, so zsh never parses a `+ ...` line.
   function ',' { sigil_command "$@" }
   function ',,' { sigil_agent_step "$@" }
   function ',,,' { sigil_agent_step_auto "$@" }
@@ -311,8 +311,8 @@ __sigil_install_lifecycle_hooks
 
 # ── History Filtering ────────────────────────────────────────────────────
 
-# Glyph lines are prompts, not commands the shell can re-run: keep them out
-# of the history file, but recallable with up-arrow during the session.
+# Glyph lines are prompts, not commands the shell can re-run: they stay out
+# of the history file but remain recallable with up-arrow in the session.
 if __sigil_glyphs_enabled; then
   __sigil_zshaddhistory() {
     emulate -L zsh
