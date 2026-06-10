@@ -1,0 +1,1163 @@
+"""Agent loop tests."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, cast
+
+
+from sigil.protocols import (
+    SHELL_PROMPT_HANDOFF_TYPE,
+)
+from sigil.zeta import agent as zeta_agent
+from sigil.zeta import prompt as zeta_prompt
+from sigil.zeta import model as zeta_model
+from sigil.zeta import trace as zeta_trace
+from _zeta_helpers import (
+    DeltaSink,
+    assert_tool_result_derivation_graph,
+    event_by_type,
+    read_tool_call_response,
+    read_tool_payload,
+    required_stream_sink,
+)
+
+
+def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        captured["messages"] = messages
+        captured["kwargs"] = kwargs
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assert result.final_text == "done"
+    assert result.events[0]["type"] == "assistant_message"
+    assert result.events[0]["content"] == "done"
+    assert result.events[0]["prompt_trace"]["prompt_object_id"]
+    assert len(result.prompt_traces) == 1
+    kwargs = cast(dict[str, Any], captured["kwargs"])
+    assert kwargs["tools"][0]["function"]["name"] == "read"
+
+
+def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+    store = zeta_trace.InMemoryStore()
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        captured["messages"] = messages
+        captured["kwargs"] = kwargs
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [{"role": "user", "content": "prior"}],
+        zeta_agent.AgentConfig(
+            allowed_tools=("read",),
+            max_turns=1,
+            model_name="unit-model",
+        ),
+        context="Project context",
+        prompt_builder=zeta_prompt.PromptBuilder(store=store),
+    )
+
+    assert len(result.prompt_traces) == 1
+    trace = result.prompt_traces[0]
+    prompt = store.get_object(trace.prompt_object_id)
+    assert prompt is not None
+    kwargs = cast(dict[str, Any], captured["kwargs"])
+    assert prompt.data["payload_sha256"] == zeta_prompt.builder.payload_sha256(
+        zeta_model.chat_completion_request_body(
+            cast(list[dict[str, Any]], captured["messages"]),
+            tools=cast(list[dict[str, Any]], kwargs["tools"]),
+            tool_choice=cast(str, kwargs["tool_choice"]),
+            selected_model="unit-model",
+        )
+    )
+    assistant = store.get_object(cast(str, trace.assistant_message_object_id))
+    assert assistant is not None
+    assert assistant.kind == "assistant_message"
+    assert assistant.links == (trace.prompt_object_id,)
+    assert assistant.data["message"] == {"content": "done"}
+    assert result.events[0]["prompt_trace"]["assistant_message_object_id"] == (
+        trace.assistant_message_object_id
+    )
+
+
+def test_zeta_agent_turn_captures_model_telemetry(monkeypatch) -> None:
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del messages
+        telemetry_sink = cast(
+            "Callable[[dict[str, Any]], None]", kwargs["telemetry_sink"]
+        )
+        telemetry_sink(
+            {
+                "usage": {
+                    "prompt_tokens": 123,
+                    "completion_tokens": 4,
+                    "total_tokens": 127,
+                },
+                "model_context_tokens": 262_144,
+            }
+        )
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assert result.final_text == "done"
+    assert result.model_telemetry == {
+        "usage": {
+            "prompt_tokens": 123,
+            "completion_tokens": 4,
+            "total_tokens": 127,
+        },
+        "model_context_tokens": 262_144,
+    }
+
+
+def test_zeta_agent_turn_attaches_model_telemetry_to_first_tool_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    first = tmp_path / "README.md"
+    second = tmp_path / "pyproject.toml"
+    first.write_text("README\n", encoding="utf-8")
+    second.write_text("[project]\n", encoding="utf-8")
+    tool_telemetry = {
+        "usage": {"prompt_tokens": 123, "completion_tokens": 8, "total_tokens": 131},
+        "model_context_tokens": 262_144,
+    }
+    final_telemetry = {
+        "usage": {"prompt_tokens": 456, "completion_tokens": 4, "total_tokens": 460},
+        "model_context_tokens": 262_144,
+    }
+    responses = iter(
+        [
+            (
+                tool_telemetry,
+                {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "read",
+                                "arguments": json.dumps({"path": str(first)}),
+                            },
+                        },
+                        {
+                            "id": "call-2",
+                            "type": "function",
+                            "function": {
+                                "name": "read",
+                                "arguments": json.dumps({"path": str(second)}),
+                            },
+                        },
+                    ],
+                },
+            ),
+            (final_telemetry, {"content": "done"}),
+        ]
+    )
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del messages
+        telemetry, response = next(responses)
+        telemetry_sink = cast(
+            "Callable[[dict[str, Any]], None]", kwargs["telemetry_sink"]
+        )
+        telemetry_sink(telemetry)
+        return response
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+    )
+
+    tool_results = [
+        event for event in result.events if event.get("type") == "tool_result"
+    ]
+    assert tool_results[0]["model_telemetry"] == tool_telemetry
+    assert "model_telemetry" not in tool_results[1]
+    assert result.model_telemetry == final_telemetry
+
+
+def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "README.md"
+    target.write_text("README\n", encoding="utf-8")
+    store = zeta_trace.InMemoryStore()
+    responses = iter([read_tool_call_response(target), {"content": "done"}])
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda messages, **kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "run_tool",
+        lambda name, params: read_tool_payload(target),
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+        prompt_builder=zeta_prompt.PromptBuilder(store=store),
+    )
+
+    assert result.final_text == "done"
+    assert len(result.prompt_traces) == 2
+    assert result.prompt_traces[0].prompt_object_id != (
+        result.prompt_traces[1].prompt_object_id
+    )
+    second_prompt = store.get_object(result.prompt_traces[1].prompt_object_id)
+    assert second_prompt is not None
+    second_messages = [
+        obj.data["message"]
+        for obj in (
+            store.get_object(component_id) for component_id in second_prompt.links
+        )
+        if obj is not None and "message" in obj.data
+    ]
+    assert [message["role"] for message in second_messages][-2:] == [
+        "assistant",
+        "tool",
+    ]
+
+
+def test_zeta_agent_turn_records_tool_result_derivation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "README.md"
+    target.write_text("README\n", encoding="utf-8")
+    store = zeta_trace.InMemoryStore()
+    responses = iter([read_tool_call_response(target), {"content": "done"}])
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda messages, **kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "run_tool",
+        lambda name, params: read_tool_payload(target),
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+        prompt_builder=zeta_prompt.PromptBuilder(store=store),
+    )
+
+    assert_tool_result_derivation_graph(
+        store,
+        result,
+        event_by_type(result.events, "tool_call"),
+        event_by_type(result.events, "tool_result"),
+    )
+
+
+def test_zeta_agent_turn_wraps_model_request_in_status(monkeypatch) -> None:
+    events: list[str] = []
+
+    class Status:
+        def __enter__(self) -> object:
+            events.append("start")
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            events.append("stop")
+            return False
+
+    def fake_chat_completion_messages(
+        *args: object, **kwargs: object
+    ) -> dict[str, Any]:
+        del args, kwargs
+        assert events == ["start"]
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(),
+        model_status=Status,
+    )
+
+    assert result.final_text == "done"
+    assert events == ["start", "stop"]
+
+
+def test_zeta_agent_turn_forwards_content_deltas_and_marks_final(monkeypatch) -> None:
+    sink = DeltaSink()
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del args
+        stream_sink = required_stream_sink(kwargs)
+        stream_sink.content_delta("hel")
+        stream_sink.content_delta("lo")
+        return {"content": "hello"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(max_turns=1),
+        stream_sink=sink,
+    )
+
+    assert sink.deltas == ["hel", "lo"]
+    assert result.final_text == "hello"
+    assert result.final_text_streamed is True
+
+
+def test_zeta_agent_turn_stops_status_before_first_stream_delta(monkeypatch) -> None:
+    events: list[str] = []
+
+    class Status:
+        def __enter__(self) -> object:
+            events.append("start")
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            events.append("stop")
+            return False
+
+    class AssertingSink:
+        def content_delta(self, text: str) -> None:
+            assert text == "done"
+            assert events == ["start", "stop"]
+            events.append("delta")
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del args
+        stream_sink = required_stream_sink(kwargs)
+        stream_sink.content_delta("done")
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(max_turns=1),
+        model_status=Status,
+        stream_sink=AssertingSink(),
+    )
+
+    assert result.final_text == "done"
+    assert events == ["start", "stop", "delta"]
+
+
+def test_zeta_agent_turn_uses_request_model(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_model_endpoint_open(selected_url: str | None = None) -> bool:
+        captured["endpoint_url"] = selected_url
+        return True
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        captured["messages"] = messages
+        captured["kwargs"] = kwargs
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", fake_model_endpoint_open)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(
+            allowed_tools=("read",),
+            max_turns=1,
+            model_name="fast-model",
+            model_url="http://127.0.0.1:8081/v1/chat/completions",
+        ),
+    )
+
+    assert result.final_text == "done"
+    assert captured["endpoint_url"] == "http://127.0.0.1:8081/v1/chat/completions"
+    kwargs = cast(dict[str, Any], captured["kwargs"])
+    assert kwargs["selected_model"] == "fast-model"
+    assert kwargs["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
+
+
+def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> None:
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"README.md"}',
+                        },
+                    },
+                    {
+                        "id": "call-2",
+                        "type": "function",
+                        "function": {
+                            "name": "ls",
+                            "arguments": '{"path":"src"}',
+                        },
+                    },
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+    ran: list[tuple[str, dict[str, Any]]] = []
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+
+    def fake_run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
+        ran.append((name, params))
+        return {"ok": True, "content": [{"type": "text", "text": name}]}
+
+    monkeypatch.setattr(zeta_agent, "run_tool", fake_run_tool)
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read", "ls"), max_turns=2),
+    )
+
+    assert ran == [
+        ("read", {"path": "README.md"}),
+        ("ls", {"path": "src"}),
+    ]
+    assert result.final_text == "done"
+    assert [
+        event["name"] for event in result.events if event.get("type") == "tool_call"
+    ] == ["read", "ls"]
+
+
+def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
+    sink = DeltaSink()
+    responses = iter(
+        [
+            {
+                "content": "I'll inspect README.",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"README.md"}',
+                        },
+                    }
+                ],
+            },
+            {"content": "It is a README."},
+        ]
+    )
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del args
+        response = next(responses)
+        stream_sink = kwargs.get("stream_sink")
+        if response.get("content") and stream_sink is not None:
+            stream_sink = cast(zeta_model.ChatCompletionStreamSink, stream_sink)
+            stream_sink.content_delta(str(response["content"]))
+        return response
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "run_tool",
+        lambda name, params: {
+            "ok": True,
+            "content": [{"type": "text", "text": "README"}],
+        },
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+        stream_sink=sink,
+    )
+
+    assert sink.deltas == ["I'll inspect README.", "It is a README."]
+    assert result.final_text == "It is a README."
+    assert result.final_text_streamed is True
+    assert result.events[0]["content"] == "I'll inspect README."
+
+
+def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del kwargs
+        captured["messages"] = messages
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "inspect the repo",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assert result.final_text == "done"
+    messages = cast(list[dict[str, Any]], captured["messages"])
+    prompt_messages = [
+        message
+        for message in messages
+        if message.get("role") == "user"
+        and "Objective:\ninspect the repo" in str(message.get("content"))
+    ]
+    assert len(prompt_messages) == 1
+
+
+def test_zeta_agent_turn_orders_follow_up_history_before_current_events(
+    monkeypatch,
+) -> None:
+    captured: list[list[dict[str, Any]]] = []
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"DECISIONS.md"}',
+                        },
+                    }
+                ]
+            },
+            {"content": "Improve the decision log."},
+        ]
+    )
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del kwargs
+        captured.append(messages)
+        return next(responses)
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "run_tool",
+        lambda name, params: {
+            "ok": True,
+            "content": [{"type": "text", "text": "Decision log"}],
+            "metadata": {"path": "DECISIONS.md"},
+        },
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "How would you improve it?",
+        [
+            {"role": "user", "content": "What is this vault about?"},
+            {"role": "assistant", "content": "It is a CEO vault."},
+        ],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=2),
+    )
+
+    assert result.final_text == "Improve the decision log."
+    second_turn = captured[1]
+    assert [message["role"] for message in second_turn] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert second_turn[1]["content"] == "What is this vault about?"
+    assert second_turn[2]["content"] == "It is a CEO vault."
+    assert "Objective:\nHow would you improve it?" in second_turn[3]["content"]
+    assert second_turn[4]["tool_calls"][0]["id"] == "call-1"
+    assert second_turn[5]["tool_call_id"] == "call-1"
+
+
+def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> None:
+    streamed: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"path":"README.md"}',
+                    },
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+
+    def fake_run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
+        del name, params
+        assert [event.get("type") for event in streamed] == [
+            "assistant_message",
+            "tool_call",
+            "tool_analysis",
+        ]
+        return {"ok": True, "content": [{"type": "text", "text": "README"}]}
+
+    monkeypatch.setattr(zeta_agent, "run_tool", fake_run_tool)
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        event_sink=streamed.append,
+    )
+
+    assert result.events == streamed
+    assert [event.get("type") for event in streamed] == [
+        "assistant_message",
+        "tool_call",
+        "tool_analysis",
+        "tool_result",
+    ]
+
+
+def test_zeta_agent_turn_stops_after_handoff_tool(monkeypatch) -> None:
+    requests = 0
+
+    def fake_chat_completion_messages(
+        *args: object, **kwargs: object
+    ) -> dict[str, Any]:
+        nonlocal requests
+        requests += 1
+        return {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "arguments": '{"command":"uv run pytest"}',
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "run_tool",
+        lambda name, params: {
+            "ok": True,
+            "handoff": {
+                "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "command": "uv run pytest",
+                "reason": "Run tests.",
+            },
+        },
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "test",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("bash",), max_turns=3),
+    )
+
+    assert requests == 1
+    assert result.handoff == {
+        "type": SHELL_PROMPT_HANDOFF_TYPE,
+        "command": "uv run pytest",
+        "reason": "Run tests.",
+    }
+
+
+def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
+    requests = 0
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "bash",
+                            "arguments": '{"command":"printf direct-bash"}',
+                        },
+                    }
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+
+    def fake_chat_completion_messages(
+        *args: object, **kwargs: object
+    ) -> dict[str, Any]:
+        nonlocal requests
+        requests += 1
+        return next(responses)
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "test",
+        [],
+        zeta_agent.AgentConfig(
+            allowed_tools=("bash",),
+            execution_mode="direct",
+            max_turns=3,
+        ),
+    )
+
+    assert requests == 2
+    assert result.handoff is None
+    assert result.final_text == "done"
+    tool_result = next(
+        event for event in result.events if event.get("type") == "tool_result"
+    )
+    assert "direct-bash" in tool_result["result"]["content"][0]["text"]
+
+
+def test_zeta_agent_turn_stops_after_default_max_turns(monkeypatch) -> None:
+    requests = 0
+
+    def fake_chat_completion_messages(*args: object, **kwargs: object) -> dict:
+        del args, kwargs
+        nonlocal requests
+        requests += 1
+        return {
+            "tool_calls": [
+                {
+                    "id": f"call-{requests}",
+                    "type": "function",
+                    "function": {"name": "ls", "arguments": '{"path":"."}'},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+    monkeypatch.setattr(
+        zeta_agent, "run_tool", lambda name, params, **kwargs: {"ok": True}
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "test",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("ls",)),
+    )
+
+    assert requests == zeta_agent.DEFAULT_MAX_TURNS
+    assert result.final_text == ""
+
+
+def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> None:
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"x"}',
+                        },
+                    }
+                ]
+            },
+            {"content": "recovered"},
+        ]
+    )
+
+    def crash_run_tool(name: str, params: dict[str, Any], **kwargs: object) -> dict:
+        raise ValueError("boom")
+
+    def fake_chat_completion_messages(*args: object, **kwargs: object) -> dict:
+        del args, kwargs
+        return next(responses)
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+    monkeypatch.setattr(zeta_agent, "run_tool", crash_run_tool)
+
+    result = zeta_agent.run_agent_turn(
+        "test",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=3),
+    )
+
+    assert result.final_text == "recovered"
+    tool_result = next(
+        event for event in result.events if event.get("type") == "tool_result"
+    )
+    assert tool_result["result"]["ok"] is False
+    assert tool_result["result"]["error"]["code"] == "tool-crashed"
+    assert "boom" in tool_result["result"]["error"]["message"]
+
+
+def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> None:
+    ran = False
+
+    def fail_run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
+        nonlocal ran
+        ran = True
+        return {"ok": True}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"path":"README.md","unexpected":true}',
+                    },
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(zeta_agent, "run_tool", fail_run_tool)
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assert ran is False
+    tool_result = next(
+        event for event in result.events if event.get("type") == "tool_result"
+    )
+    assert tool_result["result"]["ok"] is False
+    assert tool_result["result"]["error"]["code"] == "schema-mismatch"
+
+
+def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> None:
+    ran = False
+
+    def fail_run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
+        nonlocal ran
+        ran = True
+        return {"ok": True}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "arguments": '{"command":"uv run pytest"}',
+                    },
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(zeta_agent, "run_tool", fail_run_tool)
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assert ran is False
+    tool_result = next(
+        event for event in result.events if event.get("type") == "tool_result"
+    )
+    assert tool_result["result"]["ok"] is False
+    assert tool_result["result"]["error"]["code"] == "disallowed-tool"
+
+
+def test_zeta_agent_direct_edit_stops_after_applying(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("old\n", encoding="utf-8")
+    requests = 0
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        nonlocal requests
+        requests += 1
+        return {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "edit",
+                        "arguments": json.dumps(
+                            {
+                                "location": str(target),
+                                "old": "old\n",
+                                "new": "new\n",
+                            }
+                        ),
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "edit",
+        [],
+        zeta_agent.AgentConfig(
+            allowed_tools=("edit",),
+            edit_mode="direct_replace",
+            max_turns=3,
+        ),
+    )
+
+    assert requests == 1
+    assert result.handoff is None
+    assert target.read_text(encoding="utf-8") == "new\n"
+    tool_result = next(
+        event for event in result.events if event.get("type") == "tool_result"
+    )
+    assert tool_result["result"]["ok"] is True
+    assert tool_result["result"]["metadata"]["mode"] == "direct_replace"
+
+
+def test_zeta_agent_direct_mode_continues_after_edit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("old\n", encoding="utf-8")
+    requests = 0
+
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "edit",
+                            "arguments": json.dumps(
+                                {
+                                    "location": str(target),
+                                    "old": "old\n",
+                                    "new": "new\n",
+                                }
+                            ),
+                        },
+                    }
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        nonlocal requests
+        requests += 1
+        return next(responses)
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "edit",
+        [],
+        zeta_agent.AgentConfig(
+            allowed_tools=("edit",),
+            edit_mode="direct_replace",
+            execution_mode="direct",
+            max_turns=3,
+        ),
+    )
+
+    assert requests == 2
+    assert result.final_text == "done"
+    assert target.read_text(encoding="utf-8") == "new\n"
