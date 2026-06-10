@@ -461,7 +461,10 @@ def test_zsh_status_glyph_dispatches_to_sigil_status() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/bindings/sigil.zsh\n                    ?\n                    "
+                # eval re-parses with the sourced aliases in scope, matching the
+                # line-at-a-time parsing of an interactive shell. A plain `?` in
+                # a fully pre-parsed `zsh -c` script never sees the alias.
+                "                    source src/sigil/bindings/sigil.zsh\n                    eval '?'\n                    "
             ),
             tmp,
             stub,
@@ -469,6 +472,28 @@ def test_zsh_status_glyph_dispatches_to_sigil_status() -> None:
         assert_success(result)
         assert result.stdout == "clean\n"
         assert read_log(tmp) == ["status"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_binding_preserves_question_mark_globbing() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        (tmp / "ab").touch()
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                f"""\
+                source src/sigil/bindings/sigil.zsh
+                cd {tmp}
+                print -- ?b
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout == "ab\n"
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

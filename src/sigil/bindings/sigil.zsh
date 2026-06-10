@@ -273,10 +273,6 @@ __sigil_install_plus_capture_widget() {
 # ── Glyph Bindings ───────────────────────────────────────────────────────
 
 if __sigil_glyphs_enabled; then
-  # zsh treats bare `?` as a glob pattern before command dispatch. Disabling
-  # that pattern keeps `?` available as a Sigil glyph.
-  disable -p "?" 2>/dev/null || true
-
   # Function definitions make the punctuation usable in non-alias contexts.
   function ',' { sigil_command "$@" }
   function ',,' { sigil_agent_step "$@" }
