@@ -43,7 +43,7 @@ class DoctorCheck:
 
 def zsh_binding_source() -> Path:
     """Return the zsh binding source from package data or a source checkout."""
-    packaged = importlib.resources.files("sigil").joinpath("shell", "zsh", BINDING_NAME)
+    packaged = importlib.resources.files("sigil").joinpath("bindings", BINDING_NAME)
     try:
         with importlib.resources.as_file(packaged) as path:
             if path.exists():
@@ -51,7 +51,7 @@ def zsh_binding_source() -> Path:
     except FileNotFoundError:
         pass
 
-    source_checkout = Path(__file__).resolve().parent / "shell" / "zsh" / BINDING_NAME
+    source_checkout = Path(__file__).resolve().parent / "bindings" / BINDING_NAME
     if source_checkout.exists():
         return source_checkout
     raise FileNotFoundError(BINDING_NAME)

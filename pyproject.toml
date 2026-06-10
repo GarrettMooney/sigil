@@ -58,7 +58,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 sigil = [
-  "shell/zsh/sigil.zsh",
+  "bindings/sigil.zsh",
 ]
 
 [tool.setuptools_scm]

@@ -193,7 +193,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_command hello\n                    sigil_agent_step hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/bindings/sigil.zsh\n                    sigil_command hello\n                    sigil_agent_step hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -217,7 +217,7 @@ def test_zsh_agent_step_uses_zeta_handoff_directly() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_agent_step_auto repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/bindings/sigil.zsh\n                    sigil_agent_step_auto repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -236,7 +236,7 @@ def test_zsh_bare_agent_step_continues_after_shell_handoff() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_agent_step\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/bindings/sigil.zsh\n                    sigil_agent_step\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -256,7 +256,7 @@ def test_zsh_agent_wrappers_call_zeta_loop() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    "
+                "                    source src/sigil/bindings/sigil.zsh\n                    sigil_agent_step hello\n                    sigil_agent_step_auto hello\n                    "
             ),
             tmp,
             stub,
@@ -276,7 +276,7 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_agent_step run it\n                    "
+                "                    source src/sigil/bindings/sigil.zsh\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_agent_step run it\n                    "
             ),
             tmp,
             stub,
@@ -299,7 +299,7 @@ def test_zsh_glyph_aliases_dispatch_piped_stdin_before_globbing() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    eval \"printf 'notes\\\\n' | , draft executive summary\"\n                    eval \"printf 'cmd\\\\n' | ,, run it\"\n                    "
+                "                    source src/sigil/bindings/sigil.zsh\n                    eval \"printf 'notes\\\\n' | , draft executive summary\"\n                    eval \"printf 'cmd\\\\n' | ,, run it\"\n                    "
             ),
             tmp,
             stub,
@@ -319,7 +319,7 @@ def test_zsh_does_not_record_sigil_commands() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    false\n                    wait\n                    "
+                "                    source src/sigil/bindings/sigil.zsh\n                    false\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -336,7 +336,7 @@ def test_zsh_does_not_record_sigil_wrapper_commands() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_command hello\n                    wait\n                    "
+                "                    source src/sigil/bindings/sigil.zsh\n                    sigil_command hello\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -354,7 +354,7 @@ def test_zsh_run_glyph_dispatches_to_sigil_run() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    + echo captured\n                    "
+                "                    source src/sigil/bindings/sigil.zsh\n                    + echo captured\n                    "
             ),
             tmp,
             stub,
@@ -372,7 +372,7 @@ def test_zsh_raw_plus_capture_dispatches_shell_command_to_sigil_run() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_run_plus_capture_line "+ echo captured | cat"\n                    '
+                '                    source src/sigil/bindings/sigil.zsh\n                    __sigil_run_plus_capture_line "+ echo captured | cat"\n                    '
             ),
             tmp,
             stub,
@@ -390,7 +390,7 @@ def test_zsh_installs_raw_plus_capture_accept_line_widget() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    print -- "widget=${widgets[accept-line]}"\n                    '
+                '                    source src/sigil/bindings/sigil.zsh\n                    print -- "widget=${widgets[accept-line]}"\n                    '
             ),
             tmp,
             stub,
@@ -407,7 +407,7 @@ def test_zsh_accept_line_plus_capture_preserves_exit_status() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    function zle() { return 0; }\n                    source src/sigil/shell/zsh/sigil.zsh\n                    BUFFER="+ echo captured"\n                    __sigil_accept_line_with_plus_capture\n                    print -- "exit=$?"\n                    '
+                '                    function zle() { return 0; }\n                    source src/sigil/bindings/sigil.zsh\n                    BUFFER="+ echo captured"\n                    __sigil_accept_line_with_plus_capture\n                    print -- "exit=$?"\n                    '
             ),
             tmp,
             stub,
@@ -427,7 +427,7 @@ def test_zsh_wraps_simple_zeta_handoff_with_run_capture() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_agent_step hello >/dev/null\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/bindings/sigil.zsh\n                    sigil_agent_step hello >/dev/null\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -444,7 +444,7 @@ def test_zsh_wraps_shell_grammar_handoff_with_run_capture() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_history_insert "$(__sigil_zeta_prompt_command "echo zeta | cat")"\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/bindings/sigil.zsh\n                    __sigil_history_insert "$(__sigil_zeta_prompt_command "echo zeta | cat")"\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -461,7 +461,7 @@ def test_zsh_status_glyph_dispatches_to_sigil_status() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    ?\n                    "
+                "                    source src/sigil/bindings/sigil.zsh\n                    ?\n                    "
             ),
             tmp,
             stub,
@@ -479,7 +479,7 @@ def test_zsh_does_not_record_ordinary_turns_ambiently() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    true\n                    false\n                    wait\n                    "
+                "                    source src/sigil/bindings/sigil.zsh\n                    true\n                    false\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -496,7 +496,7 @@ def test_zsh_records_turns_only_after_zeta_handoff() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_agent_step hello >/dev/null\n                    __sigil_zeta_before_command "echo edited"\n                    true\n                    __sigil_zeta_after_command_before_prompt\n                    wait\n                    '
+                '                    source src/sigil/bindings/sigil.zsh\n                    sigil_agent_step hello >/dev/null\n                    __sigil_zeta_before_command "echo edited"\n                    true\n                    __sigil_zeta_after_command_before_prompt\n                    wait\n                    '
             ),
             tmp,
             stub,
@@ -519,7 +519,7 @@ def test_zsh_capture_window_expires_after_turn_limit() -> None:
             textwrap.dedent(
                 """\
                 export SIGIL_ZETA_CAPTURE_TURNS=2
-                source src/sigil/shell/zsh/sigil.zsh
+                source src/sigil/bindings/sigil.zsh
                 sigil_agent_step hello >/dev/null
                 for command in "echo one" "echo two" "echo three"; do
                   __sigil_zeta_before_command "$command"
@@ -548,7 +548,7 @@ def test_zsh_shell_turn_recording_does_not_spawn_python3() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/sigil/shell/zsh/sigil.zsh
+                source src/sigil/bindings/sigil.zsh
                 function python3() { print -- "python3 used" >> "$ZLE_LOG"; return 127 }
                 __sigil_zeta_record_shell_turn "echo hi" 3
                 """
@@ -574,7 +574,7 @@ def test_zsh_binding_functions_survive_hostile_user_options() -> None:
             textwrap.dedent(
                 """\
                 setopt ksh_arrays sh_word_split
-                source src/sigil/shell/zsh/sigil.zsh
+                source src/sigil/bindings/sigil.zsh
                 __sigil_run_plus_capture_line "+ echo captured | cat"
                 sigil_agent_step hello >/dev/null
                 print -- "history=${history[$HISTCMD]}"
@@ -600,7 +600,7 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/sigil/shell/zsh/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "+ echo"; print -- "run=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
+                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/sigil/bindings/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "+ echo"; print -- "run=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
             ),
             tmp,
             stub,
