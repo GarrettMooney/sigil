@@ -205,8 +205,9 @@ Examples:
 ?
 ```
 
-`,` prints a read-only answer. It does not stage commands or write to shell
-history.
+`,` prints a read-only answer. It does not stage commands or write to the
+shell history file; the prompt stays recallable with up-arrow for the rest of
+the session.
 
 `,,` proposes the next reviewed step. The loop may call local
 tools such as `read`, `ls`, `grep`, `bash`, `edit`, and `write` until the model

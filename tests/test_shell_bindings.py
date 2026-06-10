@@ -718,6 +718,40 @@ def test_zsh_binding_functions_survive_hostile_user_options() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_glyph_lines_recallable_in_session_but_not_saved() -> None:
+    # An interactive shell adds accepted lines through zshaddhistory; glyph
+    # prompts must stay recallable with up-arrow (internal history) without
+    # ending up in the history file. inc_append_history exercises the file
+    # write inside the session, where the return-2 mark applies.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        histfile = tmp / "histfile"
+        result = run_shell_stdin(
+            ["zsh", "-f", "-i"],
+            textwrap.dedent(
+                f"""\
+                HISTFILE={histfile}
+                HISTSIZE=100
+                SAVEHIST=100
+                setopt inc_append_history
+                source src/sigil/bindings/sigil.zsh
+                , hello
+                true
+                history 1
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert ", hello" in result.stdout
+        saved = histfile.read_text(encoding="utf-8")
+        assert ", hello" not in saved
+        assert "true" in saved
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -732,10 +766,12 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         )
         assert_success(result)
         assert "__sigil_zshaddhistory" in result.stdout
-        assert "comma=1" in result.stdout
-        assert "question=1" in result.stdout
+        # 2 keeps the line on the internal history list (up-arrow recall) while
+        # keeping it out of the history file.
+        assert "comma=2" in result.stdout
+        assert "question=2" in result.stdout
         assert "escaped_question=0" in result.stdout
-        assert "run=1" in result.stdout
+        assert "run=2" in result.stdout
         assert "at=0" in result.stdout
         assert "echo=0" in result.stdout
         assert (tmp / "zle.log").read_text(encoding="utf-8") == "user:echo hello\n"

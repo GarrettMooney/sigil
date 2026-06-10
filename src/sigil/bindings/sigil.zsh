@@ -300,14 +300,15 @@ __sigil_install_lifecycle_hooks
 
 # ── History Filtering ────────────────────────────────────────────────────
 
-# Shell history should stay a list of things the shell can re-run. Sigil
-# instructions are prompts, not shell commands.
+# The history file should stay a list of things the shell can re-run. Sigil
+# instructions are prompts, not shell commands — but they stay on the internal
+# history list (return 2) so up-arrow can recall and edit them in-session.
 if __sigil_glyphs_enabled; then
   __sigil_zshaddhistory() {
     emulate -L zsh
     local line="${1%%$'\n'}"
     case "$line" in
-      ,*|\?*|+*) return 1 ;;
+      ,*|\?*|+*) return 2 ;;
     esac
     return 0
   }
