@@ -6207,3 +6207,21 @@ def test_zeta_inmemory_store_dedupes_repeated_derivations() -> None:
 
     assert first == second
     assert len(store.derivations_for_output("sha256:out")) == 1
+
+
+def test_zeta_measure_counts_project_context_once() -> None:
+    context = "x" * 4000
+    components = zeta_prompt.prompt_components(
+        "inspect",
+        [],
+        allowed_tools=("read",),
+        context=context,
+    )
+
+    project = next(c for c in components if c.kind == "project_context")
+    assert "content" not in project.data
+    assert project.data["chars"] == 4000
+    assert str(project.data["sha256"]).startswith("sha256:")
+    usage = zeta_prompt.measure(components)
+    project_usage = next(c for c in usage.components if c.kind == "project_context")
+    assert project_usage.tokens < 50

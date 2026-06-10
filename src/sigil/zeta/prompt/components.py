@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal
@@ -308,10 +309,16 @@ def non_message_components(
             )
         )
     if context.strip():
+        # The context text itself ships inside the user_objective message;
+        # this component records provenance without double-counting it.
+        content = context.strip()
         components.append(
             PromptComponent(
                 kind="project_context",
-                data={"objective": objective, "content": context.strip()},
+                data={
+                    "sha256": "sha256:" + hashlib.sha256(content.encode()).hexdigest(),
+                    "chars": len(content),
+                },
             )
         )
     return components
