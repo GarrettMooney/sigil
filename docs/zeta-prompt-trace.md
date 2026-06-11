@@ -361,15 +361,24 @@ trace objects. The canonical continuity pointer is the run head, and the
 canonical model input is the payload rebuilt from the prompt object's
 components and verified by its stored hash.
 
-Finally, the system still needs better user-facing tools. The graph is
-inspectable today with:
+The graph is inspectable and exercisable from the CLI:
 
 ```text
+sigil zeta trace log
 sigil zeta trace show OBJECT_ID
+sigil zeta trace tree OBJECT_ID [--down]
 sigil zeta trace closure OBJECT_ID
+sigil zeta trace diff OLD_PROMPT NEW_PROMPT [--stat]
+sigil zeta trace replay PROMPT_ID [--model PROFILE] [--diff]
 sigil zeta trace refs
 sigil zeta trace prompts
 ```
 
-Replay and diff commands do not exist yet; they are the next step toward
-turning the stored graph into a day-to-day debugging and evaluation surface.
+`trace diff` is the component-level comparison this design makes cheap:
+identical component ids are unchanged by construction, so only changed
+components need a text diff. `trace replay` is prompt replay plus model
+replay: it rebuilds the payload from the linked components, verifies the
+stored hash, resends through the model boundary, and records the new
+answer with a `SigilModelReplay:v1` derivation — so a replay is itself a
+traced object, visible from `trace tree PROMPT_ID --down` next to the
+original answer.

@@ -430,6 +430,21 @@ sigil zeta trace show 4f9d01c2
 sigil zeta trace tree 4f9d01c2 --down
 ```
 
+Because prompts are content-addressed component graphs, two more
+questions are one command each. `trace diff A B` compares two prompts
+component by component — identical ids are unchanged, changed
+components get a text diff (`--stat` for the one-line view). `trace
+replay ID` rebuilds the exact request from the stored components,
+verifies it against the recorded payload hash, and resends it through
+the model boundary — against the session's active model or `--model
+PROFILE` — recording the new answer in the trace so replays are
+themselves inspectable (`--diff` to diff old and new answers):
+
+```sh
+sigil zeta trace diff 4f9d01c2 81be33aa --stat
+sigil zeta trace replay 4f9d01c2 --model fast --diff
+```
+
 ## Project Scope
 
 Sigil is:
