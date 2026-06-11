@@ -124,7 +124,6 @@ class PromptBuilder:
             return PromptTrace(
                 prompt_object_id=prepared.prompt_object_id,
                 assistant_message_object_id=assistant_id,
-                component_object_ids=prepared.component_object_ids,
             )
         except Exception as exc:
             warn_trace_failure_once("record_assistant_message", exc)

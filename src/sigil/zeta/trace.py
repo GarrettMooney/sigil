@@ -45,11 +45,14 @@ class Derivation:
 
 @dataclass(frozen=True)
 class PromptTrace:
-    """Trace ids for one prompt request and its assistant response."""
+    """Trace ids for one prompt request and its assistant response.
+
+    Component ids ride on the prompt object's links, not here: carrying
+    them in every event payload grew the store quadratically with turns.
+    """
 
     prompt_object_id: ObjectId
     assistant_message_object_id: ObjectId | None = None
-    component_object_ids: tuple[ObjectId, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -62,10 +65,7 @@ class TraceStats:
 
 def prompt_trace_payload(trace: PromptTrace) -> dict[str, Any]:
     """Return JSON metadata for a prompt trace."""
-    payload: dict[str, Any] = {
-        "prompt_object_id": trace.prompt_object_id,
-        "component_object_ids": list(trace.component_object_ids),
-    }
+    payload: dict[str, Any] = {"prompt_object_id": trace.prompt_object_id}
     if trace.assistant_message_object_id is not None:
         payload["assistant_message_object_id"] = trace.assistant_message_object_id
     return payload
