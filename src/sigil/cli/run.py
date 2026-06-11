@@ -158,20 +158,10 @@ def start_process(
             text=False,
         )
 
-    shell = configured_shell_executable()
-    if shell:
-        return subprocess.Popen(
-            command,
-            shell=True,
-            executable=shell,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=None,
-            text=False,
-        )
     return subprocess.Popen(
         command,
         shell=True,
+        executable=configured_shell_executable() or None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         stdin=None,

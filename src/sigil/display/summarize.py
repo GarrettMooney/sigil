@@ -371,8 +371,17 @@ def prompt_trace_summary(
     label = f"{count} component" + ("" if count == 1 else "s")
     if get_object is None:
         return label
+    tokens = estimated_prompt_tokens(obj.links, get_object)
+    return f"{label} · ~{tokens} tok"
+
+
+def estimated_prompt_tokens(
+    links: tuple[str, ...],
+    get_object: Callable[[str], Object | None],
+) -> int:
+    """Estimate token usage from a prompt's linked component objects."""
     tokens = 0
-    for link in obj.links:
+    for link in links:
         component = get_object(link)
         if component is None:
             continue
@@ -384,7 +393,7 @@ def prompt_trace_summary(
                 separators=(",", ":"),
             )
         )
-    return f"{label} · ~{tokens} tok"
+    return tokens
 
 
 def assistant_trace_summary(data: dict[str, Any]) -> str:
