@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import click
 
-from ..display.summarize import short_trace_id, text_content, trace_object_summary
-from ..zeta.prompt import estimated_tokens_for_text
+from ..display.summarize import (
+    estimated_prompt_tokens,
+    short_trace_id,
+    text_content,
+    trace_object_summary,
+)
 from ..zeta.trace import (
     AmbiguousIdError,
     Object,
@@ -343,26 +346,13 @@ def list_trace_prompts(*, store: Store | None = None) -> list[dict[str, Any]]:
         obj = active_store.get_object(prompt_id)
         if obj is None:
             continue
-        components = [
-            active_store.get_object(component_id) for component_id in obj.links
-        ]
-        prompt_tokens = sum(
-            estimated_tokens_for_text(
-                json.dumps(
-                    component.data,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-            )
-            for component in components
-            if component is not None
-        )
         prompts.append(
             {
                 "id": prompt_id,
                 "components": len(obj.links),
-                "estimated_tokens": prompt_tokens,
+                "estimated_tokens": estimated_prompt_tokens(
+                    obj.links, active_store.get_object
+                ),
             }
         )
     return prompts

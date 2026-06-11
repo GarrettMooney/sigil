@@ -360,59 +360,32 @@ def handle_tool_call(
         "input": params,
         "arguments": arguments if isinstance(arguments, str) else json.dumps(params),
     }
+
+    def reject(code: str, message: str) -> ToolCallResult:
+        return invalid_tool_result(
+            call_id,
+            name,
+            params,
+            code,
+            message,
+            call_event=call_event,
+            model_telemetry=model_telemetry,
+            prompt_trace=prompt_trace,
+            prompt_builder=prompt_builder,
+            event_sink=event_sink,
+        )
+
     if parse_error:
-        return invalid_tool_result(
-            call_id,
-            name,
-            params,
-            "invalid-json-args",
-            parse_error,
-            call_event=call_event,
-            model_telemetry=model_telemetry,
-            prompt_trace=prompt_trace,
-            prompt_builder=prompt_builder,
-            event_sink=event_sink,
-        )
+        return reject("invalid-json-args", parse_error)
     if name not in allowed_tool_names():
-        return invalid_tool_result(
-            call_id,
-            name,
-            params,
-            "unknown-tool",
-            f"unknown tool: {name}",
-            call_event=call_event,
-            model_telemetry=model_telemetry,
-            prompt_trace=prompt_trace,
-            prompt_builder=prompt_builder,
-            event_sink=event_sink,
-        )
+        return reject("unknown-tool", f"unknown tool: {name}")
     if name not in allowed_tools:
-        return invalid_tool_result(
-            call_id,
-            name,
-            params,
-            "disallowed-tool",
-            f"tool is not allowed in this workflow: {name}",
-            call_event=call_event,
-            model_telemetry=model_telemetry,
-            prompt_trace=prompt_trace,
-            prompt_builder=prompt_builder,
-            event_sink=event_sink,
+        return reject(
+            "disallowed-tool", f"tool is not allowed in this workflow: {name}"
         )
     schema_errors = validate_tool_args(name, params)
     if schema_errors:
-        return invalid_tool_result(
-            call_id,
-            name,
-            params,
-            "schema-mismatch",
-            "; ".join(schema_errors),
-            call_event=call_event,
-            model_telemetry=model_telemetry,
-            prompt_trace=prompt_trace,
-            prompt_builder=prompt_builder,
-            event_sink=event_sink,
-        )
+        return reject("schema-mismatch", "; ".join(schema_errors))
     analysis = analyze_tool(name, params)
     analysis_event = {
         "type": "tool_analysis",
@@ -420,36 +393,7 @@ def handle_tool_call(
         "name": name,
         "analysis": analysis,
     }
-    if analysis.get("valid") is not True:
-        result = tool_error("invalid-analysis", "tool analysis rejected the input")
-        events: list[dict[str, Any]] = []
-        attach_tool_call_trace(
-            call_event,
-            prompt_trace=prompt_trace,
-            prompt_builder=prompt_builder,
-        )
-        emit_event(events, call_event, event_sink)
-        emit_event(events, analysis_event, event_sink)
-        result_event = tool_result_event(
-            call_id,
-            name,
-            result,
-            model_telemetry=model_telemetry,
-            prompt_trace=prompt_trace,
-        )
-        attach_tool_result_trace(
-            result_event,
-            call_event,
-            prompt_trace=prompt_trace,
-            prompt_builder=prompt_builder,
-        )
-        emit_event(
-            events,
-            result_event,
-            event_sink,
-        )
-        return ToolCallResult(events=events)
-    events = []
+    events: list[dict[str, Any]] = []
     attach_tool_call_trace(
         call_event,
         prompt_trace=prompt_trace,
@@ -457,15 +401,18 @@ def handle_tool_call(
     )
     emit_event(events, call_event, event_sink)
     emit_event(events, analysis_event, event_sink)
-    try:
-        result = run_tool(
-            name,
-            params,
-            edit_mode=edit_mode,
-            execution_mode=execution_mode,
-        )
-    except Exception as exc:
-        result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
+    if analysis.get("valid") is not True:
+        result = tool_error("invalid-analysis", "tool analysis rejected the input")
+    else:
+        try:
+            result = run_tool(
+                name,
+                params,
+                edit_mode=edit_mode,
+                execution_mode=execution_mode,
+            )
+        except Exception as exc:
+            result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
     handoff = result_handoff(result)
     stop = bool(
         execution_mode == "handoff" and name == "edit" and result.get("ok") is True

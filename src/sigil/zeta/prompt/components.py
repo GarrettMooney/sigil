@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ..skills import Skill, available_skills, expand_skill_directive
-from ..timeline import ChatMessageEntry, _chat_message_entries, from_message_boundary
+from ..timeline import (
+    ChatMessageEntry,
+    _chat_message_entries,
+    add_event_link,
+    from_message_boundary,
+    trace_object_id,
+)
 from ..tools import allowed_tool_names
+from ..tools.base import content_hash
 from ..trace import Object, ObjectId
-from .system import can_read_skill_files, system_prompt
+from .system import can_read_skill_files, skill_prompt_items, system_prompt
 
 Representation = Literal["full", "summary", "stub"]
 
@@ -170,9 +176,9 @@ def timeline_message_component_data(
 
 def timeline_message_component_links(event: dict[str, Any]) -> tuple[ObjectId, ...]:
     links: list[ObjectId] = []
-    add_trace_link(links, assistant_message_object_id(event))
+    add_event_link(links, assistant_message_object_id(event))
     for trace_field in ("tool_result_object_id", "tool_call_object_id"):
-        add_trace_link(links, trace_object_id(event, trace_field))
+        add_event_link(links, trace_object_id(event, trace_field))
     return tuple(links)
 
 
@@ -181,18 +187,6 @@ def assistant_message_object_id(event: dict[str, Any]) -> ObjectId | None:
     if not isinstance(prompt_trace, dict):
         return None
     return trace_object_id(prompt_trace, "assistant_message_object_id")
-
-
-def trace_object_id(event: dict[str, Any], field: str) -> ObjectId | None:
-    value = event.get(field)
-    if not isinstance(value, str) or not value.startswith("sha256:"):
-        return None
-    return value
-
-
-def add_trace_link(links: list[ObjectId], object_id: ObjectId | None) -> None:
-    if object_id is not None and object_id not in links:
-        links.append(object_id)
 
 
 def record_tool_call_names(
@@ -302,16 +296,7 @@ def non_message_components(
         components.append(
             PromptComponent(
                 kind="skill_context",
-                data={
-                    "skills": [
-                        {
-                            "name": skill.name,
-                            "description": skill.description,
-                            "location": str(skill.location),
-                        }
-                        for skill in skills
-                    ]
-                },
+                data={"skills": skill_prompt_items(skills)},
             )
         )
     if context.strip():
@@ -322,7 +307,7 @@ def non_message_components(
             PromptComponent(
                 kind="project_context",
                 data={
-                    "sha256": "sha256:" + hashlib.sha256(content.encode()).hexdigest(),
+                    "sha256": content_hash(content),
                     "chars": len(content),
                 },
             )

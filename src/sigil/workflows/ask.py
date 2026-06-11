@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from types import TracebackType
 from typing import Any
 
@@ -60,8 +60,8 @@ ASK_SYSTEM_PROMPT = (
     "Do not mutate files or execute commands."
 )
 
-ZETA_ASK_TOOLS = "read,grep,ls,query_log"
 ASK_TOOLS = ("read", "grep", "ls", "query_log")
+ZETA_ASK_TOOLS = ",".join(ASK_TOOLS)
 
 
 def parse_tools(tools: str) -> tuple[str, ...]:
@@ -423,22 +423,14 @@ def fallback_answer(
             fallback_turn_context(prompt, prior_events, current_events),
         ]
     )
-    if selected_model is None:
-        answer = chat_text(
-            system,
-            fallback_prompt,
-            stream_sink=stream_sink,
-            telemetry_sink=telemetry_sink,
-        ).strip()
-    else:
-        answer = chat_text(
-            system,
-            fallback_prompt,
-            selected_model=selected_model.model,
-            selected_url=selected_model.url,
-            stream_sink=stream_sink,
-            telemetry_sink=telemetry_sink,
-        ).strip()
+    answer = chat_text(
+        system,
+        fallback_prompt,
+        selected_model=selected_model.model if selected_model else None,
+        selected_url=selected_model.url if selected_model else None,
+        stream_sink=stream_sink,
+        telemetry_sink=telemetry_sink,
+    ).strip()
     if answer:
         return answer
     return "I could not answer from the available local context."
@@ -506,7 +498,7 @@ def record_answer(
     json_output: bool,
     model: dict[str, str] | None,
     model_telemetry: dict[str, Any] | None = None,
-    prompt_traces: list[Any] | tuple[Any, ...] = (),
+    prompt_traces: Sequence[Any] = (),
     answer_streamed: bool = False,
     renderer: TurnRenderer | None = None,
 ) -> None:

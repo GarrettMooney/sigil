@@ -1803,8 +1803,9 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
         max_tokens: int = 8192,
         stream_sink: object | None = None,
         telemetry_sink: object | None = None,
+        **kwargs: object,
     ) -> str:
-        del system, prompt, max_tokens, stream_sink, telemetry_sink
+        del system, prompt, max_tokens, stream_sink, telemetry_sink, kwargs
         return "It contains Sigil docs."
 
     monkeypatch.setattr(ask_runner, "chat_text", fake_chat_text)
@@ -1837,8 +1838,9 @@ def test_zeta_answer_fallback_formats_evidence_instead_of_raw_json(
         max_tokens: int = 8192,
         stream_sink: object | None = None,
         telemetry_sink: object | None = None,
+        **kwargs: object,
     ) -> str:
-        del system, max_tokens, stream_sink, telemetry_sink
+        del system, max_tokens, stream_sink, telemetry_sink, kwargs
         captured["prompt"] = prompt
         return "Use a clearer decision index."
 

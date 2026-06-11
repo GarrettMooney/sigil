@@ -17,7 +17,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from ..zeta.prompt.budget import estimated_tokens_for_text
-from .summarize import summarize, text_content, tool_result_summary
+from .summarize import short_trace_id, summarize, text_content, tool_result_summary
 from .tty import is_interactive, muted, should_color
 
 TRACE_LABEL_WIDTH = 5
@@ -381,26 +381,16 @@ def context_usage_line(telemetry: dict[str, Any] | None) -> str:
     estimated_context_tokens = usage_token_count(
         telemetry.get("estimated_context_tokens")
     )
-    context_tokens: int | None
     if estimated_context_tokens is not None:
+        model_context_tokens = usage_token_count(telemetry.get("model_context_tokens"))
+        if model_context_tokens is None or model_context_tokens <= 0:
+            return ""
         context_tokens = estimated_context_tokens
     else:
-        usage = telemetry.get("usage")
-        if not isinstance(usage, dict):
-            usage = {}
-        prompt_tokens = usage_token_count(usage.get("prompt_tokens"))
-        completion_tokens = usage_token_count(usage.get("completion_tokens"))
-        context_tokens = current_context_token_estimate(
-            prompt_tokens,
-            completion_tokens,
-        )
-    model_context_tokens = usage_token_count(telemetry.get("model_context_tokens"))
-    if (
-        context_tokens is None
-        or model_context_tokens is None
-        or model_context_tokens <= 0
-    ):
-        return ""
+        usage = provider_context_usage_tokens(telemetry)
+        if usage is None:
+            return ""
+        context_tokens, model_context_tokens = usage
     percent = context_usage_percent(context_tokens, model_context_tokens)
     bar = context_usage_bar(context_tokens, model_context_tokens)
     suffix = " est." if estimated_context_tokens is not None else ""
@@ -600,7 +590,6 @@ def thinking_status_factory(
 
 
 TRANSCRIPT_SKIP_EVENT_TYPES = frozenset({"model_usage", "tool_analysis"})
-TRANSCRIPT_PROMPT_ID_CHARS = 8
 
 
 def render_transcript(events: list[dict[str, Any]], *, console: Console) -> None:
@@ -839,4 +828,4 @@ def transcript_prompt_id(event: dict[str, Any]) -> str:
     if not isinstance(prompt_trace, dict):
         return ""
     object_id = str(prompt_trace.get("prompt_object_id") or "")
-    return object_id.removeprefix("sha256:")[:TRANSCRIPT_PROMPT_ID_CHARS]
+    return short_trace_id(object_id) if object_id else ""

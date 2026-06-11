@@ -92,10 +92,7 @@ def source_snippet(
     lines = ["", "# Sigil", f"if [[ -r {reference} ]]; then"]
     if sigil_bin:
         lines.append(f"  export SIGIL_BIN={shlex.quote(sigil_bin)}")
-    if not enable_glyphs:
-        lines.append("  export SIGIL_ENABLE_GLYPHS=0")
-    else:
-        lines.append("  export SIGIL_ENABLE_GLYPHS=1")
+    lines.append(f"  export SIGIL_ENABLE_GLYPHS={1 if enable_glyphs else 0}")
     lines.append(f"  source {reference}")
     lines.append("fi")
     return "\n".join(lines) + "\n"
@@ -149,7 +146,6 @@ def install_zsh_binding(
     rc.touch(exist_ok=True)
     rc_text = rc.read_text(encoding="utf-8")
     references = {str(binding_path), f"$HOME/.sigil/shell/zsh/{BINDING_NAME}"}
-    wrote_rc = False
     rc_text, wrote_rc = replace_sigil_source_block(rc_text, references, snippet)
     if wrote_rc:
         rc.write_text(rc_text, encoding="utf-8")

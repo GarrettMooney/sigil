@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any, Protocol
 
@@ -10,6 +9,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
 from ...model import chat_structured_output
+from ...tools.base import content_hash
 from ..components import PromptComponent
 
 TASK_STATE_RESPONSE_NAME = "zeta_task_state"
@@ -300,7 +300,7 @@ def source_fingerprint(component: PromptComponent) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
-    return "sha256:" + hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return content_hash(serialized)
 
 
 def validated_task_state(state: dict[str, Any]) -> dict[str, Any]:

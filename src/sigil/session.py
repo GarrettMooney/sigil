@@ -119,10 +119,11 @@ def read_session_file(path: Path) -> Any:
                 rows.append({"malformed": line})
         return rows
     if path.suffix == ".json":
+        text = path.read_text(encoding="utf-8")
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            return json.loads(text)
         except json.JSONDecodeError:
-            return path.read_text(encoding="utf-8")
+            return text
     return path.read_text(encoding="utf-8")
 
 

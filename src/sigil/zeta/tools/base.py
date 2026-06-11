@@ -8,14 +8,14 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from ...protocols import shell_handoff_tool_result
 
 EffectKind = Literal["read", "write", "delete", "execute", "search"]
 Resource = Literal["path", "process", "session"]
 
-EFFECT_KINDS = frozenset({"read", "write", "delete", "execute", "search"})
+EFFECT_KINDS = frozenset(get_args(EffectKind))
 READ_ONLY_EFFECT_KINDS = frozenset({"read", "search"})
 
 
@@ -134,6 +134,15 @@ def file_content_hash(path: str | Path) -> str | None:
     except OSError:
         return None
     return content_hash(data)
+
+
+def change_hashes(path: str, content: str) -> dict[str, str]:
+    """Hash the file as it stands (when readable) and the content replacing it."""
+    hashes = {"after_hash": content_hash(content)}
+    before_hash = file_content_hash(path)
+    if before_hash is not None:
+        hashes["before_hash"] = before_hash
+    return hashes
 
 
 def write_temp(prefix: str, suffix: str, content: str) -> Path:

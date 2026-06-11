@@ -9,7 +9,7 @@ import logging
 import sqlite3
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,9 +71,7 @@ def prompt_trace_payload(trace: PromptTrace) -> dict[str, Any]:
     return payload
 
 
-def latest_prompt_trace_fields(
-    prompt_traces: list[Any] | tuple[Any, ...],
-) -> dict[str, Any]:
+def latest_prompt_trace_fields(prompt_traces: Sequence[Any]) -> dict[str, Any]:
     """Return event fields for the most recent valid prompt trace."""
     if not prompt_traces:
         return {}
@@ -344,6 +342,24 @@ class InMemoryStore(StoreBase):
         )
 
 
+def _object_from_row(row: sqlite3.Row) -> Object:
+    return Object(
+        kind=str(row["kind"]),
+        schema=str(row["schema"]),
+        data=json.loads(str(row["data_json"])),
+        links=tuple(json.loads(str(row["links_json"]))),
+    )
+
+
+def _derivation_from_row(row: sqlite3.Row) -> Derivation:
+    return Derivation(
+        producer=str(row["producer"]),
+        output_id=str(row["output_id"]),
+        input_ids=tuple(json.loads(str(row["input_ids_json"]))),
+        params=json.loads(str(row["params_json"])),
+    )
+
+
 class SqliteStore(StoreBase):
     """Synchronous SQLite trace store using the standard library."""
 
@@ -478,12 +494,7 @@ class SqliteStore(StoreBase):
         ).fetchone()
         if row is None:
             return None
-        return Object(
-            kind=str(row["kind"]),
-            schema=str(row["schema"]),
-            data=json.loads(str(row["data_json"])),
-            links=tuple(json.loads(str(row["links_json"]))),
-        )
+        return _object_from_row(row)
 
     def object_ids_with_prefix(self, prefix: str, limit: int = 16) -> list[ObjectId]:
         escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -546,15 +557,7 @@ class SqliteStore(StoreBase):
             """,
             (output_id,),
         ).fetchall()
-        return [
-            Derivation(
-                producer=str(row["producer"]),
-                output_id=str(row["output_id"]),
-                input_ids=tuple(json.loads(str(row["input_ids_json"]))),
-                params=json.loads(str(row["params_json"])),
-            )
-            for row in rows
-        ]
+        return [_derivation_from_row(row) for row in rows]
 
     def derivations_for_input(self, input_id: ObjectId) -> list[Derivation]:
         rows = self.connection.execute(
@@ -570,15 +573,7 @@ class SqliteStore(StoreBase):
             """,
             (input_id,),
         ).fetchall()
-        return [
-            Derivation(
-                producer=str(row["producer"]),
-                output_id=str(row["output_id"]),
-                input_ids=tuple(json.loads(str(row["input_ids_json"]))),
-                params=json.loads(str(row["params_json"])),
-            )
-            for row in rows
-        ]
+        return [_derivation_from_row(row) for row in rows]
 
     def refs(self) -> dict[str, ObjectId]:
         rows = self.connection.execute(
@@ -612,18 +607,7 @@ class SqliteStore(StoreBase):
             """,
             params,
         ).fetchall()
-        return [
-            (
-                str(row["id"]),
-                Object(
-                    kind=str(row["kind"]),
-                    schema=str(row["schema"]),
-                    data=json.loads(str(row["data_json"])),
-                    links=tuple(json.loads(str(row["links_json"]))),
-                ),
-            )
-            for row in rows
-        ]
+        return [(str(row["id"]), _object_from_row(row)) for row in rows]
 
     def stats(self) -> TraceStats:
         row = self.connection.execute(

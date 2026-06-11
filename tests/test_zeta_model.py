@@ -790,6 +790,7 @@ def test_zeta_chat_completion_messages_accepts_request_model(monkeypatch) -> Non
         body: dict[str, Any],
         *,
         selected_url: str | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         captured["body"] = body
         captured["selected_url"] = selected_url
@@ -813,7 +814,7 @@ def test_zeta_chat_completion_messages_accepts_request_model(monkeypatch) -> Non
 def test_zeta_chat_completion_messages_sends_native_tools(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_request(body: dict[str, Any]) -> dict[str, Any]:
+    def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         captured["body"] = body
         return {"choices": [{"message": {"content": "done"}}]}
 
@@ -970,7 +971,7 @@ def test_zeta_chat_completion_messages_reports_model_telemetry(
 ) -> None:
     telemetry: list[dict[str, Any]] = []
 
-    def fake_request(body: dict[str, Any]) -> dict[str, Any]:
+    def fake_request(body: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         del body
         return {
             "usage": {

@@ -110,8 +110,8 @@ def resolve_model_profile(
     catalog: ModelCatalog | None = None,
 ) -> ModelSelection | None:
     """Resolve a named profile to the concrete model request fields."""
-    profiles = catalog or load_model_profiles()
-    profile = profiles.profiles.get(name)
+    catalog = catalog or load_model_profiles()
+    profile = catalog.profiles.get(name)
     if profile is None:
         return None
     return ModelSelection(
