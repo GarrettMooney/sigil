@@ -11,8 +11,8 @@ import click
 from .. import handoff as sigil_handoff
 from ..display.summarize import shell_result_summary
 from ..protocols import SHELL_HANDOFF_RESULT_SCHEMA
-from ..workflows.do import run_do_step
-from ..workflows.propose import run_propose_step
+from ..workflows.do import do
+from ..workflows.propose import propose
 from ._base import cli
 
 CONTINUE_OBJECTIVE = (
@@ -58,12 +58,12 @@ def cmd_zeta_step(
         if not objective:
             objective = CONTINUE_OBJECTIVE
     if glyph == ",,,":
-        run_step = run_do_step
+        workflow = do
     elif glyph == ",,":
-        run_step = run_propose_step
+        workflow = propose
     else:
         raise click.UsageError("--glyph must be ',,' or ',,,'")
-    return run_step(
+    return workflow(
         objective,
         handoff_path=handoff_file,
         handoff_output="summary",

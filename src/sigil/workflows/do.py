@@ -6,10 +6,10 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TextIO
 
-from .step import HandoffOutput, run_agent_step
+from .step import HandoffOutput, step
 
 
-def run_do_step(
+def do(
     objective: str,
     *,
     system: str | None = None,
@@ -21,7 +21,7 @@ def run_do_step(
     trace_output: TextIO | None = None,
 ) -> int:
     """Run an auto-approved step with direct command and edit execution."""
-    return run_agent_step(
+    return step(
         objective,
         glyph=",,,",
         system=system,

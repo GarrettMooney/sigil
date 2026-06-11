@@ -66,24 +66,16 @@ class TurnRenderer:
     stream_renderer: TraceAwareStreamRenderer | None
 
 
-def build_turn_renderer(
-    footer_output: TextIO,
-    *,
-    json_output: bool = False,
-) -> TurnRenderer:
+def build_turn_renderer(footer_output: TextIO) -> TurnRenderer:
     """Build the trace state, context footer, and stream renderer for a turn."""
     trace_state = TraceRenderState()
-    context_footer = None if json_output else ContextUsageFooter(footer_output)
-    base_stream_renderer = create_stream_renderer(sys.stdout, json_output=json_output)
-    stream_renderer = (
-        TraceAwareStreamRenderer(
-            base_stream_renderer,
-            trace_state,
-            sys.stdout,
-            before_output=context_footer.clear if context_footer is not None else None,
-        )
-        if base_stream_renderer is not None
-        else None
+    context_footer = ContextUsageFooter(footer_output)
+    base_stream_renderer = create_stream_renderer(sys.stdout)
+    stream_renderer = TraceAwareStreamRenderer(
+        base_stream_renderer,
+        trace_state,
+        sys.stdout,
+        before_output=context_footer.clear,
     )
     return TurnRenderer(trace_state, context_footer, stream_renderer)
 

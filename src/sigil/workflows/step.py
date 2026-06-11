@@ -39,7 +39,7 @@ from ..zeta.models import active_model_selection, model_selection_event
 from ..zeta.prompt import system_prompt
 from ..zeta.skills import expand_skill_directive
 from ..zeta.timeline import current_timeline, record_event
-from ..zeta.tools import allowed_tool_names
+from ..zeta.tools import TOOL_SPECS, allowed_tool_names
 from ..zeta.trace import latest_prompt_trace_fields
 
 HandoffOutput = Literal["detail", "summary", "none"]
@@ -73,11 +73,12 @@ as user-chosen context and explain the cancellation plainly if it matters.
 """
 
 
-def run_agent_step(
+def step(
     objective: str,
     *,
     glyph: str,
     system: str | None = None,
+    prompt: str | None = None,
     stdin_text: str = "",
     max_steps: int | None = None,
     allowed_tools: Iterable[str] | None = None,
@@ -86,13 +87,17 @@ def run_agent_step(
     trace_output: TextIO | None = None,
     edit_mode: EditMode | None = None,
 ) -> int:
-    """Run a Zeta agent step for CLI workflows."""
+    """Run a Zeta agent step for CLI workflows.
+
+    A caller-built `prompt` is sent verbatim; otherwise the objective is
+    wrapped in the step instruction scaffolding.
+    """
     system = system or STEP_SYSTEM_PROMPT
     selected_model = active_model_selection()
     if not model_server_ready(selected_model):
         return 1
     output = trace_output or sys.stderr
-    prompt = agent_prompt(
+    prompt = prompt or agent_prompt(
         expand_skill_directive(objective),
         glyph=glyph,
         stdin_text=stdin_text,
@@ -102,7 +107,7 @@ def run_agent_step(
         workflow=workflow_for_glyph(glyph),
         objective=objective,
         allowed_tools=enabled_tools,
-        staged=execution_mode_for_glyph(glyph) == "handoff",
+        staged=stages_mutations(glyph, enabled_tools),
         agent=model_selection_event(selected_model) if selected_model else None,
     )
     prior_timeline = current_timeline()
@@ -299,6 +304,8 @@ def workflow_for_glyph(glyph: str) -> str:
         return "do"
     if glyph == ",,":
         return "propose"
+    if glyph == ",":
+        return "ask"
     return glyph
 
 
@@ -306,6 +313,20 @@ def execution_mode_for_glyph(glyph: str) -> ExecutionMode:
     if glyph == ",,,":
         return "direct"
     return "handoff"
+
+
+def stages_mutations(glyph: str, enabled_tools: tuple[str, ...]) -> bool:
+    """Whether this turn's contract stages mutations for review.
+
+    Handoff mode with a purely read-only allow-list (ask) stages nothing.
+    """
+    if execution_mode_for_glyph(glyph) != "handoff":
+        return False
+    return any(
+        spec.mutates()
+        for name in enabled_tools
+        if (spec := TOOL_SPECS.get(name)) is not None
+    )
 
 
 def agent_prompt(objective: str, *, glyph: str, stdin_text: str) -> str:

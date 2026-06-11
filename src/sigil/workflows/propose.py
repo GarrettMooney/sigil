@@ -6,10 +6,10 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TextIO
 
-from .step import HandoffOutput, run_agent_step
+from .step import HandoffOutput, step
 
 
-def run_propose_step(
+def propose(
     objective: str,
     *,
     system: str | None = None,
@@ -21,7 +21,7 @@ def run_propose_step(
     trace_output: TextIO | None = None,
 ) -> int:
     """Run a reviewed step that stages mutating work as shell handoffs."""
-    return run_agent_step(
+    return step(
         objective,
         glyph=",,",
         system=system,

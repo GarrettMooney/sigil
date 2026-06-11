@@ -844,10 +844,9 @@ def test_zeta_tool_query_log_reports_an_empty_ledger() -> None:
 
 
 def test_zeta_tool_query_log_is_a_readonly_ask_builtin() -> None:
-    from sigil.workflows.ask import ASK_TOOLS, ZETA_ASK_TOOLS
+    from sigil.workflows.ask import ASK_TOOLS
     from sigil.zeta.tools import query_log as query_log_tool
 
     assert query_log_tool.SPEC.mutates() is False
     assert "query_log" in zeta_tools.BUILTIN_TOOL_IMPLS
     assert "query_log" in ASK_TOOLS
-    assert "query_log" in ZETA_ASK_TOOLS

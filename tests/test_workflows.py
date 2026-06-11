@@ -43,7 +43,6 @@ from sigil.protocols import (
     turn_record,
 )
 from sigil.session import read_event_log, recent_turns, record_turn
-from sigil.state import read_jsonl
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
 from sigil.zeta import agent as zeta_agent
@@ -180,7 +179,7 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
     monkeypatch.setattr(zeta_runner, "load_project_context", lambda: "ctx")
 
-    code = zeta_runner.run_agent_step("answer me", glyph=",,")
+    code = zeta_runner.step("answer me", glyph=",,")
 
     assert code == 0
     output = capsys.readouterr()
@@ -218,7 +217,7 @@ def test_zeta_agent_step_renders_context_usage_on_trace_stream(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.run_agent_step("answer me", glyph=",,")
+    code = zeta_runner.step("answer me", glyph=",,")
 
     assert code == 0
     output = capsys.readouterr()
@@ -253,7 +252,7 @@ def test_zeta_agent_step_renders_context_usage_after_buffered_answer(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.run_agent_step("answer me", glyph=",,", trace_output=sys.stdout)
+    code = zeta_runner.step("answer me", glyph=",,", trace_output=sys.stdout)
 
     assert code == 0
     output = capsys.readouterr().out
@@ -325,7 +324,7 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.run_agent_step(
+    code = zeta_runner.step(
         "inspect",
         glyph=",,",
         trace_output=sys.stdout,
@@ -358,7 +357,7 @@ def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.run_agent_step("answer me", glyph=",,")
+    code = zeta_runner.step("answer me", glyph=",,")
 
     assert code == 0
     assert cast(list[dict[str, Any]], captured["transcript"]) == []
@@ -385,7 +384,7 @@ def test_zeta_agent_step_double_comma_uses_handoff_mode(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.run_agent_step("review", glyph=",,")
+    code = zeta_runner.step("review", glyph=",,")
 
     assert code == 0
     config = cast(zeta_agent.AgentConfig, captured["config"])
@@ -413,7 +412,7 @@ def test_zeta_agent_step_supplies_the_workflow_persona(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.run_agent_step("review", glyph=",,")
+    code = zeta_runner.step("review", glyph=",,")
 
     assert code == 0
     config = cast(zeta_agent.AgentConfig, captured["config"])
@@ -441,9 +440,9 @@ def test_zeta_ask_workflow_has_no_default_step_budget(monkeypatch) -> None:
         return zeta_agent.AgentTurnResult(final_text="done")
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = ask_runner.run_tool_ask("system", "question")
+    code = ask_runner.ask("question")
 
     assert code == 0
     config = cast(zeta_agent.AgentConfig, captured["config"])
@@ -482,7 +481,7 @@ def test_zeta_agent_step_double_comma_stages_bash_handoff(
         lambda *args, **kwargs: next(responses),
     )
 
-    code = zeta_runner.run_agent_step(
+    code = zeta_runner.step(
         "Review the changes",
         glyph=",,",
         allowed_tools=("bash",),
@@ -539,7 +538,7 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
     for glyph in (",,", ",,,"):
-        code = zeta_runner.run_agent_step("inspect", glyph=glyph)
+        code = zeta_runner.step("inspect", glyph=glyph)
 
         assert code == 0
         assert capsys.readouterr().out.count("It is a README.") == 1
@@ -575,7 +574,7 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.run_agent_step("inspect", glyph=",,")
+    code = zeta_runner.step("inspect", glyph=",,")
 
     assert code == 0
     output = capsys.readouterr()
@@ -628,7 +627,7 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.run_agent_step(
+    code = zeta_runner.step(
         "inspect",
         glyph=glyph,
         trace_output=sys.stdout,
@@ -693,7 +692,7 @@ def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.run_agent_step(
+    code = zeta_runner.step(
         "inspect",
         glyph=",,",
         trace_output=sys.stdout,
@@ -745,7 +744,7 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.run_agent_step(
+    code = zeta_runner.step(
         "inspect",
         glyph=",,",
         trace_output=output,
@@ -791,7 +790,7 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
         ),
     )
 
-    code = zeta_runner.run_agent_step("edit", glyph=",,,")
+    code = zeta_runner.step("edit", glyph=",,,")
 
     assert code == 0
     output = capsys.readouterr()
@@ -872,7 +871,7 @@ def test_zeta_skill_directive_expands_through_agent_step_workflow(
         fake_chat_completion_messages,
     )
 
-    code = zeta_runner.run_agent_step("@step-skill: do step work", glyph=",,")
+    code = zeta_runner.step("@step-skill: do step work", glyph=",,")
 
     assert code == 0
     assert '<skill name="step-skill"' in captured["user"]
@@ -918,7 +917,7 @@ url = "http://127.0.0.1:8082/v1/chat/completions"
     monkeypatch.setattr(agent_io, "ensure_server", fake_ensure_server)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.run_agent_step("do work", glyph=",,")
+    code = zeta_runner.step("do work", glyph=",,")
 
     assert code == 0
     assert capsys.readouterr().out.count("done") == 1
@@ -965,11 +964,7 @@ def test_zeta_skill_directive_expands_through_ask_workflow(
         fake_chat_completion_messages,
     )
 
-    code = ask_runner.run_tool_ask(
-        "system",
-        "@answer-skill: do answer work",
-        input_text="@answer-skill: do answer work",
-    )
+    code = ask_runner.ask("@answer-skill: do answer work")
 
     assert code == 0
     assert '<skill name="answer-skill"' in captured["user"]
@@ -1013,9 +1008,9 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
         return zeta_agent.AgentTurnResult(final_text="answered")
 
     monkeypatch.setattr(agent_io, "ensure_server", fake_ensure_server)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = ask_runner.run_tool_ask("system", "prompt")
+    code = ask_runner.ask("prompt")
 
     assert code == 0
     assert captured["server"] == {
@@ -1362,12 +1357,9 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = ask_runner.run_tool_ask(
-        "question system",
-        "What does pyproject.toml contain?",
-    )
+    code = ask_runner.ask("What does pyproject.toml contain?")
 
     assert code == 0
     output = capsys.readouterr()
@@ -1400,15 +1392,13 @@ def test_zeta_ask_workflow_prints_context_usage_and_records_telemetry(
         return zeta_agent.AgentTurnResult(
             final_text="It contains project metadata.",
             model_telemetry=telemetry,
+            model_telemetry_calls=[telemetry],
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = ask_runner.run_tool_ask(
-        "question system",
-        "What does pyproject.toml contain?",
-    )
+    code = ask_runner.ask("What does pyproject.toml contain?")
 
     assert code == 0
     output = capsys.readouterr()
@@ -1417,52 +1407,10 @@ def test_zeta_ask_workflow_prints_context_usage_and_records_telemetry(
     assert "7%" in output.err
     assert "context  [" not in output.out
     assert "18,823 / 262,144 tokens" not in output.err
-    answer_event = read_event_log()[-1]
-    assert answer_event["usage"] == telemetry["usage"]
-    assert answer_event["model_context_tokens"] == 262_144
-    assert read_jsonl("last-tools.jsonl") == []
-
-
-def test_zeta_ask_workflow_json_includes_context_telemetry(
-    monkeypatch,
-    capsys,
-) -> None:
-    telemetry = {
-        "usage": {
-            "prompt_tokens": 123,
-            "completion_tokens": 4,
-            "total_tokens": 127,
-        },
-        "model_context_tokens": 262_144,
-    }
-
-    def fake_run_agent_turn(
-        objective: str,
-        transcript: list[dict[str, Any]],
-        config: zeta_agent.AgentConfig,
-        **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
-        del objective, transcript, config, kwargs
-        return zeta_agent.AgentTurnResult(
-            final_text="buffered answer",
-            model_telemetry=telemetry,
-        )
-
-    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
-
-    code = ask_runner.run_tool_ask(
-        "question system",
-        "Question?",
-        json_output=True,
-    )
-
-    assert code == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["answer"] == "buffered answer"
-    assert payload["usage"] == telemetry["usage"]
-    assert payload["model_context_tokens"] == 262_144
-    assert payload["tools"] == []
+    (turn,) = ledger_turns()
+    assert turn["cost"]["input_tokens"] == 18_432
+    assert turn["cost"]["output_tokens"] == 391
+    assert turn["cost"]["model_calls"] == 1
 
 
 def test_zeta_ask_workflow_streams_final_text_without_duplicate(
@@ -1487,9 +1435,9 @@ def test_zeta_ask_workflow_streams_final_text_without_duplicate(
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = ask_runner.run_tool_ask("question system", "Question?")
+    code = ask_runner.ask("Question?")
 
     assert code == 0
     assert capsys.readouterr().out.count("streamed answer") == 1
@@ -1517,15 +1465,11 @@ def test_zeta_ask_workflow_streams_markdown_with_rich_for_tty(
             final_text_streamed=True,
         )
 
-    monkeypatch.setattr(ask_runner.sys, "stdout", output)
+    monkeypatch.setattr(sys, "stdout", output)
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = ask_runner.run_tool_ask(
-        "question system",
-        "Question?",
-        input_text="Question?",
-    )
+    code = ask_runner.ask("Question?")
 
     assert code == 0
     assert "streamed answer" in visible_terminal_text(output.getvalue())
@@ -1574,9 +1518,9 @@ def test_zeta_ask_workflow_streams_text_before_tool_trace(
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = ask_runner.run_tool_ask("question system", "Question?")
+    code = ask_runner.ask("Question?")
 
     assert code == 0
     output = capsys.readouterr()
@@ -1652,9 +1596,9 @@ def test_zeta_ask_workflow_renders_context_usage_at_bottom_after_tools(
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = ask_runner.run_tool_ask("question system", "Question?")
+    code = ask_runner.ask("Question?")
 
     assert code == 0
     output = capsys.readouterr()
@@ -1663,41 +1607,6 @@ def test_zeta_ask_workflow_renders_context_usage_at_bottom_after_tools(
     assert "It is a README." in output.out
     assert "context  [" not in output.out
     assert output.err.index("❯ read   b.md") < output.err.index("context  [")
-    tools = read_jsonl("last-tools.jsonl")
-    assert [(tool["type"], tool["tool"]) for tool in tools] == [
-        ("tool_start", "read"),
-        ("tool_end", "read"),
-        ("tool_start", "read"),
-        ("tool_end", "read"),
-    ]
-
-
-def test_zeta_ask_workflow_json_output_disables_live_streaming(
-    monkeypatch,
-    capsys,
-) -> None:
-    def fake_run_agent_turn(
-        objective: str,
-        transcript: list[dict[str, Any]],
-        config: zeta_agent.AgentConfig,
-        **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
-        del objective, transcript, config
-        assert kwargs.get("stream_sink") is None
-        return zeta_agent.AgentTurnResult(final_text="buffered answer")
-
-    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
-
-    code = ask_runner.run_tool_ask(
-        "question system",
-        "Question?",
-        json_output=True,
-    )
-
-    assert code == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["answer"] == "buffered answer"
 
 
 def test_zeta_question_loop_prints_tool_start_while_agent_runs(
@@ -1738,12 +1647,9 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = ask_runner.run_tool_ask(
-        "question system",
-        "What does README.md contain?",
-    )
+    code = ask_runner.ask("What does README.md contain?")
 
     assert code == 0
     assert "\nIt is a README.\n" in capsys.readouterr().out
@@ -1770,18 +1676,15 @@ def test_zeta_question_loop_passes_prior_timeline_as_turns(
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
-    monkeypatch.setattr(ask_runner, "load_project_context", lambda: "ctx")
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "load_project_context", lambda: "ctx")
 
     zeta_timeline.record_event({"type": "user_message", "content": "summarize README"})
     zeta_timeline.record_event(
         {"type": "assistant_message", "content": "It is a Sigil README."}
     )
 
-    code = ask_runner.run_tool_ask(
-        "question system",
-        "and why?",
-    )
+    code = ask_runner.ask("and why?")
 
     assert code == 0
     contents = [str(event.get("content") or "") for event in transcripts[0]]
@@ -1794,7 +1697,7 @@ def test_zeta_question_loop_passes_prior_timeline_as_turns(
     ]
 
 
-def test_zeta_question_loop_falls_back_instead_of_budget_message(
+def test_zeta_ask_workflow_reports_stall_without_final_answer(
     monkeypatch,
     capsys,
 ) -> None:
@@ -1827,144 +1730,15 @@ def test_zeta_question_loop_falls_back_instead_of_budget_message(
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    def fake_chat_text(
-        system: str,
-        prompt: str,
-        *,
-        max_tokens: int = 8192,
-        stream_sink: object | None = None,
-        telemetry_sink: object | None = None,
-        **kwargs: object,
-    ) -> str:
-        del system, prompt, max_tokens, stream_sink, telemetry_sink, kwargs
-        return "It contains Sigil docs."
+    code = ask_runner.ask("What does README.md contain?")
 
-    monkeypatch.setattr(ask_runner, "chat_text", fake_chat_text)
-
-    code = ask_runner.run_tool_ask(
-        "question system",
-        "What does README.md contain?",
-        max_steps=1,
-    )
-
-    output = capsys.readouterr().out
-    assert code == 0
-    assert "\nIt contains Sigil docs.\n" in output
-    assert "It contains Sigil docs." in output
-    assert "question tool budget" not in output
-    timeline = zeta_timeline.current_timeline()
-    assert timeline[-1]["type"] == "assistant_message"
-    assert timeline[-1]["content"] == "It contains Sigil docs."
-
-
-def test_zeta_answer_fallback_formats_evidence_instead_of_raw_json(
-    monkeypatch,
-) -> None:
-    captured: dict[str, str] = {}
-
-    def fake_chat_text(
-        system: str,
-        prompt: str,
-        *,
-        max_tokens: int = 8192,
-        stream_sink: object | None = None,
-        telemetry_sink: object | None = None,
-        **kwargs: object,
-    ) -> str:
-        del system, max_tokens, stream_sink, telemetry_sink, kwargs
-        captured["prompt"] = prompt
-        return "Use a clearer decision index."
-
-    monkeypatch.setattr(ask_runner, "chat_text", fake_chat_text)
-
-    answer = ask_runner.fallback_answer(
-        "question system",
-        "How would you improve it?",
-        [
-            {"type": "user_message", "content": "What is this vault about?"},
-            {"type": "assistant_message", "content": "It is a CEO vault."},
-        ],
-        [
-            {
-                "type": "tool_result",
-                "tool_call_id": "call-1",
-                "name": "read",
-                "result": {
-                    "ok": True,
-                    "content": [{"type": "text", "text": "Decision log"}],
-                    "metadata": {"path": "/vault/DECISIONS.md"},
-                },
-            },
-        ],
-    )
-
-    assert answer == "Use a clearer decision index."
-    prompt = captured["prompt"]
-    assert "Current question:\nHow would you improve it?" in prompt
-    assert "Prior conversation:\nuser: What is this vault about?" in prompt
-    assert "assistant: It is a CEO vault." in prompt
-    assert "Tool result (read /vault/DECISIONS.md):\nDecision log" in prompt
-    assert "Current turn transcript JSON" not in prompt
-
-
-def test_zeta_answer_fallback_uses_active_session_model(
-    tmp_path: Path,
-    monkeypatch,
-    capsys,
-) -> None:
-    home = tmp_path / "home"
-    write_models_config(
-        home,
-        """
-[[models]]
-name = "fast"
-model = "fast-model"
-url = "http://127.0.0.1:8081/v1/chat/completions"
-""",
-    )
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "fallback-model")
-    zeta_models.set_active_model_profile("fast")
-    captured: dict[str, Any] = {}
-
-    def fake_run_agent_turn(
-        objective: str,
-        transcript: list[dict[str, Any]],
-        config: zeta_agent.AgentConfig,
-        **kwargs: object,
-    ) -> zeta_agent.AgentTurnResult:
-        del objective, transcript, config, kwargs
-        return zeta_agent.AgentTurnResult(events=[])
-
-    def fake_chat_text(
-        system: str,
-        prompt: str,
-        *,
-        max_tokens: int = 8192,
-        selected_model: str | None = None,
-        selected_url: str | None = None,
-        stream_sink: object | None = None,
-        telemetry_sink: object | None = None,
-    ) -> str:
-        del system, prompt, max_tokens, stream_sink, telemetry_sink
-        captured["selected_model"] = selected_model
-        captured["selected_url"] = selected_url
-        return "Fallback answer."
-
-    monkeypatch.setattr(agent_io, "ensure_server", lambda **kwargs: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
-    monkeypatch.setattr(ask_runner, "chat_text", fake_chat_text)
-
-    code = ask_runner.run_tool_ask("question system", "Question?", max_steps=1)
-
-    output = capsys.readouterr().out
-    assert code == 0
-    assert "\nFallback answer.\n" in output
-    assert captured["selected_model"] == "fast-model"
-    assert captured["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
+    assert code == 1
+    assert "Zeta stopped without a final answer." in capsys.readouterr().err
+    (turn,) = ledger_turns()
+    assert turn["workflow"] == "ask"
+    assert turn["outcome"] == TURN_OUTCOME_FAILED
 
 
 def test_zeta_answer_model_failure_records_turn_abort(
@@ -1978,10 +1752,10 @@ def test_zeta_answer_model_failure_records_turn_abort(
     def failing_run_agent_turn(*args: object, **kwargs: object) -> None:
         raise RuntimeError("model stream failed: stream ended before [DONE]")
 
-    monkeypatch.setattr(ask_runner, "run_agent_turn", failing_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", failing_run_agent_turn)
 
     with pytest.raises(RuntimeError):
-        ask_runner.run_tool_ask("system", "question")
+        ask_runner.ask("question")
 
     timeline = zeta_timeline.current_timeline()
     assert timeline[-1]["type"] == "turn_aborted"
@@ -2006,7 +1780,7 @@ def test_zeta_step_model_failure_records_turn_abort(
     monkeypatch.setattr(zeta_runner, "run_agent_turn", failing_run_agent_turn)
 
     with pytest.raises(RuntimeError):
-        zeta_runner.run_agent_step("do the thing", glyph=",,")
+        zeta_runner.step("do the thing", glyph=",,")
 
     timeline = zeta_timeline.current_timeline()
     assert timeline[-1]["type"] == "turn_aborted"
@@ -2075,9 +1849,9 @@ def test_zeta_ask_workflow_keeps_stdout_clean_for_pipes(
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(ask_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = ask_runner.run_tool_ask("question system", "Question?")
+    code = ask_runner.ask("Question?")
 
     assert code == 0
     output = capsys.readouterr()
@@ -2202,7 +1976,7 @@ def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
         ),
     )
 
-    code = zeta_runner.run_agent_step("repair the tests", glyph=",,")
+    code = zeta_runner.step("repair the tests", glyph=",,")
 
     assert code == 0
     (turn,) = ledger_turns()
@@ -2266,7 +2040,7 @@ def test_do_step_records_executed_turn_with_file_effect(monkeypatch) -> None:
         ),
     )
 
-    code = zeta_runner.run_agent_step("write the file", glyph=",,,")
+    code = zeta_runner.step("write the file", glyph=",,,")
 
     assert code == 0
     (turn,) = ledger_turns()
@@ -2314,7 +2088,7 @@ def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
         ),
     )
 
-    code = zeta_runner.run_agent_step("write the file", glyph=",,,")
+    code = zeta_runner.step("write the file", glyph=",,,")
 
     assert code == 0
     (turn,) = ledger_turns()
@@ -2351,7 +2125,7 @@ def test_turn_bridge_failure_does_not_break_the_step(monkeypatch) -> None:
         ),
     )
 
-    code = zeta_runner.run_agent_step("answer", glyph=",,")
+    code = zeta_runner.step("answer", glyph=",,")
 
     assert code == 0
     (turn,) = ledger_turns()
@@ -2369,7 +2143,7 @@ def test_zeta_step_tags_timeline_events_with_turn_id(monkeypatch) -> None:
         ),
     )
 
-    code = zeta_runner.run_agent_step("answer", glyph=",,")
+    code = zeta_runner.step("answer", glyph=",,")
 
     assert code == 0
     (turn,) = ledger_turns()
@@ -2389,7 +2163,7 @@ def test_zeta_step_records_failed_turn_without_answer(monkeypatch) -> None:
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(events=[]),
     )
 
-    code = zeta_runner.run_agent_step("do nothing", glyph=",,")
+    code = zeta_runner.step("do nothing", glyph=",,")
 
     assert code == 1
     (turn,) = ledger_turns()
@@ -2404,7 +2178,7 @@ def test_zeta_step_records_aborted_turn_on_runtime_error(monkeypatch) -> None:
     monkeypatch.setattr(zeta_runner, "run_agent_turn", raise_runtime_error)
 
     with pytest.raises(RuntimeError):
-        zeta_runner.run_agent_step("crash", glyph=",,")
+        zeta_runner.step("crash", glyph=",,")
 
     (turn,) = ledger_turns()
     assert turn["outcome"] == TURN_OUTCOME_ABORTED
@@ -2415,7 +2189,7 @@ def test_zeta_step_records_aborted_turn_on_runtime_error(monkeypatch) -> None:
 def test_ask_records_answered_turn_record(monkeypatch, capsys) -> None:
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(
-        ask_runner,
+        zeta_runner,
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
             final_text="the answer",
@@ -2427,11 +2201,7 @@ def test_ask_records_answered_turn_record(monkeypatch, capsys) -> None:
         ),
     )
 
-    code = ask_runner.run_tool_ask(
-        "ask system",
-        "Why did it fail?",
-        input_text="Why did it fail?",
-    )
+    code = ask_runner.ask("Why did it fail?")
 
     assert code == 0
     capsys.readouterr()

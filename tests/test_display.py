@@ -218,7 +218,6 @@ def test_sigil_display_stream_renderer_factory_selects_output_mode() -> None:
         display_render.create_stream_renderer(StringIO()),
         display_render.TerminalStreamRenderer,
     )
-    assert display_render.create_stream_renderer(StringIO(), json_output=True) is None
     assert isinstance(
         display_render.create_stream_renderer(TtyBuffer()),
         display_render.RichStreamRenderer,
@@ -608,6 +607,48 @@ def test_transcript_renders_assistant_without_prompt_trace() -> None:
     )
 
     assert "plain answer" in output.getvalue()
+
+
+def test_transcript_renders_reasoning_before_answer() -> None:
+    output, console = transcript_console()
+
+    display_render.render_transcript(
+        [
+            {
+                "type": "assistant_message",
+                "reasoning": "the user wants the short version",
+                "content": "Here it is.",
+            }
+        ],
+        console=console,
+    )
+    text = output.getvalue()
+
+    assert "reasoning" in text
+    assert "the user wants the short version" in text
+    assert text.index("the user wants the short version") < text.index("Here it is.")
+
+
+def test_transcript_reasoning_panel_is_italic_blue() -> None:
+    blocks = display_render.transcript_assistant_block(
+        {"type": "assistant_message", "reasoning": "weighing", "content": "done"},
+        set(),
+        {},
+    )
+
+    reasoning_panel = blocks[0]
+    assert reasoning_panel.border_style == "blue"
+    assert reasoning_panel.renderable.style == "italic blue"
+
+
+def test_transcript_skips_empty_reasoning_panel() -> None:
+    blocks = display_render.transcript_assistant_block(
+        {"type": "assistant_message", "reasoning": "", "content": "done"},
+        set(),
+        {},
+    )
+
+    assert len(blocks) == 1
 
 
 def trace_object(kind: str, data: dict, links: tuple = ()) -> zeta_trace.Object:

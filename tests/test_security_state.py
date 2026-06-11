@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr
 from io import BytesIO, StringIO
 from pathlib import Path
 
@@ -19,7 +19,6 @@ from sigil.cli import cli, main
 from sigil.display.tty import should_color
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.session import (
-    read_event_log,
     recent_turns,
     recent_turns_context,
     record_turn,
@@ -417,33 +416,21 @@ def test_question_workflows_record_glyph_and_local_tools() -> None:
                 calls.append((args, kwargs))
                 return 0
 
-            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
-                assert ask("what is sigil?", json_output=True) == 0
-            request_event = read_event_log()[-1]
-            assert request_event["type"] == "ask_requested"
-            assert request_event["glyph"] == "ask"
-            assert request_event["input"] == "what is sigil?"
-            assert "question" not in request_event
-            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
-                assert (
-                    ask(
-                        "what is sigil?",
-                        glyph=",",
-                        tools="read,grep,ls",
-                        json_output=True,
-                    )
-                    == 0
-                )
-            comma_event = read_event_log()[-1]
-            assert comma_event["glyph"] == ","
+            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+                assert ask("what is sigil?") == 0
+            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+                assert ask("what is sigil?", tools=("read", "grep", "ls")) == 0
             assert len(calls) == 2
-            assert calls[0][0][0] == ASK_SYSTEM_PROMPT
+            assert calls[0][1]["glyph"] == ","
+            assert calls[0][1]["system"] == ASK_SYSTEM_PROMPT
             assert (
                 "available tools are read, grep, ls, and query_log only"
-                in calls[0][0][0]
+                in calls[0][1]["system"]
             )
             assert calls[0][1]["allowed_tools"] == ("read", "grep", "ls", "query_log")
-            assert calls[1][0][1] == "what is sigil?"
+            assert calls[1][1]["allowed_tools"] == ("read", "grep", "ls")
+            assert calls[1][1]["prompt"] == "what is sigil?"
+            assert calls[1][0] == ("what is sigil?",)
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)
@@ -461,17 +448,17 @@ def test_question_workflow_requests_tool_calls_on_stdout() -> None:
             os.environ,
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
-            captured_kwargs: dict[str, object] = {}
+            captured_args: list[object] = []
 
             def fake_answer(*args: object, **kwargs: object) -> int:
-                del args
-                captured_kwargs.update(kwargs)
+                del kwargs
+                captured_args.extend(args)
                 return 0
 
-            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
+            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
                 assert ask("inspect pyproject") == 0
 
-    assert captured_kwargs["input_text"] == "inspect pyproject"
+    assert captured_args == ["inspect pyproject"]
 
 
 def test_failure_context_prompt_uses_recorded_failure_without_inventing_output() -> (
@@ -1053,13 +1040,13 @@ def test_fresh_ask_prepends_recent_turns_context_to_zeta_prompt() -> None:
             record_turn("pytest tests/test_foo.py", 1, "/repo")
             captured: dict[str, str] = {}
 
-            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
-                del system, kwargs
-                captured["prompt"] = prompt
+            def fake_answer(objective: str, **kwargs: object) -> int:
+                del objective
+                captured["prompt"] = str(kwargs["prompt"])
                 return 0
 
-            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
-                assert ask("what should I do next?", json_output=True) == 0
+            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+                assert ask("what should I do next?") == 0
 
     prompt = captured["prompt"]
     assert "Recent shell activity:" in prompt
@@ -1082,13 +1069,13 @@ def test_ask_attaches_active_failure_context_for_unrelated_question() -> None:
             )
             captured: dict[str, str] = {}
 
-            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
-                del system, kwargs
-                captured["prompt"] = prompt
+            def fake_answer(objective: str, **kwargs: object) -> int:
+                del objective
+                captured["prompt"] = str(kwargs["prompt"])
                 return 0
 
-            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
-                assert ask("what does this repo do", json_output=True) == 0
+            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+                assert ask("what does this repo do") == 0
 
     prompt = captured["prompt"]
     assert "Last failed command context:" in prompt
@@ -1112,13 +1099,13 @@ def test_ask_omits_failure_context_after_successful_turn() -> None:
             record_turn("git status --short", 0, "/repo")
             captured: dict[str, str] = {}
 
-            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
-                del system, kwargs
-                captured["prompt"] = prompt
+            def fake_answer(objective: str, **kwargs: object) -> int:
+                del objective
+                captured["prompt"] = str(kwargs["prompt"])
                 return 0
 
-            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
-                assert ask("why failed", json_output=True) == 0
+            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+                assert ask("why failed") == 0
 
     prompt = captured["prompt"]
     assert "Last failed command context:" not in prompt
@@ -1139,13 +1126,13 @@ def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
             record_turn("git status --short", 0, "/repo")
             captured: dict[str, str] = {}
 
-            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
-                del system, kwargs
-                captured["prompt"] = prompt
+            def fake_answer(objective: str, **kwargs: object) -> int:
+                del objective
+                captured["prompt"] = str(kwargs["prompt"])
                 return 0
 
-            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
-                assert ask("and now?", json_output=True) == 0
+            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+                assert ask("and now?") == 0
 
     prompt = captured["prompt"]
     assert "git status --short" in prompt
@@ -1171,13 +1158,13 @@ def test_fresh_ask_omits_failure_context_already_seen_by_the_model() -> None:
             )
             captured: dict[str, str] = {}
 
-            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
-                del system, kwargs
-                captured["prompt"] = prompt
+            def fake_answer(objective: str, **kwargs: object) -> int:
+                del objective
+                captured["prompt"] = str(kwargs["prompt"])
                 return 0
 
-            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
-                assert ask("how do I fix it?", json_output=True) == 0
+            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+                assert ask("how do I fix it?") == 0
 
     prompt = captured["prompt"]
     assert "Last failed command context:" not in prompt
@@ -1193,13 +1180,13 @@ def test_fresh_ask_omits_recent_turns_section_when_none_recorded() -> None:
         ):
             captured: dict[str, str] = {}
 
-            def fake_answer(system: str, prompt: str, **kwargs: object) -> int:
-                del system, kwargs
-                captured["prompt"] = prompt
+            def fake_answer(objective: str, **kwargs: object) -> int:
+                del objective
+                captured["prompt"] = str(kwargs["prompt"])
                 return 0
 
-            with patch("sigil.workflows.ask.run_tool_ask", side_effect=fake_answer):
-                assert ask("hello", json_output=True) == 0
+            with patch("sigil.workflows.ask.step", side_effect=fake_answer):
+                assert ask("hello") == 0
 
     prompt = captured["prompt"]
     assert "Recent shell activity" not in prompt
@@ -1269,36 +1256,6 @@ def test_events_raw_requires_json() -> None:
 
     assert result.exit_code == 2
     assert "--raw requires --json" in result.output
-
-
-def test_ask_json_uses_the_shared_indented_shape() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            from sigil.workflows import ask as ask_runner
-            from sigil.zeta.agent import AgentTurnResult
-
-            def fake_run_agent_turn(*args: object, **kwargs: object) -> AgentTurnResult:
-                del args, kwargs
-                return AgentTurnResult(final_text="indented answer")
-
-            with patch("sigil.agent_io.ensure_server", return_value=True):
-                with patch(
-                    "sigil.workflows.ask.run_agent_turn",
-                    side_effect=fake_run_agent_turn,
-                ):
-                    stdout = StringIO()
-                    with redirect_stdout(stdout):
-                        code = ask_runner.run_tool_ask(
-                            "system", "question", json_output=True
-                        )
-
-        assert code == 0
-        payload = json.loads(stdout.getvalue())
-        assert payload["answer"] == "indented answer"
-        assert stdout.getvalue().startswith("{\n")
 
 
 def test_session_transcript_renders_conversation() -> None:

@@ -37,11 +37,7 @@ def test_ask_verb_accepts_piped_input() -> None:
     assert ask_calls == [
         (
             ("review\n\nPiped input:\ndiff\n",),
-            {
-                "glyph": "ask",
-                "tools": "read,grep,ls,query_log",
-                "json_output": False,
-            },
+            {},
         )
     ]
 
@@ -60,11 +56,7 @@ def test_ask_without_question_uses_default_summary_prompt() -> None:
     assert calls == [
         (
             (DEFAULT_QUESTION,),
-            {
-                "glyph": "ask",
-                "tools": "read,grep,ls,query_log",
-                "json_output": False,
-            },
+            {},
         )
     ]
 

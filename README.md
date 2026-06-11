@@ -199,7 +199,9 @@ Sigil keeps session state under `~/.sigil/` so Zeta can resume from recent
 ask turns, handoff timeline events, and command results recorded through `+`.
 `sigil session transcript` renders that conversation back as a transcript —
 questions, answers, and compact tool traces, with each answer tagged by the
-id of the exact prompt the model saw.
+id of the exact prompt the model saw. When the model streams reasoning, the
+transcript shows it as an italic panel above the answer it led to; the live
+loop never prints reasoning.
 
 The zsh binding also records every interactive command: the command line,
 exit status, working directory, and timestamp — never its output. Output is
@@ -304,7 +306,7 @@ sigil events
 The glyphs are thin shell functions over a regular CLI:
 
 ```text
-sigil ask [--json] [QUESTION]
+sigil ask [QUESTION]
 sigil run [--shell] COMMAND [ARGS...]
 sigil status [--json]
 sigil log [--touched PATH] [--workflow W] [--since T] [--failed] [--cost] [--json]

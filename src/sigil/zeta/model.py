@@ -730,31 +730,6 @@ def parse_structured_message_content(content: Any) -> dict[str, Any]:
     return data
 
 
-def chat_text(
-    system: str,
-    user: str,
-    *,
-    max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
-    selected_model: str | None = None,
-    selected_url: str | None = None,
-    stream_sink: ChatCompletionStreamSink | None = None,
-    telemetry_sink: ModelTelemetrySink | None = None,
-) -> str:
-    """Request plain text from the configured model endpoint."""
-    message = chat_completion_messages(
-        [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        max_tokens=max_tokens,
-        selected_model=selected_model,
-        selected_url=selected_url,
-        stream_sink=stream_sink,
-        telemetry_sink=telemetry_sink,
-    )
-    return str(message["content"])
-
-
 def local_model_path() -> str:
     """Return the optional local model path shown in startup help text."""
     return os.environ.get("ZETA_MODEL_PATH") or "<path-to-model.gguf>"

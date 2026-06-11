@@ -43,7 +43,6 @@ from .state import (
 RUN_WORKFLOW = "run"
 
 SESSION_FILES = (
-    "last-tools.jsonl",
     "last-failure.json",
     "recent-turns.jsonl",
 )

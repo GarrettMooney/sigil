@@ -68,14 +68,8 @@ class TraceRenderState:
         return True
 
 
-def create_stream_renderer(
-    output: TextIO,
-    *,
-    json_output: bool = False,
-) -> StreamRenderer | None:
+def create_stream_renderer(output: TextIO) -> StreamRenderer:
     """Return the renderer Sigil should use for human assistant text."""
-    if json_output:
-        return None
     if is_interactive(output):
         return RichStreamRenderer(output)
     return TerminalStreamRenderer(output)
@@ -718,6 +712,16 @@ def transcript_assistant_block(
     pending_results: dict[str, dict[str, Any]],
 ) -> list[Any]:
     renderables: list[Any] = []
+    reasoning = str(event.get("reasoning") or "")
+    if reasoning:
+        renderables.append(
+            Panel(
+                Text(reasoning, style="italic blue"),
+                title=Text("reasoning", style="bold blue"),
+                title_align="left",
+                border_style="blue",
+            )
+        )
     content = str(event.get("content") or "")
     if content:
         prompt_id = transcript_prompt_id(event)
