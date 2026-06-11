@@ -283,6 +283,133 @@ def test_zeta_timeline_projects_from_ref_and_object(
     assert zeta_timeline.timeline_from_ref("run/missing/head") == []
 
 
+def test_zeta_record_event_stores_prompt_link_not_components(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    store = zeta_trace.default_store()
+    component_id = store.put_object(
+        zeta_trace.Object(
+            kind="user_objective",
+            schema="zeta.prompt_component.v1",
+            data={"message": {"role": "user", "content": "objective"}},
+        )
+    )
+    prompt_id = store.put_object(
+        zeta_trace.Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload_sha256": "sha256:payload"},
+            links=(component_id,),
+        )
+    )
+    assistant_id = store.put_object(
+        zeta_trace.Object(
+            kind="assistant_message",
+            schema="zeta.assistant_output.v1",
+            data={"message": {"role": "assistant", "content": "the answer"}},
+            links=(prompt_id,),
+        )
+    )
+
+    zeta_timeline.record_event(
+        {
+            "type": "assistant_message",
+            "content": "the answer",
+            "prompt_trace": {
+                "prompt_object_id": prompt_id,
+                "assistant_message_object_id": assistant_id,
+                "component_object_ids": [component_id],
+            },
+        }
+    )
+
+    event_id = store.get_ref(zeta_timeline.event_head_ref("zeta-test"))
+    assert event_id is not None
+    run_event = store.get_object(event_id)
+    assert run_event is not None
+    assert prompt_id in run_event.links
+    assert assistant_id in run_event.links
+    assert component_id not in run_event.links
+    stored = run_event.data["event"]
+    assert "component_object_ids" not in stored["prompt_trace"]
+    assert "content" not in stored
+
+
+def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    store = zeta_trace.default_store()
+    prompt_id = store.put_object(
+        zeta_trace.Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload_sha256": "sha256:payload"},
+        )
+    )
+    tool_calls = [
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "read", "arguments": "{}"},
+        }
+    ]
+    assistant_id = store.put_object(
+        zeta_trace.Object(
+            kind="assistant_message",
+            schema="zeta.assistant_output.v1",
+            data={
+                "message": {
+                    "role": "assistant",
+                    "content": "the answer",
+                    "tool_calls": tool_calls,
+                }
+            },
+            links=(prompt_id,),
+        )
+    )
+
+    zeta_timeline.record_event(
+        {
+            "type": "assistant_message",
+            "content": "the answer",
+            "tool_calls": tool_calls,
+            "prompt_trace": {
+                "prompt_object_id": prompt_id,
+                "assistant_message_object_id": assistant_id,
+            },
+        }
+    )
+
+    events = zeta_timeline.current_timeline()
+    assert events[-1]["type"] == "assistant_message"
+    assert events[-1]["content"] == "the answer"
+    assert events[-1]["tool_calls"] == tool_calls
+
+
+def test_zeta_timeline_keeps_untraced_assistant_content_inline(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+
+    zeta_timeline.record_event({"type": "assistant_message", "content": "fallback"})
+
+    store = zeta_trace.default_store()
+    event_id = store.get_ref(zeta_timeline.event_head_ref("zeta-test"))
+    assert event_id is not None
+    run_event = store.get_object(event_id)
+    assert run_event is not None
+    assert run_event.data["event"]["content"] == "fallback"
+    assert zeta_timeline.current_timeline()[-1]["content"] == "fallback"
+
+
 def test_zeta_timeline_last_event_time_tracks_the_newest_event(
     tmp_path: Path,
     monkeypatch,

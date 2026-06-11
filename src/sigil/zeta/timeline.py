@@ -47,7 +47,7 @@ def record_event(event: dict[str, Any]) -> dict[str, Any]:
                     kind=RUN_EVENT_KIND,
                     schema="zeta.run_event.v1",
                     data={
-                        "event": payload,
+                        "event": stored_event_payload(payload),
                         "previous_event_object_id": previous_event_id or "",
                     },
                     links=links,
@@ -193,6 +193,11 @@ def event_links(
     event: dict[str, Any],
     previous_event_id: ObjectId | None,
 ) -> tuple[ObjectId, ...]:
+    """Link a run event to its predecessor and its prompt-trace objects.
+
+    Components stay reachable through the prompt object's own links;
+    linking them here again grew every event by the whole component set.
+    """
     links: list[ObjectId] = []
     if previous_event_id:
         links.append(previous_event_id)
@@ -204,12 +209,32 @@ def event_links(
             links,
             trace_object_id(prompt_trace, "assistant_message_object_id"),
         )
-        component_ids = prompt_trace.get("component_object_ids")
-        if isinstance(component_ids, list):
-            for component_id in component_ids:
-                if isinstance(component_id, str):
-                    add_event_link(links, component_id)
     return tuple(links)
+
+
+def stored_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the event as persisted: linked graph content is not inlined.
+
+    The component ids and the assistant message body already live in the
+    prompt and assistant_message objects; storing them again in every run
+    event duplicated the heaviest content once per turn. Projection
+    rehydrates the assistant body from the link.
+    """
+    prompt_trace = payload.get("prompt_trace")
+    if not isinstance(prompt_trace, dict):
+        return payload
+    stored = dict(payload)
+    stored["prompt_trace"] = {
+        key: value
+        for key, value in prompt_trace.items()
+        if key != "component_object_ids"
+    }
+    if str(stored.get("type") or "") == "assistant_message" and trace_object_id(
+        stored["prompt_trace"], "assistant_message_object_id"
+    ):
+        stored.pop("content", None)
+        stored.pop("tool_calls", None)
+    return stored
 
 
 def event_domain_object_id(event: dict[str, Any]) -> ObjectId | None:
@@ -277,11 +302,13 @@ def timeline_node(
     if obj.kind == RUN_EVENT_KIND:
         previous_id = str(obj.data.get("previous_event_object_id") or "")
         event = object_event(obj)
+        if event:
+            event = rehydrated_assistant_event(store, event)
         return previous_id or None, [event] if event else []
     if obj.kind == "assistant_message":
         prompt_id = obj.links[0] if obj.links else ""
         events = prompt_component_events(store, prompt_id) if prompt_id else []
-        assistant_event = assistant_event_from_object(object_id, obj, prompt_id, store)
+        assistant_event = assistant_event_from_object(object_id, obj, prompt_id)
         if assistant_event:
             events.append(assistant_event)
         return None, events
@@ -299,6 +326,35 @@ def timeline_node(
 def object_event(obj: Object) -> dict[str, Any]:
     event = obj.data.get("event")
     return dict(event) if isinstance(event, dict) else {}
+
+
+def rehydrated_assistant_event(
+    store: Store,
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge a linked assistant message body back into a projected event."""
+    if str(event.get("type") or "") != "assistant_message" or "content" in event:
+        return event
+    prompt_trace = event.get("prompt_trace")
+    if not isinstance(prompt_trace, dict):
+        return event
+    assistant_id = trace_object_id(prompt_trace, "assistant_message_object_id")
+    if assistant_id is None:
+        return event
+    assistant = store.get_object(assistant_id)
+    if assistant is None:
+        return event
+    message = assistant.data.get("message")
+    if not isinstance(message, dict):
+        return event
+    rehydrated = dict(event)
+    content = message.get("content")
+    if isinstance(content, str) and content:
+        rehydrated["content"] = content
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        rehydrated["tool_calls"] = tool_calls
+    return rehydrated
 
 
 def prompt_component_events(store: Store, prompt_id: ObjectId) -> list[dict[str, Any]]:
@@ -374,7 +430,6 @@ def assistant_event_from_object(
     object_id: ObjectId,
     obj: Object,
     prompt_id: ObjectId,
-    store: Store,
 ) -> dict[str, Any]:
     message = obj.data.get("message")
     if not isinstance(message, dict):
@@ -382,11 +437,9 @@ def assistant_event_from_object(
     event = chat_message_event({"role": "assistant", **message})
     event["type"] = "assistant_message"
     if prompt_id:
-        prompt = store.get_object(prompt_id)
         event["prompt_trace"] = {
             "prompt_object_id": prompt_id,
             "assistant_message_object_id": object_id,
-            "component_object_ids": list(prompt.links if prompt is not None else ()),
         }
     return event
 
