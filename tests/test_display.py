@@ -9,6 +9,7 @@ from _zeta_helpers import (
     visible_terminal_text,
 )
 from rich.console import Console
+from rich.panel import Panel
 
 import sigil.display.render as display_render
 import sigil.display.summarize as display_summarize
@@ -624,21 +625,48 @@ def test_transcript_renders_reasoning_before_answer() -> None:
     )
     text = output.getvalue()
 
-    assert "reasoning" in text
     assert "the user wants the short version" in text
     assert text.index("the user wants the short version") < text.index("Here it is.")
 
 
-def test_transcript_reasoning_panel_is_italic_blue() -> None:
+def test_transcript_reasoning_is_plain_italic_blue_text() -> None:
     blocks = display_render.transcript_assistant_block(
         {"type": "assistant_message", "reasoning": "weighing", "content": "done"},
         set(),
         {},
     )
 
-    reasoning_panel = blocks[0]
-    assert reasoning_panel.border_style == "blue"
-    assert reasoning_panel.renderable.style == "italic blue"
+    reasoning_text = blocks[0]
+    assert not isinstance(reasoning_text, Panel)
+    assert reasoning_text.style == "italic blue"
+
+
+def test_transcript_dims_user_scaffolding_sections() -> None:
+    content = (
+        "Recent shell activity:\n  git branch (exit 0)\n\n"
+        "Question:\nwhatever\n\n"
+        "cwd:\n/Users/remilouf/projects/sigil"
+    )
+
+    body = display_render.user_message_text(content)
+
+    assert body.plain == content
+    dimmed = "".join(
+        body.plain[span.start : span.end] for span in body.spans if span.style == "dim"
+    )
+    assert "Recent shell activity:" in dimmed
+    assert "git branch (exit 0)" in dimmed
+    assert "cwd:" in dimmed
+    assert "/Users/remilouf/projects/sigil" in dimmed
+    assert "Question:" in dimmed
+    assert "whatever" not in dimmed
+
+
+def test_transcript_keeps_plain_user_message_undimmed() -> None:
+    body = display_render.user_message_text("summarize notes.md")
+
+    assert body.plain == "summarize notes.md"
+    assert not body.spans
 
 
 def test_transcript_skips_empty_reasoning_panel() -> None:

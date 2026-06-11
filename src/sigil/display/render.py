@@ -688,6 +688,30 @@ def transcript_unmatched_result(
     return transcript_tool_result_lines(event)
 
 
+USER_SCAFFOLD_LABELS = (
+    "cwd:",
+    "Recent shell activity:",
+    "Last failed command context:",
+)
+
+
+def user_message_text(content: str) -> Text:
+    """Dim the runtime scaffolding so the user's own words stand out."""
+    rendered = Text()
+    for index, section in enumerate(content.split("\n\n")):
+        if index:
+            rendered.append("\n\n")
+        first_line = section.split("\n", 1)[0]
+        if first_line in USER_SCAFFOLD_LABELS:
+            rendered.append(section, style="dim")
+        elif first_line == "Question:":
+            rendered.append("Question:", style="dim")
+            rendered.append(section[len("Question:") :])
+        else:
+            rendered.append(section)
+    return rendered
+
+
 def transcript_message_panel(
     label: str,
     border_style: str,
@@ -696,9 +720,10 @@ def transcript_message_panel(
     content = str(event.get("content") or "")
     if not content:
         return []
+    body = user_message_text(content) if label == "you" else Text(content)
     return [
         Panel(
-            Text(content),
+            body,
             title=Text(label, style=f"bold {border_style}"),
             title_align="left",
             border_style=border_style,
@@ -714,14 +739,7 @@ def transcript_assistant_block(
     renderables: list[Any] = []
     reasoning = str(event.get("reasoning") or "")
     if reasoning:
-        renderables.append(
-            Panel(
-                Text(reasoning, style="italic blue"),
-                title=Text("reasoning", style="bold blue"),
-                title_align="left",
-                border_style="blue",
-            )
-        )
+        renderables.append(Text(reasoning, style="italic blue"))
     content = str(event.get("content") or "")
     if content:
         prompt_id = transcript_prompt_id(event)
