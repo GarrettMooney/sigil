@@ -8,14 +8,14 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from ...protocols import shell_handoff_tool_result
 
 EffectKind = Literal["read", "write", "delete", "execute", "search"]
 Resource = Literal["path", "process", "session"]
 
-EFFECT_KINDS = frozenset({"read", "write", "delete", "execute", "search"})
+EFFECT_KINDS = frozenset(get_args(EffectKind))
 READ_ONLY_EFFECT_KINDS = frozenset({"read", "search"})
 
 
