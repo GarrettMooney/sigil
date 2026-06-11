@@ -216,7 +216,7 @@ Installed zsh bindings expose these shortcuts:
 | `,,` | propose | Run until Sigil can stage reviewed shell work or return an answer. |
 | `,,,` | do | Run auto-approved tool calls until no more are needed. |
 | `+` | run | Run one explicit command and capture stdout/stderr snippets. |
-| `?` | status | Show the current session status and the active model. |
+| `?` | status | Session status: last failure, last delegation, staged work, today's cost, active model. |
 
 Examples:
 
@@ -303,6 +303,9 @@ The glyphs are thin shell functions over a regular CLI:
 sigil ask [--json] [QUESTION]
 sigil run [--shell] COMMAND [ARGS...]
 sigil status [--json]
+sigil log [--touched PATH] [--workflow W] [--since T] [--failed] [--cost] [--json]
+sigil log show TURN [--json]
+sigil blame FILE
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear|transcript] [--json]
 sigil model [list|use|show|clear]
@@ -381,6 +384,26 @@ sigil session clear
 sigil events
 sigil log reindex
 ```
+
+The ledger is the query surface over that record. `sigil log` lists the
+session's turns newest first (`--all-sessions` widens, `--touched PATH`,
+`--workflow`, `--since 2d`, `--failed`, and `--cost` narrow or enrich);
+`sigil log show TURN` renders one turn in full — objective, contract,
+model, cost, effects with content hashes, and the prompt ids that feed
+`sigil zeta trace show`. `sigil blame FILE` lists every turn that wrote
+or edited a file through the write/edit tools, with its objective and
+prompt ids; bash commands record what ran rather than which files they
+touched, so they appear in `sigil log`, not in blame. `?` reads the same
+ledger: it shows the last delegation outcome, a pending staged command,
+and today's session cost next to the active model.
+
+```sh
+sigil log --touched src/app.py --since 2d
+sigil blame src/app.py
+sigil log show 4f9d01c2
+```
+
+`sigil events` stays the raw event view underneath all of this.
 
 The trace store underneath is explorable the same way. `sigil zeta trace
 log` lists recent prompts and assistant messages, one line per object

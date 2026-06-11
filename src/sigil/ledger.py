@@ -162,6 +162,102 @@ class LedgerIndex:
         )
         self.connection.commit()
 
+    def query_turns(
+        self,
+        *,
+        session: str | None = None,
+        workflow: str | None = None,
+        since: float | None = None,
+        failed: bool = False,
+        touched: tuple[str, ...] | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return turn records newest first, narrowed by the given filters."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if session is not None:
+            clauses.append("session = ?")
+            params.append(session)
+        if workflow is not None:
+            clauses.append("workflow = ?")
+            params.append(workflow)
+        if since is not None:
+            clauses.append("time >= ?")
+            params.append(since)
+        if failed:
+            clauses.append("outcome IN ('failed', 'aborted')")
+        if touched is not None:
+            placeholders = ", ".join("?" for _ in touched)
+            clauses.append(
+                "turn_id IN (SELECT DISTINCT turn_id FROM effects"
+                f" WHERE path IN ({placeholders}))"
+            )
+            params.extend(touched)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        limit_clause = "LIMIT ?" if limit is not None else ""
+        if limit is not None:
+            params.append(limit)
+        rows = self.connection.execute(
+            f"""
+            SELECT record_json FROM turns
+            {where}
+            ORDER BY time DESC, turn_id DESC
+            {limit_clause}
+            """,
+            params,
+        ).fetchall()
+        return [json.loads(str(row["record_json"])) for row in rows]
+
+    def turn_ids_with_prefix(self, prefix: str, limit: int = 16) -> list[str]:
+        """Return turn ids starting with a prefix, sorted, bounded."""
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = self.connection.execute(
+            r"SELECT turn_id FROM turns WHERE turn_id LIKE ? ESCAPE '\'"
+            " ORDER BY turn_id LIMIT ?",
+            (f"{escaped}%", limit),
+        ).fetchall()
+        return [str(row["turn_id"]) for row in rows]
+
+    def pending_staged_command(self, session: str) -> dict[str, Any] | None:
+        """Return the newest staged command effect awaiting resolution."""
+        row = self.connection.execute(
+            """
+            SELECT record_json FROM effects
+            WHERE session = ? AND staged = 1 AND kind = 'command'
+              AND tool_call_id IS NOT NULL
+              AND tool_call_id NOT IN (
+                SELECT tool_call_id FROM effects
+                WHERE resolved_outcome IS NOT NULL AND tool_call_id IS NOT NULL
+              )
+            ORDER BY time DESC, effect_id DESC
+            LIMIT 1
+            """,
+            (session,),
+        ).fetchone()
+        if row is None:
+            return None
+        return json.loads(str(row["record_json"]))
+
+    def cost_since(self, session: str, since: float) -> dict[str, int]:
+        """Sum the session's turn costs recorded at or after a time."""
+        row = self.connection.execute(
+            """
+            SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                   COALESCE(SUM(model_calls), 0) AS model_calls,
+                   COUNT(*) AS turns
+            FROM turns
+            WHERE session = ? AND time >= ?
+            """,
+            (session, since),
+        ).fetchone()
+        return {
+            "input_tokens": int(row["input_tokens"]),
+            "output_tokens": int(row["output_tokens"]),
+            "model_calls": int(row["model_calls"]),
+            "turns": int(row["turns"]),
+        }
+
     def turn(self, turn_id: str) -> dict[str, Any] | None:
         row = self.connection.execute(
             "SELECT record_json FROM turns WHERE turn_id = ?",

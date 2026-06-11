@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any
 
@@ -174,6 +175,366 @@ def test_ledger_reindex_is_idempotent() -> None:
     index = sigil_ledger.default_ledger_index()
     assert len(index.turns()) == 1
     assert len(index.effects_for_turn("turn-1")) == 1
+
+
+def test_ledger_query_turns_filters_workflow_outcome_and_since() -> None:
+    index = sigil_ledger.default_ledger_index()
+    index.index_record(
+        append_event(sample_turn_record("turn-ask", workflow="ask", time=100.0))
+    )
+    index.index_record(
+        append_event(
+            sample_turn_record(
+                "turn-broken",
+                workflow="do",
+                outcome=TURN_OUTCOME_FAILED,
+                time=200.0,
+            )
+        )
+    )
+    index.index_record(
+        append_event(sample_turn_record("turn-run", workflow="run", time=300.0))
+    )
+
+    assert [row["turn_id"] for row in index.query_turns(workflow="ask")] == ["turn-ask"]
+    assert [row["turn_id"] for row in index.query_turns(failed=True)] == ["turn-broken"]
+    assert [row["turn_id"] for row in index.query_turns(since=250.0)] == ["turn-run"]
+    assert [row["turn_id"] for row in index.query_turns(limit=2)] == [
+        "turn-run",
+        "turn-broken",
+    ]
+
+
+def test_ledger_query_turns_scopes_by_session_and_touched_path() -> None:
+    index = sigil_ledger.default_ledger_index()
+    index.index_record(
+        append_event(sample_turn_record("turn-here", time=100.0)) | {"session": "here"}
+    )
+    index.index_record(
+        append_event(sample_turn_record("turn-there", time=200.0))
+        | {"session": "there"}
+    )
+    index.index_record(
+        append_event(
+            sample_effect_record(
+                "effect-write",
+                turn_id="turn-here",
+                kind=EFFECT_KIND_FILE_WRITE,
+                path="notes.txt",
+            )
+        )
+    )
+
+    assert [row["turn_id"] for row in index.query_turns(session="there")] == [
+        "turn-there"
+    ]
+    assert [row["turn_id"] for row in index.query_turns(touched=("notes.txt",))] == [
+        "turn-here"
+    ]
+    assert index.query_turns(touched=("missing.txt",)) == []
+
+
+def test_ledger_turn_ids_with_prefix_lists_matches_sorted() -> None:
+    index = sigil_ledger.default_ledger_index()
+    index.index_record(append_event(sample_turn_record("aaaa-1111")))
+    index.index_record(append_event(sample_turn_record("aaaa-2222")))
+    index.index_record(append_event(sample_turn_record("bbbb-3333")))
+
+    assert index.turn_ids_with_prefix("aaaa") == ["aaaa-1111", "aaaa-2222"]
+    assert index.turn_ids_with_prefix("bbbb-3333") == ["bbbb-3333"]
+    assert index.turn_ids_with_prefix("cccc") == []
+
+
+def test_ledger_pending_staged_command_clears_on_resolution(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "pending-test")
+    index = sigil_ledger.default_ledger_index()
+    index.index_record(
+        append_event(
+            sample_effect_record(
+                "effect-staged",
+                staged=True,
+                tool_call_id="call-1",
+                command="uv run pytest",
+            )
+        )
+    )
+
+    pending = index.pending_staged_command("pending-test")
+    assert pending is not None
+    assert pending["command"] == "uv run pytest"
+    assert index.pending_staged_command("other-session") is None
+
+    index.index_record(
+        append_event(
+            sample_effect_record(
+                "effect-resolved",
+                kind="handoff",
+                tool_call_id="call-1",
+                resolved_outcome="executed",
+            )
+        )
+    )
+
+    assert index.pending_staged_command("pending-test") is None
+
+
+def test_ledger_cost_since_sums_session_turns(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "cost-test")
+    index = sigil_ledger.default_ledger_index()
+    index.index_record(
+        append_event(
+            sample_turn_record(
+                "turn-early",
+                time=100.0,
+                cost={"input_tokens": 10, "output_tokens": 5, "model_calls": 1},
+            )
+        )
+    )
+    index.index_record(
+        append_event(
+            sample_turn_record(
+                "turn-late",
+                time=300.0,
+                cost={"input_tokens": 100, "output_tokens": 50, "model_calls": 2},
+            )
+        )
+    )
+
+    today = index.cost_since("cost-test", 200.0)
+    assert today == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "model_calls": 2,
+        "turns": 1,
+    }
+    everything = index.cost_since("cost-test", 0.0)
+    assert everything["turns"] == 2
+    assert everything["input_tokens"] == 110
+
+
+def seed_log_cli_index(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "log-cli")
+    index = sigil_ledger.default_ledger_index()
+    index.index_record(
+        append_event(
+            sample_turn_record(
+                "turn-do-1111",
+                workflow="do",
+                objective="refactor the staging path",
+                time=100.0,
+                cost={"input_tokens": 1000, "output_tokens": 200, "model_calls": 3},
+            )
+        )
+    )
+    index.index_record(
+        append_event(
+            sample_turn_record(
+                "turn-ask-222",
+                workflow="ask",
+                objective="why did the test fail?",
+                outcome=TURN_OUTCOME_FAILED,
+                time=200.0,
+            )
+        )
+    )
+    index.index_record(
+        append_event(
+            sample_turn_record(
+                "turn-elsewhere",
+                workflow="run",
+                objective="ls",
+                time=300.0,
+            )
+        )
+        | {"session": "elsewhere"}
+    )
+
+
+def test_sigil_log_lists_current_session_newest_first(monkeypatch) -> None:
+    seed_log_cli_index(monkeypatch)
+
+    result = CliRunner().invoke(sigil_cli, ["log"])
+
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("turn-ask")
+    assert "ask" in lines[0]
+    assert "failed" in lines[0]
+    assert "why did the test fail?" in lines[0]
+    assert lines[1].startswith("turn-do-")
+    assert "turn-elsewhere"[:8] not in result.output
+
+
+def test_sigil_log_filters_workflow_failed_and_sessions(monkeypatch) -> None:
+    seed_log_cli_index(monkeypatch)
+    runner = CliRunner()
+
+    by_workflow = runner.invoke(sigil_cli, ["log", "--workflow", "do"])
+    by_failed = runner.invoke(sigil_cli, ["log", "--failed"])
+    everywhere = runner.invoke(sigil_cli, ["log", "--all-sessions"])
+    elsewhere = runner.invoke(sigil_cli, ["log", "--session", "elsewhere"])
+
+    assert by_workflow.exit_code == 0
+    assert len(by_workflow.output.splitlines()) == 1
+    assert "refactor the staging path" in by_workflow.output
+    assert by_failed.exit_code == 0
+    assert len(by_failed.output.splitlines()) == 1
+    assert "why did the test fail?" in by_failed.output
+    assert len(everywhere.output.splitlines()) == 3
+    assert len(elsewhere.output.splitlines()) == 1
+    assert "ls" in elsewhere.output
+
+
+def test_sigil_log_renders_cost_and_json(monkeypatch) -> None:
+    seed_log_cli_index(monkeypatch)
+    runner = CliRunner()
+
+    with_cost = runner.invoke(sigil_cli, ["log", "--cost"])
+    as_json = runner.invoke(sigil_cli, ["log", "--json"])
+
+    assert with_cost.exit_code == 0
+    assert "1200 tok" in with_cost.output
+    assert "3 calls" in with_cost.output
+    assert as_json.exit_code == 0
+    payload = json.loads(as_json.output)
+    assert [turn["turn_id"] for turn in payload["turns"]] == [
+        "turn-ask-222",
+        "turn-do-1111",
+    ]
+
+
+def test_sigil_log_touched_filter_finds_writing_turn(monkeypatch) -> None:
+    seed_log_cli_index(monkeypatch)
+    index = sigil_ledger.default_ledger_index()
+    index.index_record(
+        append_event(
+            sample_effect_record(
+                "effect-write",
+                turn_id="turn-do-1111",
+                kind=EFFECT_KIND_FILE_WRITE,
+                path="/tmp/notes.txt",
+            )
+        )
+    )
+
+    result = CliRunner().invoke(sigil_cli, ["log", "--touched", "/tmp/notes.txt"])
+
+    assert result.exit_code == 0
+    assert len(result.output.splitlines()) == 1
+    assert result.output.startswith("turn-do-")
+
+
+def test_sigil_log_empty_session_prints_friendly_line(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "empty-session")
+
+    result = CliRunner().invoke(sigil_cli, ["log"])
+
+    assert result.exit_code == 0
+    assert "no turns recorded" in result.output
+
+
+def seed_show_and_blame_index(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "show-cli")
+    index = sigil_ledger.default_ledger_index()
+    record = turn_record(
+        "turn-do-1111",
+        workflow="do",
+        objective="refactor the staging path",
+        contract=turn_contract("do", ("read", "edit", "bash"), staged=False),
+        outcome=TURN_OUTCOME_EXECUTED,
+        agent={"model": "qwen2.5-coder", "url": "http://127.0.0.1:8080/v1"},
+        cost={
+            "input_tokens": 1000,
+            "output_tokens": 200,
+            "model_calls": 3,
+            "wall_ms": 4200,
+        },
+        prompt_object_ids=["sha256:" + "70da571d" + "0" * 56],
+        effect_ids=["effect-edit"],
+    )
+    index.index_record(append_event({**record, "time": 100.0}))
+    index.index_record(
+        append_event(
+            sample_effect_record(
+                "effect-edit",
+                turn_id="turn-do-1111",
+                kind="file_edit",
+                path="/tmp/notes.txt",
+                before_hash="sha256:" + "aa" * 32,
+                after_hash="sha256:" + "bb" * 32,
+                time=100.0,
+            )
+        )
+    )
+    index.index_record(append_event(sample_turn_record("turn-other-22", time=200.0)))
+
+
+def test_sigil_log_show_renders_the_full_record(monkeypatch) -> None:
+    seed_show_and_blame_index(monkeypatch)
+
+    result = CliRunner().invoke(sigil_cli, ["log", "show", "turn-do"])
+
+    assert result.exit_code == 0
+    assert "turn     turn-do-1111" in result.output
+    assert "workflow do" in result.output
+    assert "outcome  executed" in result.output
+    assert "refactor the staging path" in result.output
+    assert "read, edit, bash" in result.output
+    assert "qwen2.5-coder" in result.output
+    assert "1200 tok" in result.output
+    assert "3 calls" in result.output
+    assert "file_edit" in result.output
+    assert "/tmp/notes.txt" in result.output
+    assert "70da571d" in result.output
+
+
+def test_sigil_log_show_reports_ambiguous_and_unknown_ids(monkeypatch) -> None:
+    seed_show_and_blame_index(monkeypatch)
+    runner = CliRunner()
+
+    ambiguous = runner.invoke(sigil_cli, ["log", "show", "turn-"])
+    unknown = runner.invoke(sigil_cli, ["log", "show", "nope"])
+
+    assert ambiguous.exit_code != 0
+    assert "turn-do-1111" in ambiguous.output
+    assert "turn-other-22" in ambiguous.output
+    assert unknown.exit_code != 0
+    assert "nope" in unknown.output
+
+
+def test_sigil_log_show_json_emits_record_and_effects(monkeypatch) -> None:
+    seed_show_and_blame_index(monkeypatch)
+
+    result = CliRunner().invoke(sigil_cli, ["log", "show", "--json", "turn-do-1111"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["turn"]["turn_id"] == "turn-do-1111"
+    assert payload["effects"][0]["effect_id"] == "effect-edit"
+
+
+def test_sigil_blame_lists_turns_touching_a_file(monkeypatch) -> None:
+    seed_show_and_blame_index(monkeypatch)
+
+    result = CliRunner().invoke(sigil_cli, ["blame", "/tmp/notes.txt"])
+
+    assert result.exit_code == 0
+    assert "file_edit" in result.output
+    assert "do" in result.output
+    assert "executed" in result.output
+    assert "turn-do-" in result.output
+    assert "refactor the staging path" in result.output
+    assert "70da571d" in result.output
+
+
+def test_sigil_blame_reports_untouched_files(monkeypatch) -> None:
+    seed_show_and_blame_index(monkeypatch)
+
+    result = CliRunner().invoke(sigil_cli, ["blame", "/tmp/other.txt"])
+
+    assert result.exit_code == 0
+    assert "no recorded writes" in result.output
 
 
 def test_ledger_cli_log_reindex_reports_counts() -> None:

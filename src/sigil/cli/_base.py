@@ -18,6 +18,7 @@ MODEL_ERROR_EXIT_CODE = 69
 
 COMMAND_MODULES = {
     "ask": "sigil.cli.ask",
+    "blame": "sigil.cli.log",
     "doctor": "sigil.cli.install",
     "events": "sigil.cli.events",
     "handoff": "sigil.cli.handoff",
