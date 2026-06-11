@@ -7,7 +7,7 @@ CLI glyph steps on the same Zeta service layer without an external agent.
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
@@ -251,7 +251,7 @@ def record_agent_model_telemetry(
     model_telemetry: dict[str, Any] | None,
     *,
     glyph: str,
-    prompt_traces: list[Any] | tuple[Any, ...] = (),
+    prompt_traces: Sequence[Any] = (),
 ) -> None:
     fields = model_telemetry_fields(model_telemetry)
     if not fields:
