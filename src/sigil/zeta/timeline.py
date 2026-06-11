@@ -180,8 +180,6 @@ def event_payload(event: dict[str, Any]) -> dict[str, Any]:
     payload["time"] = event_time_value(payload.get("time"))
     payload["cwd"] = str(payload.get("cwd") or os.getcwd())
     payload["session"] = str(payload.get("session") or session_id())
-    if not str(payload.get("id") or ""):
-        payload["id"] = str(uuid.uuid4())
     return payload
 
 
@@ -245,20 +243,6 @@ def trace_object_id(event: dict[str, Any], field: str) -> ObjectId | None:
     if isinstance(value, str) and value.startswith("sha256:"):
         return value
     return None
-
-
-def timeline_from_current_head(store: Store) -> list[dict[str, Any]]:
-    head_id = store.get_ref(run_head_ref())
-    if head_id is None:
-        return []
-    return timeline_events_from_head(store, head_id, seen=set())
-
-
-def timeline_from_event_ref(store: Store) -> list[dict[str, Any]]:
-    event_id = store.get_ref(event_head_ref())
-    if event_id is None:
-        return []
-    return timeline_events_from_head(store, event_id, seen=set())
 
 
 def timeline_events_from_head(
@@ -383,8 +367,6 @@ def chat_message_event(message: dict[str, Any]) -> dict[str, Any]:
         return event
     if role == "tool":
         return tool_result_event_from_message(message)
-    if role in {"user", "system"}:
-        return {"role": role, "content": str(message.get("content") or "")}
     return {"role": role, "content": str(message.get("content") or "")}
 
 
@@ -475,12 +457,12 @@ def _chat_message_entries(
     for index, event in enumerate(timeline):
         message = role_chat_message(event)
         if message is not None:
-            entries.append(chat_message_entry(index, event, message))
+            entries.append(ChatMessageEntry(index, event, message))
             continue
         event_type = str(event.get("type") or "")
         message = event_chat_message(event_type, event)
         if message is not None:
-            entries.append(chat_message_entry(index, event, message))
+            entries.append(ChatMessageEntry(index, event, message))
             record_tool_call_ids(message, tool_call_ids)
             continue
         if event_type == "tool_call":
@@ -488,32 +470,18 @@ def _chat_message_entries(
             if tool_call_id and tool_call_id in tool_call_ids:
                 continue
             message = tool_call_message(event, fallback_id=f"call-{index}")
-            entries.append(chat_message_entry(index, event, message))
+            entries.append(ChatMessageEntry(index, event, message))
             record_tool_call_ids(message, tool_call_ids)
             continue
         if event_type == "tool_result":
             if is_resolved_shell_prompt_handoff(event, resolved_shell_handoffs):
                 continue
             entries.append(
-                chat_message_entry(
-                    index,
-                    event,
-                    tool_result_message(event, tool_call_ids),
+                ChatMessageEntry(
+                    index, event, tool_result_message(event, tool_call_ids)
                 )
             )
     return entries
-
-
-def chat_message_entry(
-    event_index: int,
-    event: dict[str, Any],
-    message: dict[str, Any],
-) -> ChatMessageEntry:
-    return ChatMessageEntry(
-        event_index=event_index,
-        event=event,
-        message=message,
-    )
 
 
 def resolved_shell_handoff_call_ids(timeline: list[dict[str, Any]]) -> set[str]:
