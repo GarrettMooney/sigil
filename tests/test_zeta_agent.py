@@ -25,6 +25,36 @@ from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import trace as zeta_trace
 
 
+def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        return {"content": "done", "reasoning_content": "weighing the options"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assert result.events[0]["reasoning"] == "weighing the options"
+    assert result.events[0]["content"] == "done"
+
+
+def test_zeta_agent_event_omits_empty_reasoning() -> None:
+    event = zeta_agent.assistant_message_event(
+        {"content": "done", "reasoning_content": ""}
+    )
+
+    assert "reasoning" not in event
+
+
 def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 

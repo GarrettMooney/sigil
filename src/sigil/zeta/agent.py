@@ -273,8 +273,11 @@ class ToolCallResult:
 
 def assistant_message_event(assistant: dict[str, Any]) -> dict[str, Any]:
     content = assistant.get("content")
+    reasoning = assistant.get("reasoning_content")
     tool_calls = assistant_tool_calls(assistant)
     event: dict[str, Any] = {"type": "assistant_message"}
+    if isinstance(reasoning, str) and reasoning:
+        event["reasoning"] = reasoning
     if isinstance(content, str) and content:
         event["content"] = content
     if tool_calls:

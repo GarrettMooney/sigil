@@ -234,6 +234,7 @@ def stored_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
     ):
         stored.pop("content", None)
         stored.pop("tool_calls", None)
+        stored.pop("reasoning", None)
     return stored
 
 
@@ -354,6 +355,9 @@ def rehydrated_assistant_event(
     tool_calls = message.get("tool_calls")
     if isinstance(tool_calls, list):
         rehydrated["tool_calls"] = tool_calls
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning:
+        rehydrated["reasoning"] = reasoning
     return rehydrated
 
 
@@ -420,6 +424,9 @@ def chat_message_event(message: dict[str, Any]) -> dict[str, Any]:
         tool_calls = message.get("tool_calls")
         if isinstance(tool_calls, list):
             event["tool_calls"] = tool_calls
+        reasoning = message.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning:
+            event["reasoning"] = reasoning
         return event
     if role == "tool":
         return tool_result_event_from_message(message)

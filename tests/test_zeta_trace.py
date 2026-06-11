@@ -393,6 +393,67 @@ def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
     assert events[-1]["tool_calls"] == tool_calls
 
 
+def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    store = zeta_trace.default_store()
+    prompt_id = store.put_object(
+        zeta_trace.Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload_sha256": "sha256:payload"},
+        )
+    )
+    assistant_id = store.put_object(
+        zeta_trace.Object(
+            kind="assistant_message",
+            schema="zeta.assistant_output.v1",
+            data={
+                "message": {
+                    "role": "assistant",
+                    "content": "the answer",
+                    "reasoning_content": "weighing the options",
+                }
+            },
+            links=(prompt_id,),
+        )
+    )
+
+    zeta_timeline.record_event(
+        {
+            "type": "assistant_message",
+            "content": "the answer",
+            "reasoning": "weighing the options",
+            "prompt_trace": {
+                "prompt_object_id": prompt_id,
+                "assistant_message_object_id": assistant_id,
+            },
+        }
+    )
+
+    events = zeta_timeline.current_timeline()
+    assert events[-1]["content"] == "the answer"
+    assert events[-1]["reasoning"] == "weighing the options"
+
+    event_id = store.get_ref(zeta_timeline.event_head_ref("zeta-test"))
+    assert event_id is not None
+    run_event = store.get_object(event_id)
+    assert run_event is not None
+    assert "reasoning" not in run_event.data["event"]
+
+    fallback = zeta_timeline.timeline_from_ref(
+        zeta_timeline.event_head_ref("zeta-test")
+    )
+    assert fallback[-1]["reasoning"] == "weighing the options"
+
+    messages = zeta_timeline.chat_messages(events)
+    assert "reasoning" not in messages[-1]
+    assert "reasoning_content" not in messages[-1]
+
+
 def test_zeta_timeline_keeps_untraced_assistant_content_inline(
     tmp_path: Path,
     monkeypatch,
