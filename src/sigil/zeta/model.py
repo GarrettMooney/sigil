@@ -623,12 +623,9 @@ def chat_completion_messages(
         max_tokens=max_tokens,
         selected_model=selected_model,
     )
-    request_kwargs: dict[str, Any] = {}
-    if selected_url is not None:
-        request_kwargs["selected_url"] = selected_url
-    if stream_sink is not None:
-        request_kwargs["stream_sink"] = stream_sink
-    payload = request_chat_completion(body, **request_kwargs)
+    payload = request_chat_completion(
+        body, selected_url=selected_url, stream_sink=stream_sink
+    )
     emit_model_telemetry(
         payload,
         context_tokens=context_tokens,
@@ -744,30 +741,18 @@ def chat_text(
     telemetry_sink: ModelTelemetrySink | None = None,
 ) -> str:
     """Request plain text from the configured model endpoint."""
-    context_tokens = model_context_tokens(selected_url, selected_model)
-    body = {
-        "model": model_name(selected_model),
-        "messages": [
+    message = chat_completion_messages(
+        [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        "temperature": 0.2,
-        "max_tokens": max_tokens,
-        "stream_options": {"include_usage": True},
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
-    request_kwargs: dict[str, Any] = {}
-    if selected_url is not None:
-        request_kwargs["selected_url"] = selected_url
-    if stream_sink is not None:
-        request_kwargs["stream_sink"] = stream_sink
-    payload = request_chat_completion(body, **request_kwargs)
-    emit_model_telemetry(
-        payload,
-        context_tokens=context_tokens,
+        max_tokens=max_tokens,
+        selected_model=selected_model,
+        selected_url=selected_url,
+        stream_sink=stream_sink,
         telemetry_sink=telemetry_sink,
     )
-    return str(payload["choices"][0]["message"]["content"])
+    return str(message["content"])
 
 
 def local_model_path() -> str:
