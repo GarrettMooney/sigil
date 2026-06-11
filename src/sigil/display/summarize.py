@@ -15,23 +15,24 @@ from ..protocols import (
 from ..zeta.prompt.budget import estimated_tokens_for_text
 from ..zeta.trace import Object
 
+SUMMARY_FIELDS_BY_TOOL = {
+    "read": ("path", "file_path"),
+    "edit": ("location", "path", "file_path"),
+    "write": ("path", "file_path"),
+    "bash": ("command", "cmd"),
+    "grep": ("pattern", "query", "path", "glob"),
+    "find": ("pattern", "query", "path", "glob"),
+    "ls": ("pattern", "query", "path", "glob"),
+    "query_log": ("turn_id", "touched", "since", "workflow"),
+}
+
 
 def summarize(tool: str, args: object) -> str:
     """Extract a short human-readable label for a tool call."""
     if not isinstance(args, dict):
         return ""
     tool_args = cast(dict[str, object], args)
-    fields_by_tool = {
-        "read": ("path", "file_path"),
-        "edit": ("location", "path", "file_path"),
-        "write": ("path", "file_path"),
-        "bash": ("command", "cmd"),
-        "grep": ("pattern", "query", "path", "glob"),
-        "find": ("pattern", "query", "path", "glob"),
-        "ls": ("pattern", "query", "path", "glob"),
-        "query_log": ("turn_id", "touched", "since", "workflow"),
-    }
-    for field in fields_by_tool.get(tool, ()):
+    for field in SUMMARY_FIELDS_BY_TOOL.get(tool, ()):
         value = tool_args.get(field)
         if value:
             return str(value)
