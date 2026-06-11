@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -17,6 +16,7 @@ from ..timeline import (
     trace_object_id,
 )
 from ..tools import allowed_tool_names
+from ..tools.base import content_hash
 from ..trace import Object, ObjectId
 from .system import can_read_skill_files, skill_prompt_items, system_prompt
 
@@ -307,7 +307,7 @@ def non_message_components(
             PromptComponent(
                 kind="project_context",
                 data={
-                    "sha256": "sha256:" + hashlib.sha256(content.encode()).hexdigest(),
+                    "sha256": content_hash(content),
                     "chars": len(content),
                 },
             )

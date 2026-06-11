@@ -71,15 +71,9 @@ def component_text(component: PromptComponent) -> str:
         content = component.message.get("content")
         if isinstance(content, str):
             return content
-        return json.dumps(
-            component.message,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-    return json.dumps(
-        component.data,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+        return _compact_json(component.message)
+    return _compact_json(component.data)
+
+
+def _compact_json(value: dict[str, object]) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

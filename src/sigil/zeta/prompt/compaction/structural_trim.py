@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import replace
 from typing import Any
 
+from ...tools.base import content_hash
 from ..budget import render_stub
 from ..components import PromptComponent
 
@@ -161,7 +161,7 @@ def structural_trim_payload(component: PromptComponent) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "trimmed": True,
         "trim_method": "structural",
-        "raw_content_sha256": sha256_text(content),
+        "raw_content_sha256": content_hash(content),
         "raw_content_chars": len(content),
         "raw_content_bytes": len(content.encode("utf-8")),
     }
@@ -201,7 +201,7 @@ def trimmed_content_item(item: dict[str, Any]) -> dict[str, Any]:
     if isinstance(text, str):
         return {
             "type": str(item.get("type") or "text"),
-            "text_sha256": sha256_text(text),
+            "text_sha256": content_hash(text),
             "text_chars": len(text),
             "text_lines": line_count(text),
         }
@@ -214,10 +214,6 @@ def parse_json_object(raw: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
-
-
-def sha256_text(text: str) -> str:
-    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def line_count(text: str) -> int:
