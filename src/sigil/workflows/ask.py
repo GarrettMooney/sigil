@@ -50,18 +50,18 @@ ASK_REQUEST_EVENT = "ask_requested"
 
 ASK_SYSTEM_PROMPT = (
     "Answer concisely. You are responding to a quick question typed at a shell "
-    "prompt. The available tools are read, grep, and ls only. Use read for "
-    "files, ls for directory contents, file sizes, and recursive size-filtered "
-    "listings, and grep to search local text. Do not "
+    "prompt. The available tools are read, grep, ls, and query_log only. Use "
+    "read for files, ls for directory contents, file sizes, and recursive "
+    "size-filtered listings, and grep to search local text. Do not "
     "propose shell commands just to inspect files or directories; inspect them "
     "through the available tools. If a 'Recent shell activity' block appears "
     "in the user message, it already shows the last few commands. For older "
-    "sessions or audit history, the read tool can access ~/.sigil/events.jsonl. "
+    "sessions, past delegations, or audit history, use query_log. "
     "Do not mutate files or execute commands."
 )
 
-ZETA_ASK_TOOLS = "read,grep,ls"
-ASK_TOOLS = ("read", "grep", "ls")
+ZETA_ASK_TOOLS = "read,grep,ls,query_log"
+ASK_TOOLS = ("read", "grep", "ls", "query_log")
 
 
 def parse_tools(tools: str) -> tuple[str, ...]:

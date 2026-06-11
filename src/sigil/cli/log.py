@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import re
-import time
 from typing import Any
 
 import click
@@ -13,8 +10,6 @@ from ._base import cli
 from ._shared import pretty_print_json
 
 DEFAULT_LOG_LIMIT = 20
-SINCE_PATTERN = re.compile(r"(\d+)([dhm])")
-SINCE_SCALES = {"d": 86400, "h": 3600, "m": 60}
 
 
 @cli.group("log", invoke_without_command=True)
@@ -60,7 +55,8 @@ def cmd_log(
     if ctx.invoked_subcommand is not None:
         return 0
     # Imported lazily: `sigil.cli` must stay light at import time.
-    from ..ledger import default_ledger_index
+    from ..display.summarize import format_turn_line
+    from ..ledger import default_ledger_index, touched_path_variants
     from ..state import session_id
 
     session = None if all_sessions else (session_filter or session_id())
@@ -84,59 +80,15 @@ def cmd_log(
 
 
 def since_epoch(value: str) -> float:
-    """Parse an absolute date or relative age into an epoch lower bound."""
-    relative = SINCE_PATTERN.fullmatch(value.strip())
-    if relative is not None:
-        return time.time() - int(relative.group(1)) * SINCE_SCALES[relative.group(2)]
+    """Parse a --since value, mapping parse errors onto CLI errors."""
+    from ..ledger import parse_since
+
     try:
-        parsed = time.strptime(value.strip(), "%Y-%m-%d")
+        return parse_since(value)
     except ValueError as error:
         raise click.BadParameter(
             "expected YYYY-MM-DD or an age like 2d, 6h, 30m"
         ) from error
-    return time.mktime(parsed)
-
-
-def touched_path_variants(path: str) -> tuple[str, ...]:
-    """Return the path as given plus its absolute form, deduplicated."""
-    variants = [path]
-    absolute = os.path.abspath(path)
-    if absolute not in variants:
-        variants.append(absolute)
-    return tuple(variants)
-
-
-def format_turn_line(turn: dict[str, Any], *, show_cost: bool) -> str:
-    """Format one ledger turn as a log listing line."""
-    from ..display.summarize import first_line, truncate
-
-    turn_id = str(turn.get("turn_id") or "")[:8]
-    when = format_turn_time(turn.get("time"))
-    workflow = str(turn.get("workflow") or "?")
-    outcome = str(turn.get("outcome") or "?")
-    objective = truncate(first_line(str(turn.get("objective") or "")), 72)
-    line = f"{turn_id:<8}  {when}  {workflow:<7} {outcome:<9} {objective}".rstrip()
-    if show_cost:
-        line += cost_suffix(turn.get("cost"))
-    return line
-
-
-def format_turn_time(value: Any) -> str:
-    """Render an epoch timestamp as a compact local time."""
-    if not isinstance(value, (int, float)):
-        return "?" * 11
-    return time.strftime("%m-%d %H:%M", time.localtime(value))
-
-
-def cost_suffix(cost: Any) -> str:
-    """Render a turn's cost block as a listing suffix."""
-    if not isinstance(cost, dict):
-        return ""
-    tokens = int(cost.get("input_tokens") or 0) + int(cost.get("output_tokens") or 0)
-    calls = int(cost.get("model_calls") or 0)
-    if not tokens and not calls:
-        return ""
-    return f"  · {tokens} tok · {calls} calls"
 
 
 @cmd_log.command("reindex")
@@ -158,10 +110,11 @@ def cmd_log_show(turn_id: str, json_output: bool) -> int:
 
     TURN_ID may be a full id or a unique prefix.
     """
+    from ..display.summarize import render_turn_record
     from ..ledger import default_ledger_index
 
     index = default_ledger_index()
-    resolved = resolve_turn_id(index, turn_id)
+    resolved = resolve_cli_turn_id(index, turn_id)
     turn = index.turn(resolved)
     if turn is None:
         raise click.ClickException(f"turn not found: {turn_id}")
@@ -183,7 +136,7 @@ def cmd_blame(file: str) -> int:
     and content hashes. Bash commands record what ran, not which files
     it touched — find those with `sigil log` and the command text.
     """
-    from ..ledger import default_ledger_index
+    from ..ledger import default_ledger_index, touched_path_variants
 
     index = default_ledger_index()
     effects: list[dict[str, Any]] = []
@@ -205,62 +158,19 @@ def cmd_blame(file: str) -> int:
     return 0
 
 
-def resolve_turn_id(index: Any, token: str) -> str:
-    """Resolve a full turn id or unique prefix, mirroring the trace resolver."""
-    if index.turn(token) is not None:
-        return token
-    matches = index.turn_ids_with_prefix(token)
-    if len(matches) == 1:
-        return matches[0]
-    if matches:
-        candidates = "\n  ".join(matches)
+def resolve_cli_turn_id(index: Any, token: str) -> str:
+    """Resolve a turn id token, mapping resolver errors onto CLI errors."""
+    from ..ledger import AmbiguousTurnError, UnknownTurnError, resolve_turn_id
+
+    try:
+        return resolve_turn_id(index, token)
+    except AmbiguousTurnError as error:
+        candidates = "\n  ".join(error.candidates)
         raise click.ClickException(
             f"ambiguous turn id '{token}' matches:\n  {candidates}"
-        )
-    raise click.ClickException(f"turn not found: {token}")
-
-
-def render_turn_record(
-    turn: dict[str, Any],
-    effects: list[dict[str, Any]],
-) -> list[str]:
-    """Render one turn record as human-readable lines."""
-    lines = [
-        f"turn     {turn.get('turn_id') or '?'}",
-        f"time     {format_turn_time(turn.get('time'))}",
-        f"session  {turn.get('session') or '?'}",
-        f"workflow {turn.get('workflow') or '?'}",
-        f"outcome  {turn.get('outcome') or '?'}",
-    ]
-    objective = str(turn.get("objective") or "").strip()
-    if objective:
-        lines.extend(["", "objective"])
-        lines.extend(f"  {line}" for line in objective.splitlines()[:8])
-    contract = turn.get("contract")
-    if isinstance(contract, dict):
-        tools = ", ".join(str(tool) for tool in contract.get("allowed_tools") or [])
-        staged = " (staged)" if contract.get("staged") else ""
-        lines.extend(["", "contract", f"  tools: {tools or 'none'}{staged}"])
-    agent = turn.get("agent")
-    if isinstance(agent, dict):
-        endpoint = " @ ".join(
-            part for part in (agent.get("model"), agent.get("url")) if part
-        )
-        if endpoint:
-            lines.extend(["", "agent", f"  {endpoint}"])
-    cost_line = format_cost_block(turn.get("cost"))
-    if cost_line:
-        lines.extend(["", "cost", f"  {cost_line}"])
-    if effects:
-        lines.extend(["", "effects"])
-        lines.extend(f"  {format_effect_line(effect)}" for effect in effects)
-    prompt_ids = turn.get("prompt_object_ids")
-    if isinstance(prompt_ids, list) and prompt_ids:
-        from ..display.summarize import short_trace_id
-
-        shorts = " ".join(short_trace_id(str(value)) for value in prompt_ids)
-        lines.extend(["", "prompts", f"  {shorts}  (sigil zeta trace show ID)"])
-    return lines
+        ) from error
+    except UnknownTurnError as error:
+        raise click.ClickException(f"turn not found: {token}") from error
 
 
 def render_blame_block(
@@ -268,7 +178,12 @@ def render_blame_block(
     turn: dict[str, Any] | None,
 ) -> list[str]:
     """Render one touching effect joined to its turn."""
-    from ..display.summarize import first_line, short_trace_id, truncate
+    from ..display.summarize import (
+        first_line,
+        format_turn_time,
+        short_trace_id,
+        truncate,
+    )
 
     when = format_turn_time(effect.get("time"))
     workflow = str((turn or {}).get("workflow") or "?")
@@ -285,48 +200,3 @@ def render_blame_block(
     if detail:
         lines.append("  " + " · ".join(detail))
     return lines
-
-
-def format_effect_line(effect: dict[str, Any]) -> str:
-    """Render one effect record as a single listing line."""
-    from ..display.summarize import short_trace_id, truncate
-
-    kind = str(effect.get("kind") or "?")
-    parts = [f"{kind:<10}"]
-    path = effect.get("path")
-    if path:
-        parts.append(str(path))
-    command = effect.get("command")
-    if command:
-        parts.append(truncate(str(command), 60))
-    before = effect.get("before_hash")
-    after = effect.get("after_hash")
-    if before or after:
-        parts.append(
-            f"{short_trace_id(str(before or '?'))}→{short_trace_id(str(after or '?'))}"
-        )
-    exit_status = effect.get("exit_status")
-    if isinstance(exit_status, int):
-        parts.append(f"exit {exit_status}")
-    if effect.get("staged"):
-        outcome = effect.get("resolved_outcome")
-        parts.append(f"staged → {outcome}" if outcome else "staged")
-    return " ".join(parts).rstrip()
-
-
-def format_cost_block(cost: Any) -> str:
-    """Render the turn cost block as one line."""
-    if not isinstance(cost, dict):
-        return ""
-    tokens_in = int(cost.get("input_tokens") or 0)
-    tokens_out = int(cost.get("output_tokens") or 0)
-    parts = []
-    if tokens_in or tokens_out:
-        parts.append(f"{tokens_in + tokens_out} tok ({tokens_in} in, {tokens_out} out)")
-    calls = int(cost.get("model_calls") or 0)
-    if calls:
-        parts.append(f"{calls} calls")
-    wall_ms = cost.get("wall_ms")
-    if isinstance(wall_ms, int):
-        parts.append(f"{wall_ms} ms")
-    return " · ".join(parts)

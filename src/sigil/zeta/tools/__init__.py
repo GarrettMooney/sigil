@@ -9,7 +9,7 @@ from typing import Any, Literal
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
-from . import bash, edit, grep, ls, read, write
+from . import bash, edit, grep, ls, query_log, read, write
 from .base import ToolImpl, ToolSpec, diagnostic, error_result
 from .plugins import load_cli_plugins, user_tools_config_path
 
@@ -20,6 +20,7 @@ BUILTIN_TOOL_IMPLS: dict[str, ToolImpl] = {
     edit.SPEC.name: ToolImpl(edit.SPEC, edit.analyze, edit.run, edit.stage),
     grep.SPEC.name: ToolImpl(grep.SPEC, grep.analyze, grep.run),
     ls.SPEC.name: ToolImpl(ls.SPEC, ls.analyze, ls.run),
+    query_log.SPEC.name: ToolImpl(query_log.SPEC, query_log.analyze, query_log.run),
     read.SPEC.name: ToolImpl(read.SPEC, read.analyze, read.run),
     write.SPEC.name: ToolImpl(write.SPEC, write.analyze, write.run, write.stage),
 }

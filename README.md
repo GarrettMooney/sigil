@@ -405,6 +405,12 @@ sigil log show 4f9d01c2
 
 `sigil events` stays the raw event view underneath all of this.
 
+The ask workflow can read the ledger too: `,` carries a read-only
+`query_log` tool, so `, what did I delegate yesterday?` answers from
+your real delegation history and cites turn ids you can check with
+`sigil log show`. The tool searches every session by default and never
+writes anything.
+
 The trace store underneath is explorable the same way. `sigil zeta trace
 log` lists recent prompts and assistant messages, one line per object
 (`--kind`/`--all` widen it to tool calls, results, and run events);

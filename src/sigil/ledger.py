@@ -12,7 +12,10 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import os
+import re
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +26,57 @@ DEFAULT_LEDGER_NAME = "ledger.sqlite3"
 EVENT_LOG_NAME = "events.jsonl"
 LOGGER = logging.getLogger("sigil.ledger")
 _WARNED_FAILURES: set[str] = set()
+SINCE_PATTERN = re.compile(r"(\d+)([dhm])")
+SINCE_SCALES = {"d": 86400, "h": 3600, "m": 60}
+
+
+class UnknownTurnError(LookupError):
+    """A turn id token matched no record or prefix."""
+
+    def __init__(self, token: str) -> None:
+        super().__init__(token)
+        self.token = token
+
+
+class AmbiguousTurnError(LookupError):
+    """A turn id prefix matched more than one record."""
+
+    def __init__(self, token: str, candidates: list[str]) -> None:
+        super().__init__(token)
+        self.token = token
+        self.candidates = candidates
+
+
+def parse_since(value: str) -> float:
+    """Parse a YYYY-MM-DD date or an age like 2d/6h/30m into an epoch bound.
+
+    Raises ValueError for anything else.
+    """
+    relative = SINCE_PATTERN.fullmatch(value.strip())
+    if relative is not None:
+        return time.time() - int(relative.group(1)) * SINCE_SCALES[relative.group(2)]
+    return time.mktime(time.strptime(value.strip(), "%Y-%m-%d"))
+
+
+def touched_path_variants(path: str) -> tuple[str, ...]:
+    """Return the path as given plus its absolute form, deduplicated."""
+    variants = [path]
+    absolute = os.path.abspath(path)
+    if absolute not in variants:
+        variants.append(absolute)
+    return tuple(variants)
+
+
+def resolve_turn_id(index: LedgerIndex, token: str) -> str:
+    """Resolve a full turn id or unique prefix, or raise with candidates."""
+    if index.turn(token) is not None:
+        return token
+    matches = index.turn_ids_with_prefix(token)
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        raise AmbiguousTurnError(token, matches)
+    raise UnknownTurnError(token)
 
 
 def warn_ledger_failure_once(operation: str, exc: BaseException) -> None:

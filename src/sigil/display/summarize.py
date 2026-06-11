@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -28,6 +29,7 @@ def summarize(tool: str, args: object) -> str:
         "grep": ("pattern", "query", "path", "glob"),
         "find": ("pattern", "query", "path", "glob"),
         "ls": ("pattern", "query", "path", "glob"),
+        "query_log": ("turn_id", "touched", "since", "workflow"),
     }
     for field in fields_by_tool.get(tool, ()):
         value = tool_args.get(field)
@@ -215,6 +217,121 @@ def render_handoff_lines(handoff: dict[str, Any]) -> list[str]:
 def short_trace_id(object_id: str) -> str:
     """Return the short display prefix of a content-addressed id."""
     return object_id.split(":", 1)[-1][:8]
+
+
+def format_turn_line(turn: dict[str, Any], *, show_cost: bool) -> str:
+    """Format one ledger turn as a log listing line."""
+    turn_id = str(turn.get("turn_id") or "")[:8]
+    when = format_turn_time(turn.get("time"))
+    workflow = str(turn.get("workflow") or "?")
+    outcome = str(turn.get("outcome") or "?")
+    objective = truncate(first_line(str(turn.get("objective") or "")), 72)
+    line = f"{turn_id:<8}  {when}  {workflow:<7} {outcome:<9} {objective}".rstrip()
+    if show_cost:
+        line += turn_cost_suffix(turn.get("cost"))
+    return line
+
+
+def format_turn_time(value: Any) -> str:
+    """Render an epoch timestamp as a compact local time."""
+    if not isinstance(value, (int, float)):
+        return "?" * 11
+    return time.strftime("%m-%d %H:%M", time.localtime(value))
+
+
+def turn_cost_suffix(cost: Any) -> str:
+    """Render a turn's cost block as a listing suffix."""
+    if not isinstance(cost, dict):
+        return ""
+    tokens = int(cost.get("input_tokens") or 0) + int(cost.get("output_tokens") or 0)
+    calls = int(cost.get("model_calls") or 0)
+    if not tokens and not calls:
+        return ""
+    return f"  · {tokens} tok · {calls} calls"
+
+
+def render_turn_record(
+    turn: dict[str, Any],
+    effects: list[dict[str, Any]],
+) -> list[str]:
+    """Render one turn record as human-readable lines."""
+    lines = [
+        f"turn     {turn.get('turn_id') or '?'}",
+        f"time     {format_turn_time(turn.get('time'))}",
+        f"session  {turn.get('session') or '?'}",
+        f"workflow {turn.get('workflow') or '?'}",
+        f"outcome  {turn.get('outcome') or '?'}",
+    ]
+    objective = str(turn.get("objective") or "").strip()
+    if objective:
+        lines.extend(["", "objective"])
+        lines.extend(f"  {line}" for line in objective.splitlines()[:8])
+    contract = turn.get("contract")
+    if isinstance(contract, dict):
+        tools = ", ".join(str(tool) for tool in contract.get("allowed_tools") or [])
+        staged = " (staged)" if contract.get("staged") else ""
+        lines.extend(["", "contract", f"  tools: {tools or 'none'}{staged}"])
+    agent = turn.get("agent")
+    if isinstance(agent, dict):
+        endpoint = " @ ".join(
+            part for part in (agent.get("model"), agent.get("url")) if part
+        )
+        if endpoint:
+            lines.extend(["", "agent", f"  {endpoint}"])
+    cost_line = format_cost_block(turn.get("cost"))
+    if cost_line:
+        lines.extend(["", "cost", f"  {cost_line}"])
+    if effects:
+        lines.extend(["", "effects"])
+        lines.extend(f"  {format_effect_line(effect)}" for effect in effects)
+    prompt_ids = turn.get("prompt_object_ids")
+    if isinstance(prompt_ids, list) and prompt_ids:
+        shorts = " ".join(short_trace_id(str(value)) for value in prompt_ids)
+        lines.extend(["", "prompts", f"  {shorts}  (sigil zeta trace show ID)"])
+    return lines
+
+
+def format_effect_line(effect: dict[str, Any]) -> str:
+    """Render one effect record as a single listing line."""
+    kind = str(effect.get("kind") or "?")
+    parts = [f"{kind:<10}"]
+    path = effect.get("path")
+    if path:
+        parts.append(str(path))
+    command = effect.get("command")
+    if command:
+        parts.append(truncate(str(command), 60))
+    before = effect.get("before_hash")
+    after = effect.get("after_hash")
+    if before or after:
+        parts.append(
+            f"{short_trace_id(str(before or '?'))}→{short_trace_id(str(after or '?'))}"
+        )
+    exit_status = effect.get("exit_status")
+    if isinstance(exit_status, int):
+        parts.append(f"exit {exit_status}")
+    if effect.get("staged"):
+        outcome = effect.get("resolved_outcome")
+        parts.append(f"staged → {outcome}" if outcome else "staged")
+    return " ".join(parts).rstrip()
+
+
+def format_cost_block(cost: Any) -> str:
+    """Render the turn cost block as one line."""
+    if not isinstance(cost, dict):
+        return ""
+    tokens_in = int(cost.get("input_tokens") or 0)
+    tokens_out = int(cost.get("output_tokens") or 0)
+    parts = []
+    if tokens_in or tokens_out:
+        parts.append(f"{tokens_in + tokens_out} tok ({tokens_in} in, {tokens_out} out)")
+    calls = int(cost.get("model_calls") or 0)
+    if calls:
+        parts.append(f"{calls} calls")
+    wall_ms = cost.get("wall_ms")
+    if isinstance(wall_ms, int):
+        parts.append(f"{wall_ms} ms")
+    return " · ".join(parts)
 
 
 def trace_object_summary(

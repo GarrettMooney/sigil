@@ -701,3 +701,153 @@ def test_zeta_tool_edit_stage_records_staged_hashes(tmp_path: Path) -> None:
     assert metadata["before_hash"] == before
     assert metadata["after_hash"] == after
     assert target.read_text(encoding="utf-8") == "hello\nold\nbye\n"
+
+
+def seed_query_log_ledger(monkeypatch) -> None:
+    from sigil.ledger import default_ledger_index
+    from sigil.protocols import effect_record, turn_contract, turn_record
+    from sigil.state import append_event
+
+    monkeypatch.setenv("SIGIL_SESSION_ID", "query-log-here")
+    index = default_ledger_index()
+    index.index_record(
+        append_event(
+            {
+                **turn_record(
+                    "turn-do-1111",
+                    workflow="do",
+                    objective="refactor the staging path",
+                    contract=turn_contract("do", ("read", "edit"), staged=False),
+                    outcome="executed",
+                    cost={
+                        "input_tokens": 1000,
+                        "output_tokens": 200,
+                        "model_calls": 3,
+                    },
+                    prompt_object_ids=["sha256:" + "70da571d" + "0" * 56],
+                ),
+                "time": 100.0,
+            }
+        )
+    )
+    index.index_record(
+        append_event(
+            {
+                **turn_record(
+                    "turn-ask-2222",
+                    workflow="ask",
+                    objective="why did the test fail?",
+                    contract=turn_contract("ask", (), staged=False),
+                    outcome="failed",
+                ),
+                "time": 200.0,
+            }
+        )
+        | {"session": "query-log-there"}
+    )
+    index.index_record(
+        append_event(
+            effect_record(
+                "effect-edit",
+                turn_id="turn-do-1111",
+                kind="file_edit",
+                staged=False,
+                path="/tmp/notes.txt",
+            )
+        )
+    )
+
+
+def test_zeta_tool_query_log_lists_all_sessions_with_cited_ids(monkeypatch) -> None:
+    seed_query_log_ledger(monkeypatch)
+    from sigil.zeta.tools import query_log as query_log_tool
+
+    result = query_log_tool.run({})
+
+    assert result["ok"] is True
+    text = result["content"][0]["text"]
+    lines = text.splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("turn-ask")
+    assert lines[1].startswith("turn-do-")
+    assert "1200 tok" in lines[1]
+    assert result["metadata"]["turns"] == 2
+    assert result["metadata"]["scope"] == "all-sessions"
+
+
+def test_zeta_tool_query_log_narrows_to_the_current_session(monkeypatch) -> None:
+    seed_query_log_ledger(monkeypatch)
+    from sigil.zeta.tools import query_log as query_log_tool
+
+    result = query_log_tool.run({"current_session": True})
+
+    text = result["content"][0]["text"]
+    assert "turn-do-" in text
+    assert "turn-ask" not in text
+    assert result["metadata"]["scope"] == "query-log-here"
+
+
+def test_zeta_tool_query_log_filters_and_caps_limit(monkeypatch) -> None:
+    seed_query_log_ledger(monkeypatch)
+    from sigil.zeta.tools import query_log as query_log_tool
+
+    failed = query_log_tool.run({"failed": True})
+    touched = query_log_tool.run({"touched": "/tmp/notes.txt"})
+    capped = query_log_tool.run({"limit": 500})
+
+    assert "turn-ask" in failed["content"][0]["text"]
+    assert "turn-do-" not in failed["content"][0]["text"]
+    assert "turn-do-" in touched["content"][0]["text"]
+    assert capped["metadata"]["limit"] == 50
+
+
+def test_zeta_tool_query_log_expands_one_turn_by_prefix(monkeypatch) -> None:
+    seed_query_log_ledger(monkeypatch)
+    from sigil.zeta.tools import query_log as query_log_tool
+
+    result = query_log_tool.run({"turn_id": "turn-do"})
+
+    assert result["ok"] is True
+    text = result["content"][0]["text"]
+    assert "turn     turn-do-1111" in text
+    assert "tools: read, edit" in text
+    assert "file_edit" in text
+    assert "70da571d" in text
+    assert result["metadata"]["turn_id"] == "turn-do-1111"
+
+
+def test_zeta_tool_query_log_reports_bad_ids_and_bad_since(monkeypatch) -> None:
+    seed_query_log_ledger(monkeypatch)
+    from sigil.zeta.tools import query_log as query_log_tool
+
+    ambiguous = query_log_tool.run({"turn_id": "turn-"})
+    unknown = query_log_tool.run({"turn_id": "nope"})
+    bad_since = query_log_tool.run({"since": "yesterday-ish"})
+
+    assert ambiguous["ok"] is False
+    assert ambiguous["error"]["code"] == "ambiguous-turn-id"
+    assert "turn-do-1111" in ambiguous["error"]["message"]
+    assert unknown["ok"] is False
+    assert unknown["error"]["code"] == "unknown-turn-id"
+    assert bad_since["ok"] is False
+    assert bad_since["error"]["code"] == "invalid-since"
+
+
+def test_zeta_tool_query_log_reports_an_empty_ledger() -> None:
+    from sigil.zeta.tools import query_log as query_log_tool
+
+    result = query_log_tool.run({})
+
+    assert result["ok"] is True
+    assert "no turns recorded" in result["content"][0]["text"]
+    assert result["metadata"]["turns"] == 0
+
+
+def test_zeta_tool_query_log_is_a_readonly_ask_builtin() -> None:
+    from sigil.workflows.ask import ASK_TOOLS, ZETA_ASK_TOOLS
+    from sigil.zeta.tools import query_log as query_log_tool
+
+    assert query_log_tool.SPEC.mutates() is False
+    assert "query_log" in zeta_tools.BUILTIN_TOOL_IMPLS
+    assert "query_log" in ASK_TOOLS
+    assert "query_log" in ZETA_ASK_TOOLS

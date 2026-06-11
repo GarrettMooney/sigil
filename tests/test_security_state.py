@@ -41,9 +41,9 @@ class TtyStringIO(StringIO):
         return True
 
 
-def test_question_system_prompt_points_zeta_at_events_log_for_older_history() -> None:
-    assert "events.jsonl" in ASK_SYSTEM_PROMPT
-    assert "available tools are read, grep, and ls only" in ASK_SYSTEM_PROMPT
+def test_question_system_prompt_points_zeta_at_query_log_for_older_history() -> None:
+    assert "use query_log" in ASK_SYSTEM_PROMPT
+    assert "available tools are read, grep, ls, and query_log only" in ASK_SYSTEM_PROMPT
 
 
 def test_top_level_help_lists_commands() -> None:
@@ -438,8 +438,11 @@ def test_question_workflows_record_glyph_and_local_tools() -> None:
             assert comma_event["glyph"] == ","
             assert len(calls) == 2
             assert calls[0][0][0] == ASK_SYSTEM_PROMPT
-            assert "available tools are read, grep, and ls only" in calls[0][0][0]
-            assert calls[0][1]["allowed_tools"] == ("read", "grep", "ls")
+            assert (
+                "available tools are read, grep, ls, and query_log only"
+                in calls[0][0][0]
+            )
+            assert calls[0][1]["allowed_tools"] == ("read", "grep", "ls", "query_log")
             assert calls[1][0][1] == "what is sigil?"
         finally:
             if old_state_dir is None:
