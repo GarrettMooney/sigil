@@ -23,7 +23,7 @@ def do(
     """Run an auto-approved step with direct command and edit execution."""
     return step(
         objective,
-        glyph=",,,",
+        workflow="do",
         system=system,
         stdin_text=stdin_text,
         max_steps=max_steps,
@@ -31,5 +31,4 @@ def do(
         handoff_path=handoff_path,
         handoff_output=handoff_output,
         trace_output=trace_output,
-        edit_mode="direct_replace",
     )

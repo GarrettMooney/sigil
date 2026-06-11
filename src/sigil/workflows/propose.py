@@ -23,7 +23,7 @@ def propose(
     """Run a reviewed step that stages mutating work as shell handoffs."""
     return step(
         objective,
-        glyph=",,",
+        workflow="propose",
         system=system,
         stdin_text=stdin_text,
         max_steps=max_steps,
@@ -31,5 +31,4 @@ def propose(
         handoff_path=handoff_path,
         handoff_output=handoff_output,
         trace_output=trace_output,
-        edit_mode="review_patch",
     )

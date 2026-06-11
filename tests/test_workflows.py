@@ -179,7 +179,7 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
     monkeypatch.setattr(zeta_runner, "load_project_context", lambda: "ctx")
 
-    code = zeta_runner.step("answer me", glyph=",,")
+    code = zeta_runner.step("answer me", workflow="propose")
 
     assert code == 0
     output = capsys.readouterr()
@@ -217,7 +217,7 @@ def test_zeta_agent_step_renders_context_usage_on_trace_stream(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.step("answer me", glyph=",,")
+    code = zeta_runner.step("answer me", workflow="propose")
 
     assert code == 0
     output = capsys.readouterr()
@@ -252,7 +252,7 @@ def test_zeta_agent_step_renders_context_usage_after_buffered_answer(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.step("answer me", glyph=",,", trace_output=sys.stdout)
+    code = zeta_runner.step("answer me", workflow="propose", trace_output=sys.stdout)
 
     assert code == 0
     output = capsys.readouterr().out
@@ -326,7 +326,7 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
 
     code = zeta_runner.step(
         "inspect",
-        glyph=",,",
+        workflow="propose",
         trace_output=sys.stdout,
     )
 
@@ -357,7 +357,7 @@ def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.step("answer me", glyph=",,")
+    code = zeta_runner.step("answer me", workflow="propose")
 
     assert code == 0
     assert cast(list[dict[str, Any]], captured["transcript"]) == []
@@ -384,11 +384,10 @@ def test_zeta_agent_step_double_comma_uses_handoff_mode(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.step("review", glyph=",,")
+    code = zeta_runner.step("review", workflow="propose")
 
     assert code == 0
     config = cast(zeta_agent.AgentConfig, captured["config"])
-    assert config.edit_mode == "review_patch"
     assert config.execution_mode == "handoff"
     assert config.max_turns is None
 
@@ -412,7 +411,7 @@ def test_zeta_agent_step_supplies_the_workflow_persona(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.step("review", glyph=",,")
+    code = zeta_runner.step("review", workflow="propose")
 
     assert code == 0
     config = cast(zeta_agent.AgentConfig, captured["config"])
@@ -483,7 +482,7 @@ def test_zeta_agent_step_double_comma_stages_bash_handoff(
 
     code = zeta_runner.step(
         "Review the changes",
-        glyph=",,",
+        workflow="propose",
         allowed_tools=("bash",),
         handoff_path=handoff_file,
         handoff_output="summary",
@@ -537,8 +536,8 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    for glyph in (",,", ",,,"):
-        code = zeta_runner.step("inspect", glyph=glyph)
+    for workflow in ("propose", "do"):
+        code = zeta_runner.step("inspect", workflow=workflow)
 
         assert code == 0
         assert capsys.readouterr().out.count("It is a README.") == 1
@@ -574,7 +573,7 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.step("inspect", glyph=",,")
+    code = zeta_runner.step("inspect", workflow="propose")
 
     assert code == 0
     output = capsys.readouterr()
@@ -583,9 +582,9 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
     assert "❯ read   README.md" in output.err
 
 
-@pytest.mark.parametrize("glyph", [",,", ",,,"])
+@pytest.mark.parametrize("workflow", ["propose", "do"])
 def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
-    glyph: str,
+    workflow: str,
     monkeypatch,
     capsys,
 ) -> None:
@@ -629,7 +628,7 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
 
     code = zeta_runner.step(
         "inspect",
-        glyph=glyph,
+        workflow=workflow,
         trace_output=sys.stdout,
     )
 
@@ -694,7 +693,7 @@ def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
 
     code = zeta_runner.step(
         "inspect",
-        glyph=",,",
+        workflow="propose",
         trace_output=sys.stdout,
     )
 
@@ -746,7 +745,7 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
 
     code = zeta_runner.step(
         "inspect",
-        glyph=",,",
+        workflow="propose",
         trace_output=output,
     )
 
@@ -790,7 +789,7 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
         ),
     )
 
-    code = zeta_runner.step("edit", glyph=",,,")
+    code = zeta_runner.step("edit", workflow="do")
 
     assert code == 0
     output = capsys.readouterr()
@@ -831,11 +830,10 @@ def test_sigil_handoff_shell_turn_records_recent_turn(
     assert turns[0]["turn_cwd"] == "/repo"
 
 
-def test_zeta_step_glyph_selects_edit_mode() -> None:
-    assert zeta_runner.edit_mode_for_glyph(",,") == "review_patch"
-    assert zeta_runner.edit_mode_for_glyph(",,,") == "direct_replace"
-    assert zeta_runner.execution_mode_for_glyph(",,") == "handoff"
-    assert zeta_runner.execution_mode_for_glyph(",,,") == "direct"
+def test_zeta_step_only_the_do_workflow_executes_directly() -> None:
+    assert zeta_runner.stages_mutations("handoff", ("bash", "edit")) is True
+    assert zeta_runner.stages_mutations("handoff", ("read", "grep")) is False
+    assert zeta_runner.stages_mutations("direct", ("bash", "edit")) is False
 
 
 def test_zeta_skill_directive_expands_through_agent_step_workflow(
@@ -871,7 +869,7 @@ def test_zeta_skill_directive_expands_through_agent_step_workflow(
         fake_chat_completion_messages,
     )
 
-    code = zeta_runner.step("@step-skill: do step work", glyph=",,")
+    code = zeta_runner.step("@step-skill: do step work", workflow="propose")
 
     assert code == 0
     assert '<skill name="step-skill"' in captured["user"]
@@ -917,7 +915,7 @@ url = "http://127.0.0.1:8082/v1/chat/completions"
     monkeypatch.setattr(agent_io, "ensure_server", fake_ensure_server)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
 
-    code = zeta_runner.step("do work", glyph=",,")
+    code = zeta_runner.step("do work", workflow="propose")
 
     assert code == 0
     assert capsys.readouterr().out.count("done") == 1
@@ -1780,11 +1778,11 @@ def test_zeta_step_model_failure_records_turn_abort(
     monkeypatch.setattr(zeta_runner, "run_agent_turn", failing_run_agent_turn)
 
     with pytest.raises(RuntimeError):
-        zeta_runner.step("do the thing", glyph=",,")
+        zeta_runner.step("do the thing", workflow="propose")
 
     timeline = zeta_timeline.current_timeline()
     assert timeline[-1]["type"] == "turn_aborted"
-    assert timeline[-1]["glyph"] == ",,"
+    assert timeline[-1]["workflow"] == "propose"
     assert "model request failed" in timeline[-1]["error"]
     assert timeline[-2]["type"] == "user_message"
 
@@ -1976,7 +1974,7 @@ def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
         ),
     )
 
-    code = zeta_runner.step("repair the tests", glyph=",,")
+    code = zeta_runner.step("repair the tests", workflow="propose")
 
     assert code == 0
     (turn,) = ledger_turns()
@@ -2040,7 +2038,7 @@ def test_do_step_records_executed_turn_with_file_effect(monkeypatch) -> None:
         ),
     )
 
-    code = zeta_runner.step("write the file", glyph=",,,")
+    code = zeta_runner.step("write the file", workflow="do")
 
     assert code == 0
     (turn,) = ledger_turns()
@@ -2088,7 +2086,7 @@ def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
         ),
     )
 
-    code = zeta_runner.step("write the file", glyph=",,,")
+    code = zeta_runner.step("write the file", workflow="do")
 
     assert code == 0
     (turn,) = ledger_turns()
@@ -2125,7 +2123,7 @@ def test_turn_bridge_failure_does_not_break_the_step(monkeypatch) -> None:
         ),
     )
 
-    code = zeta_runner.step("answer", glyph=",,")
+    code = zeta_runner.step("answer", workflow="propose")
 
     assert code == 0
     (turn,) = ledger_turns()
@@ -2143,7 +2141,7 @@ def test_zeta_step_tags_timeline_events_with_turn_id(monkeypatch) -> None:
         ),
     )
 
-    code = zeta_runner.step("answer", glyph=",,")
+    code = zeta_runner.step("answer", workflow="propose")
 
     assert code == 0
     (turn,) = ledger_turns()
@@ -2163,7 +2161,7 @@ def test_zeta_step_records_failed_turn_without_answer(monkeypatch) -> None:
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(events=[]),
     )
 
-    code = zeta_runner.step("do nothing", glyph=",,")
+    code = zeta_runner.step("do nothing", workflow="propose")
 
     assert code == 1
     (turn,) = ledger_turns()
@@ -2178,7 +2176,7 @@ def test_zeta_step_records_aborted_turn_on_runtime_error(monkeypatch) -> None:
     monkeypatch.setattr(zeta_runner, "run_agent_turn", raise_runtime_error)
 
     with pytest.raises(RuntimeError):
-        zeta_runner.step("crash", glyph=",,")
+        zeta_runner.step("crash", workflow="propose")
 
     (turn,) = ledger_turns()
     assert turn["outcome"] == TURN_OUTCOME_ABORTED

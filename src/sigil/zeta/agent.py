@@ -25,7 +25,6 @@ from .tools import (
 )
 from .trace import PromptTrace, prompt_trace_payload
 
-EditMode = Literal["review_patch", "direct_replace"]
 ExecutionMode = Literal["handoff", "direct"]
 AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]
@@ -41,7 +40,6 @@ class AgentConfig:
     allowed_tools: Iterable[str] | None = None
     max_turns: int | None = None
     stop_on_handoff: bool = True
-    edit_mode: EditMode = "review_patch"
     execution_mode: ExecutionMode = "handoff"
     model_profile: str | None = None
     model_name: str | None = None
@@ -128,7 +126,6 @@ def run_agent_turn(
                 tool_call,
                 allowed_tools=allowed_tools,
                 index=index,
-                edit_mode=config.edit_mode,
                 execution_mode=config.execution_mode,
                 model_telemetry=(model_telemetry if index == 0 else None),
                 prompt_trace=prompt_trace,
@@ -331,7 +328,6 @@ def handle_tool_call(
     *,
     allowed_tools: tuple[str, ...],
     index: int,
-    edit_mode: EditMode = "review_patch",
     execution_mode: ExecutionMode = "handoff",
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
@@ -411,7 +407,6 @@ def handle_tool_call(
             result = run_tool(
                 name,
                 params,
-                edit_mode=edit_mode,
                 execution_mode=execution_mode,
             )
         except Exception as exc:

@@ -165,7 +165,6 @@ def run_tool(
     name: str,
     params: dict[str, Any],
     *,
-    edit_mode: str = "review_patch",
     execution_mode: ExecutionMode = "handoff",
 ) -> dict[str, Any]:
     """Run one tool call under the staging contract its spec declares.
@@ -178,10 +177,7 @@ def run_tool(
     tool = TOOL_IMPLS.get(name)
     if tool is None:
         return error_result("unknown-tool", f"unknown tool: {name}")
-    direct = execution_mode == "direct" or (
-        name == edit.SPEC.name and edit_mode == "direct_replace"
-    )
-    if direct or not tool.spec.mutates():
+    if execution_mode == "direct" or not tool.spec.mutates():
         return tool.run(params)
     if tool.stage is None:
         declared = ", ".join(tool.spec.effects) or "undeclared"

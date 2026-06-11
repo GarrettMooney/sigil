@@ -466,7 +466,7 @@ def test_zeta_tool_edit_direct_replace_writes_file(tmp_path: Path) -> None:
     data = zeta_tools.run_tool(
         "edit",
         {"location": str(target), "old": "old\n", "new": "new\n"},
-        edit_mode="direct_replace",
+        execution_mode="direct",
     )
 
     assert data["ok"] is True
@@ -486,7 +486,7 @@ def test_zeta_tool_edit_rejects_non_utf8_file(tmp_path: Path) -> None:
     data = zeta_tools.run_tool(
         "edit",
         {"location": str(target), "old": "old", "new": "new"},
-        edit_mode="direct_replace",
+        execution_mode="direct",
     )
 
     assert data["ok"] is False
@@ -502,7 +502,7 @@ def test_zeta_tool_edit_direct_reports_write_failure(tmp_path: Path) -> None:
     data = zeta_tools.run_tool(
         "edit",
         {"location": str(target), "old": "old\n", "new": "new\n"},
-        edit_mode="direct_replace",
+        execution_mode="direct",
     )
 
     target.chmod(0o644)
@@ -675,7 +675,7 @@ def test_zeta_tool_edit_direct_records_content_hashes(tmp_path: Path) -> None:
     data = zeta_tools.run_tool(
         "edit",
         {"location": str(target), "old": "old\n", "new": "new\n"},
-        edit_mode="direct_replace",
+        execution_mode="direct",
     )
 
     metadata = data["metadata"]

@@ -51,13 +51,12 @@ def prepend_recent_turns(user_input: str) -> str:
 def ask(
     question: str,
     *,
-    glyph: str = ",",
     tools: tuple[str, ...] = ASK_TOOLS,
 ) -> int:
     """Run Zeta for a shell ask continuing the session timeline."""
     return step(
         question,
-        glyph=glyph,
+        workflow="ask",
         system=ASK_SYSTEM_PROMPT,
         prompt=prepend_recent_turns(expand_skill_directive(question)),
         allowed_tools=tools,

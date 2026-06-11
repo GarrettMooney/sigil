@@ -1074,66 +1074,6 @@ def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> 
     assert tool_result["result"]["error"]["code"] == "disallowed-tool"
 
 
-def test_zeta_agent_direct_edit_stops_after_applying(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    target = tmp_path / "a.txt"
-    target.write_text("old\n", encoding="utf-8")
-    requests = 0
-
-    def fake_chat_completion_messages(
-        *args: object,
-        **kwargs: object,
-    ) -> dict[str, Any]:
-        nonlocal requests
-        requests += 1
-        return {
-            "tool_calls": [
-                {
-                    "id": "call-1",
-                    "type": "function",
-                    "function": {
-                        "name": "edit",
-                        "arguments": json.dumps(
-                            {
-                                "location": str(target),
-                                "old": "old\n",
-                                "new": "new\n",
-                            }
-                        ),
-                    },
-                }
-            ]
-        }
-
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
-    monkeypatch.setattr(
-        zeta_agent,
-        "chat_completion_messages",
-        fake_chat_completion_messages,
-    )
-
-    result = zeta_agent.run_agent_turn(
-        "edit",
-        [],
-        zeta_agent.AgentConfig(
-            allowed_tools=("edit",),
-            edit_mode="direct_replace",
-            max_turns=3,
-        ),
-    )
-
-    assert requests == 1
-    assert result.handoff is None
-    assert target.read_text(encoding="utf-8") == "new\n"
-    tool_result = next(
-        event for event in result.events if event.get("type") == "tool_result"
-    )
-    assert tool_result["result"]["ok"] is True
-    assert tool_result["result"]["metadata"]["mode"] == "direct_replace"
-
-
 def test_zeta_agent_direct_mode_continues_after_edit(
     tmp_path: Path,
     monkeypatch,
@@ -1186,7 +1126,6 @@ def test_zeta_agent_direct_mode_continues_after_edit(
         [],
         zeta_agent.AgentConfig(
             allowed_tools=("edit",),
-            edit_mode="direct_replace",
             execution_mode="direct",
             max_turns=3,
         ),

@@ -421,7 +421,7 @@ def test_question_workflows_record_glyph_and_local_tools() -> None:
             with patch("sigil.workflows.ask.step", side_effect=fake_answer):
                 assert ask("what is sigil?", tools=("read", "grep", "ls")) == 0
             assert len(calls) == 2
-            assert calls[0][1]["glyph"] == ","
+            assert calls[0][1]["workflow"] == "ask"
             assert calls[0][1]["system"] == ASK_SYSTEM_PROMPT
             assert (
                 "available tools are read, grep, ls, and query_log only"

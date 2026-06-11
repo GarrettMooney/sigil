@@ -43,7 +43,6 @@ from ..zeta.tools import TOOL_SPECS, allowed_tool_names
 from ..zeta.trace import latest_prompt_trace_fields
 
 HandoffOutput = Literal["detail", "summary", "none"]
-EditMode = Literal["review_patch", "direct_replace"]
 ExecutionMode = Literal["handoff", "direct"]
 
 STEP_SYSTEM_PROMPT = f"""You are Zeta, a shell-native coding agent.
@@ -76,7 +75,7 @@ as user-chosen context and explain the cancellation plainly if it matters.
 def step(
     objective: str,
     *,
-    glyph: str,
+    workflow: str,
     system: str | None = None,
     prompt: str | None = None,
     stdin_text: str = "",
@@ -85,36 +84,36 @@ def step(
     handoff_path: str | Path | None = None,
     handoff_output: HandoffOutput = "detail",
     trace_output: TextIO | None = None,
-    edit_mode: EditMode | None = None,
 ) -> int:
     """Run a Zeta agent step for CLI workflows.
 
     A caller-built `prompt` is sent verbatim; otherwise the objective is
-    wrapped in the step instruction scaffolding.
+    wrapped in the step instruction scaffolding. The do workflow executes
+    directly; every other workflow stages mutations for review.
     """
     system = system or STEP_SYSTEM_PROMPT
+    execution_mode: ExecutionMode = "direct" if workflow == "do" else "handoff"
     selected_model = active_model_selection()
     if not model_server_ready(selected_model):
         return 1
     output = trace_output or sys.stderr
     prompt = prompt or agent_prompt(
         expand_skill_directive(objective),
-        glyph=glyph,
         stdin_text=stdin_text,
     )
     enabled_tools = enabled_tool_tuple(allowed_tools)
     ledger = TurnLedger(
-        workflow=workflow_for_glyph(glyph),
+        workflow=workflow,
         objective=objective,
         allowed_tools=enabled_tools,
-        staged=stages_mutations(glyph, enabled_tools),
+        staged=stages_mutations(execution_mode, enabled_tools),
         agent=model_selection_event(selected_model) if selected_model else None,
     )
     prior_timeline = current_timeline()
     user_event: dict[str, Any] = {
         "type": "user_message",
         "content": prompt,
-        "glyph": glyph,
+        "workflow": workflow,
         "runtime": "zeta",
         "system": system_prompt(system, allowed_tools=enabled_tools),
         "available_tools": list(enabled_tools),
@@ -127,7 +126,7 @@ def step(
     renderer = build_turn_renderer(output)
     recorder = AgentStepEventRecorder(
         renderer,
-        glyph=glyph,
+        workflow=workflow,
         handoff_path=handoff_path,
         handoff_output=handoff_output,
         render_output=output,
@@ -143,8 +142,7 @@ def step(
                 allowed_tools=enabled_tools,
                 max_turns=max_steps,
                 stop_on_handoff=True,
-                edit_mode=edit_mode or edit_mode_for_glyph(glyph),
-                execution_mode=execution_mode_for_glyph(glyph),
+                execution_mode=execution_mode,
                 model_profile=(
                     selected_model.profile if selected_model is not None else None
                 ),
@@ -165,7 +163,7 @@ def step(
             stream_sink=renderer.stream_renderer,
         )
     except RuntimeError as error:
-        record_turn_abort(error, glyph=glyph)
+        record_turn_abort(error, workflow=workflow)
         ledger.finish(TURN_OUTCOME_ABORTED)
         raise
     recorder.replay(result)
@@ -174,7 +172,7 @@ def step(
     if status is not None:
         record_agent_model_telemetry(
             result.model_telemetry,
-            glyph=glyph,
+            workflow=workflow,
             prompt_traces=result.prompt_traces,
         )
         ledger.finish(TURN_OUTCOME_STAGED, prompt_traces=result.prompt_traces)
@@ -184,7 +182,7 @@ def step(
     if result.final_text:
         record_agent_model_telemetry(
             result.model_telemetry,
-            glyph=glyph,
+            workflow=workflow,
             prompt_traces=result.prompt_traces,
         )
         ledger.finish(
@@ -219,14 +217,14 @@ class AgentStepEventRecorder(TurnEventRecorder):
         self,
         renderer: TurnRenderer,
         *,
-        glyph: str,
+        workflow: str,
         handoff_path: str | Path | None,
         handoff_output: HandoffOutput,
         render_output: TextIO,
         ledger: TurnLedger | None = None,
     ) -> None:
         super().__init__(renderer, render_output=render_output, ledger=ledger)
-        self.tag_fields = {"glyph": glyph}
+        self.tag_fields = {"workflow": workflow}
         self.handoff_path = handoff_path
         self.handoff_output = handoff_output
 
@@ -283,44 +281,25 @@ def print_handoff(
 def record_agent_model_telemetry(
     model_telemetry: dict[str, Any] | None,
     *,
-    glyph: str,
+    workflow: str,
     prompt_traces: Sequence[Any] = (),
 ) -> None:
     fields = model_telemetry_fields(model_telemetry)
     if not fields:
         return
     fields.update(latest_prompt_trace_fields(prompt_traces))
-    record_zeta_event("model_usage", **fields, glyph=glyph)
+    record_zeta_event("model_usage", **fields, workflow=workflow)
 
 
-def edit_mode_for_glyph(glyph: str) -> EditMode:
-    if glyph == ",,,":
-        return "direct_replace"
-    return "review_patch"
-
-
-def workflow_for_glyph(glyph: str) -> str:
-    if glyph == ",,,":
-        return "do"
-    if glyph == ",,":
-        return "propose"
-    if glyph == ",":
-        return "ask"
-    return glyph
-
-
-def execution_mode_for_glyph(glyph: str) -> ExecutionMode:
-    if glyph == ",,,":
-        return "direct"
-    return "handoff"
-
-
-def stages_mutations(glyph: str, enabled_tools: tuple[str, ...]) -> bool:
+def stages_mutations(
+    execution_mode: ExecutionMode,
+    enabled_tools: tuple[str, ...],
+) -> bool:
     """Whether this turn's contract stages mutations for review.
 
     Handoff mode with a purely read-only allow-list (ask) stages nothing.
     """
-    if execution_mode_for_glyph(glyph) != "handoff":
+    if execution_mode != "handoff":
         return False
     return any(
         spec.mutates()
@@ -329,18 +308,13 @@ def stages_mutations(glyph: str, enabled_tools: tuple[str, ...]) -> bool:
     )
 
 
-def agent_prompt(objective: str, *, glyph: str, stdin_text: str) -> str:
-    instruction = (
-        "Run the automatic tool loop until no more tool calls are needed."
-        if glyph in {",,", ",,,"}
-        else "Run one edit step."
-    )
-    sections = [instruction, f"Objective: {objective}"]
+def agent_prompt(objective: str, *, stdin_text: str) -> str:
+    sections = [
+        "Run the automatic tool loop until no more tool calls are needed.",
+        f"Objective: {objective}",
+    ]
     if stdin_text:
         sections.append(f"Confirmed piped input:\n{stdin_text}")
-    if glyph in {",,", ",,,"}:
-        sections.append("When the objective is handled, return a final answer.")
-    else:
-        sections.append("After the step, stop.")
+    sections.append("When the objective is handled, return a final answer.")
     sections.append("Do not commit.")
     return "\n\n".join(sections)
