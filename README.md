@@ -112,12 +112,22 @@ changing global environment variables. Define profiles in `~/.zeta/models.toml`:
 name = "fast"
 model = "qwen2.5-coder"
 url = "http://127.0.0.1:8080/v1/chat/completions"
+thinking = "none"
 
 [[models]]
 name = "deep"
 model = "qwen3-coder"
 url = "http://127.0.0.1:8081/v1/chat/completions"
+thinking = "high"
 ```
+
+`thinking` controls model reasoning per profile, using the reasoning-effort
+values of OpenAI's Responses API: `"none"` disables thinking, and
+`"minimal"`, `"low"`, `"medium"`, or `"high"` request that effort
+(sent as `reasoning_effort`). Omit it to leave the model's own default in
+place — thinking models think. Reasoning is recorded in the trace and shown
+by `sigil session transcript`; it is never resent to the model in later
+turns.
 
 Then select a profile for the active shell session:
 

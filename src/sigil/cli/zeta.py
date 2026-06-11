@@ -447,6 +447,7 @@ def trace_replay(object_id: str, model_profile: str | None, diff_output: bool) -
         max_tokens=reconstructed.max_tokens,
         selected_model=selection.model,
         selected_url=selection.url,
+        thinking=reconstructed.thinking,
     )
     replay_id = record_replay(store, prompt_id, message, selection)
     for line in render_replay(

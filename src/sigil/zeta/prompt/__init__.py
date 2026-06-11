@@ -16,6 +16,7 @@ from .builder import (
     PreparedPrompt,
     PromptBuilder,
     ReconstructedPrompt,
+    payload_sha256,
     reconstructed_prompt_request,
 )
 from .compaction import (
@@ -133,6 +134,7 @@ __all__ = [
     "prompt_component_object",
     "prompt_transform_from_env",
     "prompt_components",
+    "payload_sha256",
     "reconstructed_prompt_request",
     "render_system_prompt",
     "render_stub",

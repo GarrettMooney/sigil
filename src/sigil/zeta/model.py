@@ -613,6 +613,7 @@ def chat_completion_messages(
     selected_url: str | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
     telemetry_sink: ModelTelemetrySink | None = None,
+    thinking: str | None = None,
 ) -> dict[str, Any]:
     """Request one native OpenAI-compatible chat completion message."""
     context_tokens = model_context_tokens(selected_url, selected_model)
@@ -622,6 +623,7 @@ def chat_completion_messages(
         tool_choice=tool_choice,
         max_tokens=max_tokens,
         selected_model=selected_model,
+        thinking=thinking,
     )
     payload = request_chat_completion(
         body, selected_url=selected_url, stream_sink=stream_sink
@@ -652,16 +654,25 @@ def chat_completion_request_body(
     max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
     selected_model: str | None = None,
     response_format: dict[str, Any] | None = None,
+    thinking: str | None = None,
 ) -> dict[str, Any]:
-    """Build the OpenAI-compatible chat completions request body."""
+    """Build the OpenAI-compatible chat completions request body.
+
+    `thinking` uses the reasoning-effort vocabulary: `None` leaves the
+    model's default in place, `"none"` disables thinking, and an effort
+    level is sent as `reasoning_effort`.
+    """
     body: dict[str, Any] = {
         "model": model_name(selected_model),
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": max_tokens,
         "stream_options": {"include_usage": True},
-        "chat_template_kwargs": {"enable_thinking": False},
     }
+    if thinking == "none":
+        body["chat_template_kwargs"] = {"enable_thinking": False}
+    elif thinking is not None:
+        body["reasoning_effort"] = thinking
     if tools:
         body["tools"] = tools
         body["tool_choice"] = tool_choice

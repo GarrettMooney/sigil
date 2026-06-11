@@ -47,6 +47,31 @@ def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
     assert result.events[0]["content"] == "done"
 
 
+def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        captured["kwargs"] = kwargs
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1, thinking="none"),
+    )
+
+    kwargs = cast(dict[str, Any], captured["kwargs"])
+    assert kwargs["thinking"] == "none"
+
+
 def test_zeta_agent_event_omits_empty_reasoning() -> None:
     event = zeta_agent.assistant_message_event(
         {"content": "done", "reasoning_content": ""}

@@ -76,6 +76,7 @@ class PromptBuilder:
         tool_choice: str | dict[str, Any] = "auto",
         max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
         selected_model: str | None = None,
+        thinking: str | None = None,
     ) -> PreparedPrompt:
         components = prompt_components(
             objective,
@@ -94,6 +95,7 @@ class PromptBuilder:
             tool_choice=tool_choice,
             max_tokens=max_tokens,
             selected_model=selected_model,
+            thinking=thinking,
         )
 
     def record_assistant_message(
@@ -225,6 +227,7 @@ class PromptBuilder:
         tool_choice: str | dict[str, Any],
         max_tokens: int,
         selected_model: str | None,
+        thinking: str | None,
     ) -> PreparedPrompt:
         try:
             store = self.store()
@@ -240,6 +243,7 @@ class PromptBuilder:
                     tool_choice=tool_choice,
                     max_tokens=max_tokens,
                     selected_model=selected_model,
+                    thinking=thinking,
                 )
         except Exception as exc:
             warn_trace_failure_once("build_prompt", exc)
@@ -254,6 +258,7 @@ class PromptBuilder:
                     tool_choice=tool_choice,
                     max_tokens=max_tokens,
                     selected_model=selected_model,
+                    thinking=thinking,
                 ),
             )
 
@@ -265,6 +270,7 @@ class PromptBuilder:
         tool_choice: str | dict[str, Any],
         max_tokens: int,
         selected_model: str | None,
+        thinking: str | None,
     ) -> PreparedPrompt:
         messages = component_messages(components)
         payload = chat_completion_request_body(
@@ -273,6 +279,7 @@ class PromptBuilder:
             tool_choice=tool_choice,
             max_tokens=max_tokens,
             selected_model=selected_model,
+            thinking=thinking,
         )
         component_ids = stored_component_ids(components)
         prompt_id = self._store_prompt_object(
@@ -280,6 +287,7 @@ class PromptBuilder:
             component_ids,
             max_tokens=max_tokens,
             selected_model=selected_model,
+            thinking=thinking,
         )
         return PreparedPrompt(
             messages=messages,
@@ -339,6 +347,7 @@ class PromptBuilder:
         *,
         max_tokens: int,
         selected_model: str | None,
+        thinking: str | None,
     ) -> ObjectId | None:
         store = self.store()
         if store is None:
@@ -361,6 +370,7 @@ class PromptBuilder:
                 params={
                     "max_tokens": max_tokens,
                     "selected_model": selected_model,
+                    "thinking": thinking,
                 },
             )
         )
@@ -390,6 +400,7 @@ class ReconstructedPrompt:
     tools: list[dict[str, Any]]
     max_tokens: int
     selected_model: str | None
+    thinking: str | None
     payload_verified: bool
 
 
@@ -420,13 +431,14 @@ def reconstructed_prompt_request(
             raw_tools = component.data.get("tools")
             if isinstance(raw_tools, list):
                 tools = raw_tools
-    max_tokens, selected_model = prompt_builder_params(store, prompt_id)
+    max_tokens, selected_model, thinking = prompt_builder_params(store, prompt_id)
     payload = chat_completion_request_body(
         messages,
         tools=tools,
         tool_choice="auto",
         max_tokens=max_tokens,
         selected_model=selected_model,
+        thinking=thinking,
     )
     expected = str(prompt.data.get("payload_sha256") or "")
     return ReconstructedPrompt(
@@ -434,6 +446,7 @@ def reconstructed_prompt_request(
         tools=tools,
         max_tokens=max_tokens,
         selected_model=selected_model,
+        thinking=thinking,
         payload_verified=bool(expected) and payload_sha256(payload) == expected,
     )
 
@@ -441,20 +454,28 @@ def reconstructed_prompt_request(
 def prompt_builder_params(
     store: Store,
     prompt_id: ObjectId,
-) -> tuple[int, str | None]:
-    """Return the max_tokens and model the builder recorded for a prompt."""
+) -> tuple[int, str | None, str | None]:
+    """Return the max_tokens, model, and thinking the builder recorded.
+
+    A derivation without a `thinking` param predates the setting; those
+    prompts were built with thinking disabled, so absence means `"none"`.
+    """
     for derivation in store.derivations_for_output(prompt_id):
         if derivation.producer != "SigilPromptBuilder:v1":
             continue
         max_tokens = derivation.params.get("max_tokens")
         selected_model = derivation.params.get("selected_model")
+        thinking = (
+            derivation.params["thinking"] if "thinking" in derivation.params else "none"
+        )
         return (
             max_tokens
             if isinstance(max_tokens, int) and not isinstance(max_tokens, bool)
             else DEFAULT_MAX_COMPLETION_TOKENS,
             selected_model if isinstance(selected_model, str) else None,
+            thinking if isinstance(thinking, str) else None,
         )
-    return DEFAULT_MAX_COMPLETION_TOKENS, None
+    return DEFAULT_MAX_COMPLETION_TOKENS, None, None
 
 
 def tool_call_object_data(event: dict[str, Any]) -> dict[str, Any]:

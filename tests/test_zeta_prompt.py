@@ -113,6 +113,71 @@ def test_zeta_prompt_request_reconstructs_and_verifies() -> None:
     assert reconstructed.payload_verified
 
 
+def test_zeta_prompt_request_reconstructs_a_no_thinking_prompt() -> None:
+    store = zeta_trace.InMemoryStore()
+    tools = zeta_tools.model_tool_descriptors(("read",))
+    prepared = zeta_prompt.PromptBuilder(store=store).build(
+        "inspect",
+        [],
+        allowed_tools=("read",),
+        tools=tools,
+        selected_model="unit-model",
+        thinking="none",
+    )
+    assert prepared.prompt_object_id is not None
+    assert prepared.payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+    reconstructed = zeta_prompt.reconstructed_prompt_request(
+        store, prepared.prompt_object_id
+    )
+
+    assert reconstructed is not None
+    assert reconstructed.thinking == "none"
+    assert reconstructed.payload_verified
+
+
+def test_zeta_prompt_reconstruction_treats_legacy_prompts_as_no_thinking() -> None:
+    store = zeta_trace.InMemoryStore()
+    message = {"role": "user", "content": "objective"}
+    component_id = store.put_object(
+        zeta_trace.Object(
+            kind="user_objective",
+            schema="zeta.prompt_component.v1",
+            data={"message": message},
+        )
+    )
+    legacy_payload = zeta_model.chat_completion_request_body(
+        [message],
+        max_tokens=zeta_model.DEFAULT_MAX_COMPLETION_TOKENS,
+        thinking="none",
+    )
+    prompt_id = store.put_object(
+        zeta_trace.Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload_sha256": zeta_prompt.payload_sha256(legacy_payload)},
+            links=(component_id,),
+        )
+    )
+    store.record_derivation(
+        zeta_trace.Derivation(
+            producer="SigilPromptBuilder:v1",
+            output_id=prompt_id,
+            input_ids=(component_id,),
+            params={
+                "max_tokens": zeta_model.DEFAULT_MAX_COMPLETION_TOKENS,
+                "selected_model": None,
+            },
+        )
+    )
+
+    reconstructed = zeta_prompt.reconstructed_prompt_request(store, prompt_id)
+
+    assert reconstructed is not None
+    assert reconstructed.thinking == "none"
+    assert reconstructed.payload_verified
+
+
 def test_zeta_prompt_request_reconstruction_flags_a_changed_component() -> None:
     store = zeta_trace.InMemoryStore()
     component_id = store.put_object(

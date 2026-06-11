@@ -44,6 +44,7 @@ class AgentConfig:
     model_profile: str | None = None
     model_name: str | None = None
     model_url: str | None = None
+    thinking: str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,7 @@ def run_agent_turn(
             tools=tools,
             tool_choice="auto",
             selected_model=config.model_name,
+            thinking=config.thinking,
         )
         assistant, streamed_content, model_telemetry = request_assistant_message(
             prepared_prompt.messages,
@@ -211,6 +213,7 @@ def request_assistant_message(
             selected_url=config.model_url,
             stream_sink=turn_stream_sink if stream_sink is not None else None,
             telemetry_sink=model_telemetry.update,
+            thinking=config.thinking,
         )
     except BaseException as exc:
         close_status(type(exc), exc, exc.__traceback__)

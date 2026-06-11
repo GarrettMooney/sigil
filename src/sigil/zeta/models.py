@@ -19,12 +19,15 @@ DEFAULT_MODEL_NAME = "local-model"
 
 ModelSource = Literal["session", "env"]
 
+THINKING_EFFORTS = ("none", "minimal", "low", "medium", "high")
+
 
 @dataclass(frozen=True)
 class ModelProfile:
     name: str
     model: str
     url: str | None = None
+    thinking: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,7 @@ class ModelSelection:
     profile: str
     model: str
     url: str
+    thinking: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +123,7 @@ def resolve_model_profile(
         profile=profile.name,
         model=profile.model,
         url=profile.url or model_url(),
+        thinking=profile.thinking,
     )
 
 
@@ -205,6 +210,18 @@ def _parse_profile(
     url = value.get("url")
     if url is not None and (not isinstance(url, str) or not url.strip()):
         return None, ModelDiagnostic(path, f"{label}.url must be a non-empty string")
+    thinking = value.get("thinking")
+    if thinking is not None and thinking not in THINKING_EFFORTS:
+        return (
+            None,
+            ModelDiagnostic(
+                path,
+                f"{label}.thinking must be one of {', '.join(THINKING_EFFORTS)}",
+            ),
+        )
     return ModelProfile(
-        name=name, model=model.strip(), url=url.strip() if url else None
+        name=name,
+        model=model.strip(),
+        url=url.strip() if url else None,
+        thinking=thinking,
     ), None

@@ -569,6 +569,93 @@ model = "default-url-model"
     )
 
 
+def test_zeta_request_body_leaves_thinking_to_the_model_by_default() -> None:
+    body = zeta_model.chat_completion_request_body([{"role": "user", "content": "hi"}])
+
+    assert "chat_template_kwargs" not in body
+    assert "reasoning_effort" not in body
+
+
+def test_zeta_request_body_disables_thinking_for_none() -> None:
+    body = zeta_model.chat_completion_request_body(
+        [{"role": "user", "content": "hi"}],
+        thinking="none",
+    )
+
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "reasoning_effort" not in body
+
+
+def test_zeta_request_body_sends_reasoning_effort() -> None:
+    body = zeta_model.chat_completion_request_body(
+        [{"role": "user", "content": "hi"}],
+        thinking="high",
+    )
+
+    assert body["reasoning_effort"] == "high"
+    assert "chat_template_kwargs" not in body
+
+
+def test_zeta_model_profiles_read_thinking(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "quiet"
+model = "quiet-model"
+thinking = "none"
+
+[[models]]
+name = "deep"
+model = "deep-model"
+thinking = "high"
+
+[[models]]
+name = "default"
+model = "default-model"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    catalog = zeta_models.load_model_profiles()
+    quiet = zeta_models.resolve_model_profile("quiet", catalog=catalog)
+    deep = zeta_models.resolve_model_profile("deep", catalog=catalog)
+    default = zeta_models.resolve_model_profile("default", catalog=catalog)
+
+    assert catalog.diagnostics == []
+    assert quiet is not None and quiet.thinking == "none"
+    assert deep is not None and deep.thinking == "high"
+    assert default is not None and default.thinking is None
+
+
+def test_zeta_model_profiles_reject_unknown_thinking(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "quiet"
+model = "quiet-model"
+thinking = "off"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    catalog = zeta_models.load_model_profiles()
+
+    assert catalog.profiles == {}
+    assert len(catalog.diagnostics) == 1
+    assert "thinking" in catalog.diagnostics[0].message
+    assert "none" in catalog.diagnostics[0].message
+
+
 def test_zeta_model_profiles_report_invalid_config(
     tmp_path: Path,
     monkeypatch,

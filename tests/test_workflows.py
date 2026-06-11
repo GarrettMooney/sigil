@@ -890,6 +890,7 @@ def test_zeta_agent_step_workflow_uses_active_session_model(
 name = "coder"
 model = "coder-model"
 url = "http://127.0.0.1:8082/v1/chat/completions"
+thinking = "low"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
@@ -927,6 +928,7 @@ url = "http://127.0.0.1:8082/v1/chat/completions"
     assert config.model_profile == "coder"
     assert config.model_name == "coder-model"
     assert config.model_url == "http://127.0.0.1:8082/v1/chat/completions"
+    assert config.thinking == "low"
 
 
 def test_zeta_skill_directive_expands_through_ask_workflow(
