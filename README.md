@@ -269,10 +269,14 @@ can be written naturally:
 + git status --short > status.txt
 ```
 
-The capture happens in the line editor (a zle widget), and the command runs
-inside it: job control does not apply, so Ctrl-Z cannot suspend a `+` command
-and it never appears in `jobs`. The widget is also the only `+` path — in
-scripts and non-interactive shells, `+` does not dispatch.
+The same raw capture covers every glyph: prompts are natural language, never
+shell grammar, so quotes, parentheses, `#`, and `!` in a `,` or `,,` line
+reach the model untouched instead of confusing the parser — and nothing in a
+prompt is expanded, so `, explain $PATH` asks about the literal `$PATH`.
+Captured lines are handed back to the shell as ordinary foreground commands:
+Ctrl-Z suspends a `+` command, it shows up in `jobs`, `fg` resumes it, and
+`$?` carries its exit status. In scripts and non-interactive shells the named
+glyph functions dispatch instead; `+` is interactive-only.
 
 To install the CLI without punctuation shortcuts:
 

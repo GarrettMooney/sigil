@@ -13,7 +13,12 @@ from typing import BinaryIO, Protocol
 import click
 
 from ..session import record_turn
-from ._base import cli
+from ._base import (
+    EXIT_COMMAND_NOT_EXECUTABLE,
+    EXIT_COMMAND_NOT_FOUND,
+    EXIT_SIGNAL_BASE,
+    cli,
+)
 
 DEFAULT_CAPTURE_BYTES = 6000
 READ_SIZE = 65536
@@ -84,14 +89,19 @@ def cmd_run(ctx: click.Context, use_shell: bool, argv: tuple[str, ...]) -> int:
             "Install it or make sure it is on PATH, then retry.\n"
         )
         click.echo(stderr, err=True, nl=False)
-        record_turn(command, 127, os.getcwd(), stderr_snippet=stderr)
-        ctx.exit(127)
+        record_turn(command, EXIT_COMMAND_NOT_FOUND, os.getcwd(), stderr_snippet=stderr)
+        ctx.exit(EXIT_COMMAND_NOT_FOUND)
     except PermissionError as error:
         target = error.filename or missing_program(argv, use_shell)
         stderr = f"sigil: permission denied: {target}\n"
         click.echo(stderr, err=True, nl=False)
-        record_turn(command, 126, os.getcwd(), stderr_snippet=stderr)
-        ctx.exit(126)
+        record_turn(
+            command,
+            EXIT_COMMAND_NOT_EXECUTABLE,
+            os.getcwd(),
+            stderr_snippet=stderr,
+        )
+        ctx.exit(EXIT_COMMAND_NOT_EXECUTABLE)
     assert proc.stdout is not None
     assert proc.stderr is not None
 
@@ -116,7 +126,7 @@ def cmd_run(ctx: click.Context, use_shell: bool, argv: tuple[str, ...]) -> int:
     proc.stdout.close()
     proc.stderr.close()
     if status < 0:
-        status = 128 - status
+        status = EXIT_SIGNAL_BASE - status
 
     record_turn(
         command,

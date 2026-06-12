@@ -208,26 +208,20 @@ sigil_status() {
   "$__sigil_bin" status "$@"
 }
 
-# ── zsh Raw Plus Capture ─────────────────────────────────────────────────
+# ── Raw Glyph Dispatch ───────────────────────────────────────────────────
 
-# The accept-line widget is the only `+` path: it grabs the raw buffer before
-# zsh parses it and hands the whole line to `sigil run --shell`, keeping
-# pipes, redirections, and multiline buffers intact. The command runs inside
-# the line editor, so job control does not apply (no Ctrl-Z, no `jobs` entry).
-# Outside zle `+` does not dispatch; scripts call `sigil_run` instead.
-typeset -g __sigil_plus_capture_widget_installed="${__sigil_plus_capture_widget_installed:-0}"
-
-__sigil_plus_capture_command() {
-  emulate -L zsh
-  local line="${1:-}"
-  if [[ "$line" =~ '^\+[[:space:]]+(.+)$' ]]; then
-    local command="${match[1]}"
-    [[ -n "${command//[[:space:]]/}" ]] || return 1
-    print -r -- "$command"
-    return 0
-  fi
-  return 1
-}
+# The accept-line widget is the single interactive entry point for glyph
+# lines: it captures the raw buffer before zsh parses it, so quotes, parens,
+# globs, `#`, and `!` in prompts never reach the parser or history
+# expansion. The raw text is stashed and the buffer rewritten to a fixed
+# dispatch line with no user text in it, accepted through the normal command
+# loop — glyph work runs as a regular foreground job: Ctrl-Z, `jobs`, `fg`,
+# `$?`, and preexec/precmd behave like for any other command.
+# Outside zle the named functions dispatch; `+` stays widget-only.
+typeset -g __sigil_glyph_dispatch_widget_installed="${__sigil_glyph_dispatch_widget_installed:-0}"
+typeset -g __sigil_dispatch_glyph=""
+typeset -g __sigil_dispatch_text=""
+typeset -g __sigil_dispatch_line=""
 
 __sigil_run_plus_capture_command() {
   emulate -L zsh
@@ -236,65 +230,98 @@ __sigil_run_plus_capture_command() {
   SIGIL_RUN_SHELL="${SIGIL_RUN_SHELL:-${SHELL:-zsh}}" "$__sigil_bin" run --shell "$command"
 }
 
-__sigil_run_plus_capture_line() {
+__sigil_glyph_split() {
   emulate -L zsh
-  local command
-  command="$(__sigil_plus_capture_command "${1:-}")" || return 1
-  __sigil_run_plus_capture_command "$command"
+  # Set reply=(glyph text) for a glyph line; fail for anything else. The
+  # glyph must stand alone or be followed by whitespace, so words like
+  # `,x` stay ordinary commands. `+` additionally needs a command.
+  local buffer="${1:-}" glyph text
+  case "$buffer" in
+    '+'[[:space:]]*) glyph='+' ;;
+    ',,,'|',,,'[[:space:]]*) glyph=',,,' ;;
+    ',,'|',,'[[:space:]]*) glyph=',,' ;;
+    ','|','[[:space:]]*) glyph=',' ;;
+    '?'|'?'[[:space:]]*) glyph='?' ;;
+    *) return 1 ;;
+  esac
+  text="${buffer#"$glyph"}"
+  text="${text#"${text%%[![:space:]]*}"}"
+  if [[ "$glyph" == '+' && -z "${text//[[:space:]]/}" ]]; then
+    return 1
+  fi
+  reply=("$glyph" "$text")
+  return 0
 }
 
-__sigil_accept_line_with_plus_capture() {
+__sigil_dispatch() {
   emulate -L zsh
-  local command exit_status
-  # The match runs inside the shell: a plain Enter press must not fork.
-  if [[ "$BUFFER" != '+'* ]] || ! [[ "$BUFFER" =~ '^\+[[:space:]]+(.+)$' ]]; then
-    zle __sigil_accept_line_without_plus_capture
-    return $?
-  fi
-  command="${match[1]}"
-  if [[ -z "${command//[[:space:]]/}" ]]; then
-    zle __sigil_accept_line_without_plus_capture
-    return $?
-  fi
-
-  BUFFER=""
-  CURSOR=0
-  zle -I
-  print -r --
-  __sigil_run_plus_capture_command "$command"
-  exit_status=$?
-  zle reset-prompt
-  return "$exit_status"
+  local glyph="$__sigil_dispatch_glyph"
+  local text="$__sigil_dispatch_text"
+  local line="$__sigil_dispatch_line"
+  typeset -g __sigil_dispatch_glyph=""
+  typeset -g __sigil_dispatch_text=""
+  typeset -g __sigil_dispatch_line=""
+  # Inserting here, while the dispatch line itself is being executed,
+  # replaces the rejected dispatch entry that lingers at the top of history
+  # until the next command — up-arrow recalls the original immediately.
+  [[ -n "$line" ]] && __sigil_history_insert "$line"
+  case "$glyph" in
+    '+') __sigil_run_plus_capture_command "$text" ;;
+    ',') if [[ -n "$text" ]]; then sigil_command "$text"; else sigil_command; fi ;;
+    ',,') if [[ -n "$text" ]]; then sigil_agent_step "$text"; else sigil_agent_step; fi ;;
+    ',,,') if [[ -n "$text" ]]; then sigil_agent_step_auto "$text"; else sigil_agent_step_auto; fi ;;
+    '?') if [[ -n "$text" ]]; then sigil_status "$text"; else sigil_status; fi ;;
+    *) return 1 ;;
+  esac
 }
 
-__sigil_install_plus_capture_widget() {
+__sigil_accept_line_with_glyph_dispatch() {
+  emulate -L zsh
+  # Everything here runs inside the shell: a plain Enter press must not fork.
+  local reply
+  if ! __sigil_glyph_split "$BUFFER"; then
+    zle __sigil_accept_line_without_glyph_dispatch
+    return $?
+  fi
+  typeset -g __sigil_dispatch_glyph="${reply[1]}"
+  typeset -g __sigil_dispatch_text="${reply[2]}"
+  typeset -g __sigil_dispatch_line="$BUFFER"
+  BUFFER="__sigil_dispatch"
+  CURSOR=$#BUFFER
+  zle __sigil_accept_line_without_glyph_dispatch
+}
+
+__sigil_install_glyph_dispatch_widget() {
   emulate -L zsh
   [[ $- == *i* ]] || return 0
-  [[ "$__sigil_plus_capture_widget_installed" == "1" ]] && return 0
-  zle -A accept-line __sigil_accept_line_without_plus_capture 2>/dev/null || return 0
-  zle -N accept-line __sigil_accept_line_with_plus_capture 2>/dev/null || return 0
-  __sigil_plus_capture_widget_installed=1
+  [[ "$__sigil_glyph_dispatch_widget_installed" == "1" ]] && return 0
+  zle -A accept-line __sigil_accept_line_without_glyph_dispatch 2>/dev/null || return 0
+  zle -N accept-line __sigil_accept_line_with_glyph_dispatch 2>/dev/null || return 0
+  __sigil_glyph_dispatch_widget_installed=1
 }
 
 # ── Glyph Bindings ───────────────────────────────────────────────────────
 
 if __sigil_glyphs_enabled; then
-  # Function definitions make the punctuation usable in non-alias contexts.
-  # `+` is handled solely by the accept-line widget above; it has no function
-  # or alias, so zsh never parses a `+ ...` line.
+  # Function definitions make the punctuation usable from scripts and pipes,
+  # and keep syntax highlighters treating glyph lines as valid commands.
+  # Interactive lines never reach them: the accept-line widget captures the
+  # raw buffer first. `+` is widget-only, so zsh never parses a `+ ...` line.
   function ',' { sigil_command "$@" }
   function ',,' { sigil_agent_step "$@" }
   function ',,,' { sigil_agent_step_auto "$@" }
   function '?' { sigil_status "$@" }
 
-  # Aliases keep zsh from treating user prompts as glob patterns before our
-  # functions receive them.
+  # Aliases serve the non-widget paths only (eval, sourced snippets): alias
+  # expansion runs before globbing, which is what lets a bare `?` reach the
+  # function instead of filename generation. Interactive lines never get
+  # this far — the widget rewrites them first.
   alias ','='noglob sigil_command'
   alias ',,'='noglob sigil_agent_step'
   alias ',,,'='noglob sigil_agent_step_auto'
   alias '?'='noglob sigil_status'
 
-  __sigil_install_plus_capture_widget
+  __sigil_install_glyph_dispatch_widget
 fi
 
 # ── zsh Command Lifecycle Hooks ──────────────────────────────────────────
@@ -318,11 +345,14 @@ __sigil_install_lifecycle_hooks
 
 # Glyph lines are prompts, not commands the shell can re-run: they stay out
 # of the history file but remain recallable with up-arrow in the session.
+# The rewritten dispatch line is internal plumbing and is saved nowhere; the
+# widget already inserted the original glyph line by hand.
 if __sigil_glyphs_enabled; then
   __sigil_zshaddhistory() {
     emulate -L zsh
     local line="${1%%$'\n'}"
     case "$line" in
+      __sigil_dispatch) return 1 ;;
       ,*|\?*|+*) return 2 ;;
     esac
     return 0

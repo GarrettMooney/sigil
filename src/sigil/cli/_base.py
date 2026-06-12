@@ -14,8 +14,17 @@ import click
 
 from .._version import __version__
 
+EXIT_OK = 0
+EXIT_ERROR = 1
+EXIT_USAGE = 2
 # sysexits EX_UNAVAILABLE: the model endpoint is the service that is down.
-MODEL_ERROR_EXIT_CODE = 69
+EXIT_MODEL_UNAVAILABLE = 69
+EXIT_COMMAND_NOT_EXECUTABLE = 126
+EXIT_COMMAND_NOT_FOUND = 127
+EXIT_SIGNAL_BASE = 128
+EXIT_INTERRUPTED = EXIT_SIGNAL_BASE + 2
+
+MODEL_ERROR_EXIT_CODE = EXIT_MODEL_UNAVAILABLE
 
 COMMAND_MODULES = {
     "ask": "sigil.cli.step",
@@ -84,7 +93,7 @@ def cli(ctx: click.Context) -> None:
     """
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
-        ctx.exit(0)
+        ctx.exit(EXIT_OK)
     # The binding spools shell turns with zero forks; the CLI is the reader.
     # Recording must never break a command, mirroring the binding's fail-open
     # writes.
@@ -103,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         return error.exit_code
     except click.Abort:
         click.echo("Aborted!", err=True)
-        return 1
+        return EXIT_ERROR
     except click.exceptions.Exit as error:
         return int(error.exit_code)
     except RuntimeError as error:
@@ -111,12 +120,12 @@ def main(argv: list[str] | None = None) -> int:
         click.echo(
             "Check the model endpoint with `sigil doctor`, then retry.", err=True
         )
-        return MODEL_ERROR_EXIT_CODE
+        return EXIT_MODEL_UNAVAILABLE
     except FileNotFoundError as error:
         program = error.filename or "required executable"
         click.echo(f"sigil: missing executable: {program}", err=True)
         click.echo("Install it or make sure it is on PATH, then retry.", err=True)
-        return 127
+        return EXIT_COMMAND_NOT_FOUND
     except PermissionError as error:
         target = error.filename or "requested path"
         click.echo(f"sigil: permission denied: {target}", err=True)
@@ -124,5 +133,5 @@ def main(argv: list[str] | None = None) -> int:
             "Check the path permissions or set SIGIL_STATE_DIR to a writable directory.",
             err=True,
         )
-        return 1
-    return int(result or 0)
+        return EXIT_ERROR
+    return int(result or EXIT_OK)

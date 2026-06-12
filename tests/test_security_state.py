@@ -16,6 +16,14 @@ from _patch import patch, patch_dict
 from click.testing import CliRunner
 
 from sigil.cli import cli, main
+from sigil.cli._base import (
+    EXIT_COMMAND_NOT_FOUND,
+    EXIT_ERROR,
+    EXIT_INTERRUPTED,
+    EXIT_OK,
+    EXIT_SIGNAL_BASE,
+    EXIT_USAGE,
+)
 from sigil.display.tty import should_color
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.session import (
@@ -48,7 +56,7 @@ def test_question_system_prompt_points_zeta_at_query_log_for_older_history() -> 
 
 def test_top_level_help_lists_commands() -> None:
     result = CliRunner().invoke(cli, ["--help"])
-    assert result.exit_code == 0
+    assert result.exit_code == EXIT_OK
     assert "Common workflows:" in result.output
     assert ",      ask from local context" in result.output
     assert ",,     propose one reviewed agent step" in result.output
@@ -84,7 +92,7 @@ def test_top_level_help_lists_commands() -> None:
 
 def test_top_level_without_command_shows_help() -> None:
     result = CliRunner().invoke(cli, [])
-    assert result.exit_code == 0
+    assert result.exit_code == EXIT_OK
     assert "Common workflows:" in result.output
     assert "Commands:" in result.output
 
@@ -185,7 +193,7 @@ def test_main_rewrites_missing_executable_errors() -> None:
     missing = FileNotFoundError(2, "No such file or directory", "zeta")
     with patch("sigil.cli.cli.main", side_effect=missing):
         with redirect_stderr(stderr):
-            assert main(["ask", "hello"]) == 127
+            assert main(["ask", "hello"]) == EXIT_COMMAND_NOT_FOUND
     assert "missing executable: zeta" in stderr.getvalue()
 
 
@@ -194,7 +202,7 @@ def test_main_rewrites_permission_errors() -> None:
     denied = PermissionError(1, "Operation not permitted", "/nope/events.jsonl")
     with patch("sigil.cli.cli.main", side_effect=denied):
         with redirect_stderr(stderr):
-            assert main(["ask", "hello"]) == 1
+            assert main(["ask", "hello"]) == EXIT_ERROR
     assert "permission denied: /nope/events.jsonl" in stderr.getvalue()
 
 
@@ -1065,11 +1073,11 @@ def test_run_cli_shell_mode_captures_raw_command_string() -> None:
                 ["run", "--shell", "printf 'stdout line\\n' | cat"],
             )
 
-        assert result.exit_code == 0
+        assert result.exit_code == EXIT_OK
         assert result.stdout == "stdout line\n"
         rows = read_recent_turns(tmp)
         assert rows[-1]["command"] == "printf 'stdout line\\n' | cat"
-        assert rows[-1]["status"] == 0
+        assert rows[-1]["status"] == EXIT_OK
         assert rows[-1]["stdout_snippet"] == "stdout line\n"
 
 
@@ -1089,9 +1097,9 @@ def test_run_cli_maps_signal_death_to_shell_exit_code() -> None:
                 ],
             )
 
-        assert result.exit_code == 143
+        assert result.exit_code == EXIT_SIGNAL_BASE + 15
         rows = read_recent_turns(tmp)
-        assert rows[-1]["status"] == 143
+        assert rows[-1]["status"] == EXIT_SIGNAL_BASE + 15
 
 
 class InterruptedProcess:
@@ -1121,16 +1129,16 @@ def test_run_cli_records_turn_and_exits_130_on_ctrl_c() -> None:
             ):
                 result = CliRunner().invoke(cli, ["run", "sleep", "100"])
 
-        assert result.exit_code == 130
+        assert result.exit_code == EXIT_INTERRUPTED
         rows = read_recent_turns(tmp)
         assert rows[-1]["command"] == "sleep 100"
-        assert rows[-1]["status"] == 130
+        assert rows[-1]["status"] == EXIT_INTERRUPTED
         assert rows[-1]["stdout_snippet"] == "partial output\n"
 
 
 def test_run_cli_requires_a_command() -> None:
     result = CliRunner().invoke(cli, ["run"])
-    assert result.exit_code == 2
+    assert result.exit_code == EXIT_USAGE
     assert "missing command to run" in result.output
 
 
@@ -1142,11 +1150,11 @@ def test_run_cli_records_missing_executable() -> None:
         ):
             result = CliRunner().invoke(cli, ["run", "definitely-not-a-command"])
 
-        assert result.exit_code == 127
+        assert result.exit_code == EXIT_COMMAND_NOT_FOUND
         assert "missing executable: definitely-not-a-command" in result.stderr
         rows = read_recent_turns(tmp)
         assert rows[-1]["command"] == "definitely-not-a-command"
-        assert rows[-1]["status"] == 127
+        assert rows[-1]["status"] == EXIT_COMMAND_NOT_FOUND
         assert "missing executable" in str(rows[-1]["stderr_snippet"])
 
 

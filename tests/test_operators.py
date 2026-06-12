@@ -7,14 +7,14 @@ from _patch import patch
 from click.testing import CliRunner
 
 from sigil.cli import cli, main
-from sigil.cli._base import MODEL_ERROR_EXIT_CODE
+from sigil.cli._base import EXIT_MODEL_UNAVAILABLE, EXIT_OK, EXIT_USAGE
 from sigil.cli.step import DEFAULT_QUESTION
 
 
 def test_command_verb_is_not_registered() -> None:
     result = CliRunner().invoke(cli, ["command", "update example"])
 
-    assert result.exit_code == 2
+    assert result.exit_code == EXIT_USAGE
     assert "No such command" in result.stderr
 
 
@@ -23,7 +23,7 @@ def test_ask_verb_accepts_piped_input() -> None:
 
     def fake_ask(*args: object, **kwargs: object) -> int:
         ask_calls.append((args, kwargs))
-        return 0
+        return EXIT_OK
 
     with patch("sigil.cli.step.ask", side_effect=fake_ask):
         ask_result = CliRunner().invoke(
@@ -32,7 +32,7 @@ def test_ask_verb_accepts_piped_input() -> None:
             input="diff\n",
         )
 
-    assert ask_result.exit_code == 0, ask_result.output
+    assert ask_result.exit_code == EXIT_OK, ask_result.output
     assert ask_result.output == ""
     assert ask_calls == [
         (
@@ -47,12 +47,12 @@ def test_ask_without_question_uses_default_summary_prompt() -> None:
 
     def fake_ask(*args: object, **kwargs: object) -> int:
         calls.append((args, kwargs))
-        return 0
+        return EXIT_OK
 
     with patch("sigil.cli.step.ask", side_effect=fake_ask):
         result = CliRunner().invoke(cli, ["ask"])
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == EXIT_OK, result.output
     assert calls == [
         (
             (DEFAULT_QUESTION,),
@@ -70,7 +70,7 @@ def test_main_reports_model_runtime_error(capsys, monkeypatch) -> None:
         code = main(["ask", "why"])
 
     captured = capsys.readouterr()
-    assert code == MODEL_ERROR_EXIT_CODE
+    assert code == EXIT_MODEL_UNAVAILABLE
     assert "sigil: model request failed: connection reset" in captured.err
     assert "sigil doctor" in captured.err
 

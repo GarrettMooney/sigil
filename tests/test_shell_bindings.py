@@ -78,6 +78,7 @@ def make_stub(tmp: Path) -> Path:
               "command draft executive summary") printf '%s\n' "stream command" ;;
               "ask hello") printf '%s\n' "answer" ;;
               "ask draft executive summary") printf '%s\n' "readonly stream answer" ;;
+              "ask "*) printf '%s\n' "answer" ;;
               status*) printf '%s\n' "clean" ;;
               run*) printf '%s\n' "ran:${*:2}" ;;
               *) printf '%s\n' "unexpected:$*" >&2; exit 64 ;;
@@ -282,6 +283,25 @@ class InteractiveZsh:
     def expect_prompt(self, timeout_seconds: float = 30.0) -> None:
         self.expect(self.PROMPT, timeout_seconds)
 
+    def settle(self, seconds: float) -> None:
+        """Wait while draining output; macOS pty buffers are small enough
+        that an unread master can block the shell mid-write."""
+        deadline = time.monotonic() + seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            ready, _, _ = select.select([self.fd], [], [], min(remaining, 0.1))
+            if not ready:
+                continue
+            try:
+                chunk = os.read(self.fd, 4096)
+            except OSError:
+                return
+            if not chunk:
+                return
+            self.output += chunk.decode(errors="replace")
+
     def run(self, line: str, timeout_seconds: float = 30.0) -> None:
         """Send one line and wait for the next prompt."""
         self.sendline(line)
@@ -460,7 +480,7 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_glyph_aliases_dispatch_piped_stdin_before_globbing() -> None:
+def test_zsh_glyph_functions_dispatch_piped_stdin() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -558,26 +578,86 @@ def test_zsh_plus_glyph_is_widget_only() -> None:
         assert read_log(tmp) == []
 
 
+GLYPH_SPLIT_PROBE = """\
+source src/sigil/bindings/sigil.zsh
+probe() {
+  if __sigil_glyph_split "$1"; then
+    print -r -- "glyph=${reply[1]}:text=${reply[2]}:"
+  else
+    print -r -- "nomatch"
+  fi
+}
+"""
+
+
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_raw_plus_capture_dispatches_shell_command_to_sigil_run() -> None:
+def test_zsh_glyph_split_parses_each_glyph_and_keeps_text_raw() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            GLYPH_SPLIT_PROBE
+            + textwrap.dedent(
+                """\
+                probe ", what's (the) deal!"
+                probe ",, run it"
+                probe ",,,"
+                probe "? hello"
+                probe "+ echo one | cat"
+                probe "echo plain"
+                probe ",x not a glyph"
+                probe "+"
+                probe "+   "
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert result.stdout.splitlines() == [
+            "glyph=,:text=what's (the) deal!:",
+            "glyph=,,:text=run it:",
+            "glyph=,,,:text=:",
+            "glyph=?:text=hello:",
+            "glyph=+:text=echo one | cat:",
+            "nomatch",
+            "nomatch",
+            "nomatch",
+            "nomatch",
+        ]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_dispatch_routes_glyph_text_to_the_cli_verbatim() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/bindings/sigil.zsh\n                    __sigil_run_plus_capture_line "+ echo captured | cat"\n                    '
+                """\
+                source src/sigil/bindings/sigil.zsh
+                __sigil_dispatch_glyph=","
+                __sigil_dispatch_text="what's (the) deal!"
+                __sigil_dispatch
+                __sigil_dispatch_glyph="+"
+                __sigil_dispatch_text="echo captured | cat"
+                __sigil_dispatch
+                """
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert result.stdout == "ran:--shell echo captured | cat\n"
-        assert read_log(tmp) == ["run --shell echo captured | cat"]
+        assert read_log(tmp) == [
+            "ask what's (the) deal!",
+            "run --shell echo captured | cat",
+        ]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_raw_plus_capture_handles_multiline_buffers() -> None:
+def test_zsh_glyph_split_handles_multiline_buffers() -> None:
     # A staged multiline command arrives in the buffer as one accept-line
     # event; the whole buffer must reach sigil run instead of falling through
     # to zsh, which would execute the tail lines as plain commands.
@@ -589,19 +669,24 @@ def test_zsh_raw_plus_capture_handles_multiline_buffers() -> None:
             textwrap.dedent(
                 """\
                 source src/sigil/bindings/sigil.zsh
-                __sigil_run_plus_capture_line "+ echo one
-                echo two"
+                __sigil_glyph_split "+ echo one
+                echo two" || exit 1
+                __sigil_dispatch_glyph="${reply[1]}"
+                __sigil_dispatch_text="${reply[2]}"
+                __sigil_dispatch
                 """
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == ["run --shell echo one", "echo two"]
+        assert len(read_log(tmp)) == 2
+        assert read_log(tmp)[0] == "run --shell echo one"
+        assert read_log(tmp)[1].strip() == "echo two"
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_installs_raw_plus_capture_accept_line_widget() -> None:
+def test_zsh_installs_glyph_dispatch_accept_line_widget() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -614,26 +699,38 @@ def test_zsh_installs_raw_plus_capture_accept_line_widget() -> None:
             stub,
         )
         assert_success(result)
-        assert "widget=user:__sigil_accept_line_with_plus_capture" in result.stdout
+        assert "widget=user:__sigil_accept_line_with_glyph_dispatch" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_accept_line_plus_capture_preserves_exit_status() -> None:
+def test_zsh_glyph_widget_rewrites_buffer_to_safe_dispatch_line() -> None:
+    # The widget stashes the raw text and rewrites the buffer to a fixed
+    # line with no user text in it; executing that line runs the glyph as a
+    # normal command with the stub's exit status.
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    function zle() { return 0; }\n                    source src/sigil/bindings/sigil.zsh\n                    BUFFER="+ echo captured"\n                    __sigil_accept_line_with_plus_capture\n                    print -- "exit=$?"\n                    '
+                """\
+                function zle() { return 0; }
+                source src/sigil/bindings/sigil.zsh
+                BUFFER="+ echo captured"
+                __sigil_accept_line_with_glyph_dispatch
+                print -- "buffer=$BUFFER"
+                eval "$BUFFER"
+                print -- "exit=$?"
+                """
             ),
             tmp,
             stub,
         )
         assert_success(result)
         assert result.stderr == ""
-        assert "read-only variable: status" not in result.stdout
-        assert result.stdout == "\nran:--shell echo captured\nexit=0\n"
+        assert "buffer=__sigil_dispatch" in result.stdout
+        assert "ran:--shell echo captured" in result.stdout
+        assert "exit=0" in result.stdout
         assert read_log(tmp) == ["run --shell echo captured"]
 
 
@@ -1058,8 +1155,11 @@ def test_zsh_binding_functions_survive_hostile_user_options() -> None:
             textwrap.dedent(
                 """\
                 setopt ksh_arrays sh_word_split
+                function zle() { return 0; }
                 source src/sigil/bindings/sigil.zsh
-                __sigil_run_plus_capture_line "+ echo captured | cat"
+                BUFFER="+ echo captured | cat"
+                __sigil_accept_line_with_glyph_dispatch
+                eval "$BUFFER"
                 sigil_agent_step hello >/dev/null
                 print -- "history=${history[$HISTCMD]}"
                 """
@@ -1118,7 +1218,7 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/sigil/bindings/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "+ echo"; print -- "run=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
+                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/sigil/bindings/sigil.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __sigil_zshaddhistory ", hello"; print -- "comma=$?"\n                    __sigil_zshaddhistory "? hello"; print -- "question=$?"\n                    __sigil_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __sigil_zshaddhistory "+ echo"; print -- "run=$?"\n                    __sigil_zshaddhistory "__sigil_dispatch"; print -- "dispatch=$?"\n                    __sigil_zshaddhistory "@ hello"; print -- "at=$?"\n                    __sigil_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
             ),
             tmp,
             stub,
@@ -1131,6 +1231,9 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         assert "question=2" in result.stdout
         assert "escaped_question=0" in result.stdout
         assert "run=2" in result.stdout
+        # 1 keeps the rewritten dispatch line out of file and internal
+        # history both; the original glyph line was print -s'd instead.
+        assert "dispatch=1" in result.stdout
         assert "at=0" in result.stdout
         assert "echo=0" in result.stdout
         assert (tmp / "zle.log").read_text(encoding="utf-8") == "user:echo hello\n"
@@ -1352,6 +1455,96 @@ def test_interactive_two_ptys_get_distinct_sessions() -> None:
         assert second_values["sid"]
         assert second_values["sid"] != first_values["sid"]
         assert second_values["tty"] != first_values["tty"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_comma_with_apostrophe_dispatches_without_quote_prompt() -> None:
+    # The raw capture happens before the parser: an unbalanced quote in a
+    # prompt must dispatch instead of dropping the user into quote>.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline(", what's the deal")
+            shell.expect("answer")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+        assert "quote>" not in shell.output
+        assert read_log(tmp) == ["ask what's the deal"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_comma_with_parens_and_bang_dispatches_verbatim() -> None:
+    # Parens would be a parse error and ! fires history expansion; the raw
+    # capture must deliver both untouched.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline(", why (really) fix it!")
+            shell.expect("answer")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+        assert read_log(tmp) == ["ask why (really) fix it!"]
+
+
+REAL_SIGIL = ROOT / ".venv" / "bin" / "sigil"
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+@pytest.mark.skipif(not REAL_SIGIL.exists(), reason="no venv sigil executable")
+def test_interactive_plus_runs_under_job_control() -> None:
+    # The dispatch line runs through the normal command loop: Ctrl-Z must
+    # suspend the + command, jobs must list it, fg must resume it.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub, env={"SIGIL_BIN": str(REAL_SIGIL)})
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline("+ sleep 30")
+            shell.settle(1.0)
+            shell.send_control("z")
+            shell.expect("suspended")
+            shell.expect_prompt()
+            shell.sendline("jobs")
+            shell.expect("suspended")
+            shell.expect_prompt()
+            shell.sendline("fg")
+            shell.settle(0.5)
+            shell.send_control("c")
+            shell.expect_prompt()
+            shell.run('print -- "ba""ck=ok"')
+            shell.exit()
+        finally:
+            shell.kill()
+        assert "back=ok" in shell.output
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+@pytest.mark.skipif(not REAL_SIGIL.exists(), reason="no venv sigil executable")
+def test_interactive_plus_exit_status_reaches_the_prompt() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub, env={"SIGIL_BIN": str(REAL_SIGIL)})
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.run("+ false", timeout_seconds=30.0)
+            shell.sendline('print -- "s""t=$?"')
+            shell.expect("st=1")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

@@ -14,6 +14,7 @@ from _patch import patch, patch_dict
 from click.testing import CliRunner
 
 from sigil.cli import cli, main
+from sigil.cli._base import EXIT_ERROR, EXIT_OK
 from sigil.install import (
     DoctorCheck,
     check_endpoint,
@@ -82,7 +83,7 @@ def test_install_zsh_binding_cli_json_reports_paths() -> None:
                 "--json",
             ],
         )
-        assert result.exit_code == 0, result.output
+        assert result.exit_code == EXIT_OK, result.output
         payload = json.loads(result.output)
         assert Path(payload["binding_path"]).exists()
         assert Path(payload["rc_path"]).exists()
@@ -208,7 +209,7 @@ def test_doctor_cli_answers_setup_questions() -> None:
         with redirect_stdout(stdout):
             code = main(["doctor"])
     output = stdout.getvalue()
-    assert code == 0
+    assert code == EXIT_OK
     assert "sigil installed?" in output
     assert "model endpoint reachable?" in output
     assert "shell binding installed?" in output
@@ -225,7 +226,7 @@ def test_doctor_cli_json_returns_nonzero_for_failures() -> None:
     with patch("sigil.cli.install.doctor_checks", return_value=checks):
         with redirect_stdout(stdout):
             code = main(["doctor", "--json"])
-    assert code == 1
+    assert code == EXIT_ERROR
     payload = json.loads(stdout.getvalue())
     assert payload[1]["name"] == "model:endpoint"
     assert payload[1]["status"] == "fail"
