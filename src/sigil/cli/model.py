@@ -14,17 +14,38 @@ from ..zeta.models import (
     resolve_model_profile,
     set_active_model_profile,
 )
-from ._base import cli
+from ._base import cli, examples
 
 
-@cli.group("model")
+@cli.group(
+    "model",
+    epilog=examples(
+        "sigil model list",
+        "sigil model use deep",
+        "sigil model show",
+    ),
+)
 def cmd_model() -> None:
-    """Inspect and switch Zeta model profiles for this session."""
+    """Inspect and switch Zeta model profiles for this session.
+
+    Profiles are defined in ~/.zeta/models.toml. The selection is scoped to
+    the current shell session, so other terminals keep their own; without a
+    selection, the `default = true` profile applies, then the builtin local
+    default.
+    """
 
 
-@cmd_model.command("list")
+@cmd_model.command(
+    "list",
+    epilog=examples("sigil model list"),
+)
 def cmd_model_list() -> int:
-    """List configured model profiles."""
+    """List configured model profiles, one per line.
+
+    Reads ~/.zeta/models.toml and marks the `default = true` profile. With
+    no profiles configured, prints the builtin local default. Exits 1 when
+    the profile config has diagnostics.
+    """
     catalog = load_model_profiles()
     for diagnostic in catalog.diagnostics:
         click.echo(f"model config: {diagnostic.message}", err=True)
@@ -48,10 +69,20 @@ def cmd_model_list() -> int:
     return 1 if catalog.diagnostics else 0
 
 
-@cmd_model.command("use")
+@cmd_model.command(
+    "use",
+    epilog=examples(
+        "sigil model use deep",
+        'sigil model use fast && , "why did the last command fail?"',
+    ),
+)
 @click.argument("name")
 def cmd_model_use(name: str) -> int:
-    """Use a model profile for the current shell session."""
+    """Use the NAME profile for the current shell session.
+
+    NAME is a profile from ~/.zeta/models.toml. The selection sticks until
+    `sigil model clear`; other sessions are unaffected.
+    """
     catalog = load_model_profiles()
     for diagnostic in catalog.diagnostics:
         click.echo(f"model config: {diagnostic.message}", err=True)
@@ -68,9 +99,17 @@ def cmd_model_use(name: str) -> int:
     return 0
 
 
-@cmd_model.command("show")
+@cmd_model.command(
+    "show",
+    epilog=examples("sigil model show"),
+)
 def cmd_model_show() -> int:
-    """Show the active model for the current shell session."""
+    """Show the model the next request will use, and why.
+
+    The source suffix says where the selection comes from: (session) after
+    `sigil model use`, (config) for the `default = true` profile, (builtin)
+    for the no-configuration fallback.
+    """
     resolution = resolve_active_model()
     if resolution.stale_profile is not None:
         click.echo(
@@ -84,9 +123,16 @@ def cmd_model_show() -> int:
     return 0
 
 
-@cmd_model.command("clear")
+@cmd_model.command(
+    "clear",
+    epilog=examples("sigil model clear"),
+)
 def cmd_model_clear() -> int:
-    """Clear the active model profile for the current shell session."""
+    """Clear the session's model selection.
+
+    The session returns to the `default = true` profile, or to the builtin
+    local default when no profile claims the flag.
+    """
     removed = clear_active_model_profile()
     if removed:
         click.echo("model: cleared")

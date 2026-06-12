@@ -14,7 +14,7 @@ from ..protocols import SHELL_HANDOFF_RESULT_SCHEMA
 from ..workflows.ask import ask
 from ..workflows.do import do
 from ..workflows.propose import propose
-from ._base import cli
+from ._base import cli, examples
 from ._shared import piped_stdin_text, question_with_stdin
 
 DEFAULT_QUESTION = "Inspect and summarize the current shell context."
@@ -30,10 +30,24 @@ CONTINUE_OBJECTIVE = (
 )
 
 
-@cli.command("ask")
+@cli.command(
+    "ask",
+    epilog=examples(
+        'sigil ask "what changed in this repo?"',
+        'git diff | sigil ask "review risky changes"',
+    ),
+)
 @click.argument("question", required=False)
 def cmd_ask(question: str | None) -> int:
-    """Ask a shell question; the session timeline carries the conversation."""
+    """Ask a read-only question from local session context.
+
+    The `,` glyph calls this command. The answer comes from the session's
+    recorded shell context; piped stdin is used directly as context. It
+    never stages or executes commands.
+
+    Exits 69 when the model endpoint is down or fails mid-answer;
+    `sigil doctor` diagnoses it.
+    """
     stdin_text = piped_stdin_text()
     if stdin_text is not None:
         prompt = question_with_stdin(question or "", stdin_text)
@@ -42,7 +56,15 @@ def cmd_ask(question: str | None) -> int:
     return ask(prompt)
 
 
-@cli.command("step", hidden=True)
+@cli.command(
+    "step",
+    hidden=True,
+    epilog=examples(
+        'sigil step --workflow propose "run the relevant tests"',
+        "sigil step --workflow propose --continue",
+        'sigil step --workflow do "fix the failing parser test"',
+    ),
+)
 @click.option(
     "--workflow",
     type=click.Choice(["ask", "propose", "do"]),
@@ -68,7 +90,16 @@ def cmd_step(
     continue_step: bool,
     objective_parts: tuple[str, ...],
 ) -> int:
-    """Run one Python-owned agent loop for shell bindings."""
+    """Run one agent loop for the shell glyph bindings.
+
+    The `,,` and `,,,` glyphs call this command. `--workflow propose`
+    stages reviewed shell work at your prompt; `--workflow do` runs
+    auto-approved tool calls; `--continue` resumes the pending handoff
+    with the recorded shell results.
+
+    Exits 69 when the model endpoint is down or fails mid-answer;
+    `sigil doctor` diagnoses it.
+    """
     objective = " ".join(objective_parts)
     if continue_step:
         if workflow == "ask":

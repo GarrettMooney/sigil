@@ -26,6 +26,13 @@ EXIT_INTERRUPTED = EXIT_SIGNAL_BASE + 2
 
 MODEL_ERROR_EXIT_CODE = EXIT_MODEL_UNAVAILABLE
 
+
+def examples(*lines: str) -> str:
+    """Render command invocations as an Examples epilog click keeps verbatim."""
+    block = "\n".join(f"  {line}" for line in lines)
+    return f"\b\nExamples:\n{block}"
+
+
 COMMAND_MODULES = {
     "ask": "sigil.cli.step",
     "blame": "sigil.cli.log",

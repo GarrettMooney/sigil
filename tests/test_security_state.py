@@ -97,6 +97,54 @@ def test_top_level_without_command_shows_help() -> None:
     assert "Commands:" in result.output
 
 
+def _command_help_paths() -> list[tuple[str, ...]]:
+    root = click.Context(cli)
+    paths: list[tuple[str, ...]] = []
+
+    def walk(group: click.Group, prefix: tuple[str, ...]) -> None:
+        for name in group.list_commands(root):
+            command = group.get_command(root, name)
+            path = (*prefix, name)
+            paths.append(path)
+            if isinstance(command, click.Group):
+                walk(command, path)
+
+    walk(cli, ())
+    return paths
+
+
+@pytest.mark.parametrize("path", _command_help_paths(), ids="-".join)
+def test_command_help_shows_examples(path: tuple[str, ...]) -> None:
+    result = CliRunner().invoke(cli, [*path, "--help"])
+    assert result.exit_code == EXIT_OK
+    assert "Examples:" in result.output
+
+
+def test_status_help_states_the_exit_contract() -> None:
+    result = CliRunner().invoke(cli, ["status", "--help"])
+    assert "Exits 1" in result.output
+
+
+def test_ask_help_states_the_model_unavailable_exit() -> None:
+    result = CliRunner().invoke(cli, ["ask", "--help"])
+    assert "Exits 69" in result.output
+
+
+def test_step_help_states_the_model_unavailable_exit() -> None:
+    result = CliRunner().invoke(cli, ["step", "--help"])
+    assert "Exits 69" in result.output
+
+
+def test_doctor_help_states_the_exit_contract() -> None:
+    result = CliRunner().invoke(cli, ["doctor", "--help"])
+    assert "Exits 1" in result.output
+
+
+def test_trace_group_help_explains_id_resolution() -> None:
+    result = CliRunner().invoke(cli, ["trace", "--help"])
+    assert "unique prefix" in " ".join(result.output.split())
+
+
 HEAVY_MODULES_PROBE = (
     "heavy = [name for name in sys.modules if name.startswith('sigil.workflows') "
     "or name.startswith('sigil.zeta') or name.startswith('rich')]; "

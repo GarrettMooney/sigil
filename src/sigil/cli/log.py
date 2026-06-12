@@ -6,13 +6,21 @@ from typing import Any
 
 import click
 
-from ._base import cli
+from ._base import cli, examples
 from ._shared import pretty_print_json
 
 DEFAULT_LOG_LIMIT = 20
 
 
-@cli.group("log", invoke_without_command=True)
+@cli.group(
+    "log",
+    invoke_without_command=True,
+    epilog=examples(
+        "sigil log --touched src/app.py --since 2d",
+        "sigil log --workflow do --failed",
+        "sigil log --cost",
+    ),
+)
 @click.option(
     "--touched",
     help="Only turns that wrote or edited PATH through the write/edit tools.",
@@ -47,9 +55,9 @@ def cmd_log(
 ) -> int:
     """List ledger turns across every session, newest first.
 
-    Every delegation and recorded shell command is one turn; --session
-    narrows to one shell. Subcommands query deeper; `sigil events`
-    stays the raw event view.
+    Every delegation and recorded shell command is one ledger turn;
+    --session narrows to one shell. Subcommands query deeper; `sigil
+    events` stays the raw event view underneath.
     """
     if ctx.invoked_subcommand is not None:
         return 0
@@ -94,7 +102,10 @@ def since_epoch(value: str) -> float:
         ) from error
 
 
-@cmd_log.command("export")
+@cmd_log.command(
+    "export",
+    epilog=examples("sigil log export --since 2d -o bundle.json"),
+)
 @click.option(
     "--since",
     help="Only turns at or after a time: YYYY-MM-DD, or an age like 2d, 6h, 30m.",
@@ -144,7 +155,10 @@ def cmd_log_export(
     return 0
 
 
-@cmd_log.command("import")
+@cmd_log.command(
+    "import",
+    epilog=examples("sigil log import bundle.json"),
+)
 @click.argument(
     "bundle_file",
     type=click.Path(exists=True, dir_okay=False),
@@ -154,7 +168,8 @@ def cmd_log_import(bundle_file: str) -> int:
 
     Records land in the global event log and index; trace objects land
     in per-session stores, so log/blame/trace queries answer here too.
-    Re-importing a bundle is a no-op.
+    Re-importing a bundle is a no-op, and imported turns survive
+    `sigil log reindex`.
     """
     import json
     from pathlib import Path
@@ -178,9 +193,16 @@ def cmd_log_import(bundle_file: str) -> int:
     return 0
 
 
-@cmd_log.command("reindex")
+@cmd_log.command(
+    "reindex",
+    epilog=examples("sigil log reindex"),
+)
 def cmd_log_reindex() -> int:
-    """Rebuild the ledger index from the event log."""
+    """Rebuild the derived ledger.sqlite3 index from the event log.
+
+    Safe to run at any time. The index persists on its own, so rotating
+    the event log loses no turn, effect, or cost answer.
+    """
     # Imported lazily: `sigil.cli` must stay light at import time.
     from ..ledger import default_ledger_index, reindex
 
@@ -189,13 +211,17 @@ def cmd_log_reindex() -> int:
     return 0
 
 
-@cmd_log.command("show")
+@cmd_log.command(
+    "show",
+    epilog=examples("sigil log show 4f9d01c2"),
+)
 @click.argument("turn_id")
 @click.option("--json", "json_output", is_flag=True, help="Emit the raw records.")
 def cmd_log_show(turn_id: str, json_output: bool) -> int:
-    """Show one turn record in full: contract, cost, effects, prompts.
+    """Show one turn in full: objective, contract, model, cost, effects.
 
-    TURN_ID may be a full id or a unique prefix.
+    Effects carry content hashes, and the listed prompt ids feed
+    `sigil trace show`. TURN_ID may be a full id or a unique prefix.
     """
     from ..display.summarize import render_turn_record
     from ..ledger import default_ledger_index
@@ -214,14 +240,21 @@ def cmd_log_show(turn_id: str, json_output: bool) -> int:
     return 0
 
 
-@cli.command("blame")
+@cli.command(
+    "blame",
+    epilog=examples(
+        "sigil blame src/app.py",
+        "sigil log show 4f9d01c2",
+    ),
+)
 @click.argument("file")
 def cmd_blame(file: str) -> int:
     """List every turn that wrote or edited FILE, oldest first.
 
-    Covers writes made through the write/edit tools, which record paths
-    and content hashes. Bash commands record what ran, not which files
-    it touched — find those with `sigil log` and the command text.
+    Each entry shows the turn's objective and prompt ids. Covers writes
+    made through the write/edit tools, which record paths and content
+    hashes. Bash commands record what ran, not which files it touched —
+    find those with `sigil log` and the command text.
     """
     from ..ledger import default_ledger_index, touched_path_variants
 

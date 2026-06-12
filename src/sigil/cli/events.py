@@ -7,14 +7,20 @@ from datetime import datetime
 import click
 
 from ..session import read_event_log
-from ._base import cli
+from ._base import cli, examples
 from ._shared import pretty_print_json
 
 EVENT_LIST_COLUMNS = ("time", "workflow", "event", "session", "detail")
 WORKFLOW_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})
 
 
-@cli.command("events")
+@cli.command(
+    "events",
+    epilog=examples(
+        "sigil events --limit 50",
+        "sigil events --json --raw",
+    ),
+)
 @click.option("--json", "json_output", is_flag=True, help="Emit events as JSON.")
 @click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
 @click.option(
@@ -25,7 +31,11 @@ WORKFLOW_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})
     help="Number of recent events to show.",
 )
 def cmd_events(json_output: bool, raw: bool, limit: int) -> int:
-    """Inspect Sigil's read-only event log."""
+    """Inspect Sigil's read-only event log.
+
+    This is the raw view underneath `sigil log`: the most recent audit
+    and debug records from events.jsonl, one row per event.
+    """
     if raw and not json_output:
         raise click.UsageError("--raw requires --json")
     return print_events_list(json_output=json_output, raw=raw, limit=limit)

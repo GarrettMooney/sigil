@@ -14,11 +14,17 @@ from ..install import (
     doctor_checks,
     install_zsh_binding,
 )
-from ._base import cli
+from ._base import cli, examples
 from ._shared import pretty_print_json
 
 
-@cli.command("install")
+@cli.command(
+    "install",
+    epilog=examples(
+        "sigil install",
+        "sigil install --no-glyphs",
+    ),
+)
 @click.option(
     "--install-dir",
     type=click.Path(path_type=Path, file_okay=False, dir_okay=True),
@@ -46,7 +52,15 @@ def cmd_install_zsh_binding(
     enable_glyphs: bool,
     json_output: bool,
 ) -> int:
-    """Install or update the Sigil zsh binding."""
+    """Install or update the Sigil zsh binding.
+
+    Copies the bundled zsh binding to ~/.sigil/shell/zsh/ and adds an
+    idempotent source block to .zshrc. Running it again updates the
+    binding without duplicating the rc block.
+
+    With --no-glyphs the rc block loads the named commands but not the
+    punctuation aliases.
+    """
     result = install_zsh_binding(
         install_dir=install_dir,
         rc_path=rc_path,
@@ -73,10 +87,22 @@ def cmd_install_zsh_binding(
     return 0
 
 
-@cli.command("doctor")
+@cli.command(
+    "doctor",
+    epilog=examples(
+        "sigil doctor",
+        "sigil doctor --json",
+    ),
+)
 @click.option("--json", "json_output", is_flag=True, help="Emit doctor checks as JSON.")
 def cmd_doctor(json_output: bool) -> int:
-    """Check whether Sigil is installed and ready to use."""
+    """Check whether Sigil is installed and ready to use.
+
+    Checks the install, shell binding, state directory, current session,
+    and the model endpoint, plus codex credentials when a codex profile
+    is configured. Exits 1 when any check fails, and still prints the
+    full report.
+    """
     checks = doctor_checks()
     if json_output:
         print(checks_to_json(checks))

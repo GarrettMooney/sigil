@@ -10,54 +10,114 @@ from ..session import (
     known_sessions,
     session_paths,
 )
-from ._base import cli
+from ._base import cli, examples
 from ._shared import pretty_print_json
 
 JSON_HELP = "Emit session state as JSON."
 
 
-@cli.group("session", invoke_without_command=True)
+@cli.group(
+    "session",
+    invoke_without_command=True,
+    epilog=examples(
+        "sigil session",
+        "sigil session transcript --limit 20",
+        "sigil session clear",
+    ),
+)
 @click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
 @click.pass_context
 def cmd_session(ctx: click.Context, json_output: bool) -> None:
-    """Inspect or clear the current shell session state."""
+    """Inspect or clear the current shell session state.
+
+    A session is one terminal: the zsh binding sets SIGIL_SESSION_ID per
+    pty, so terminal windows and tmux panes keep separate continuity while
+    subshells share it. Bare `sigil session` runs `session show`.
+
+    State lives under ~/.sigil/; set SIGIL_STATE_DIR to move it.
+    """
     if ctx.invoked_subcommand is None:
         ctx.exit(print_session_snapshot(json_output))
 
 
-@cmd_session.command("show")
+@cmd_session.command(
+    "show",
+    epilog=examples(
+        "sigil session show",
+        "sigil session show --json",
+    ),
+)
 @click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
 def session_show(json_output: bool) -> int:
-    """Show the current session's continuity files."""
+    """Show the current session's continuity files.
+
+    Prints the session id, its state directory, and a one-line summary of
+    each continuity file present. Bare `sigil session` runs this command.
+    """
     return print_session_snapshot(json_output)
 
 
-@cmd_session.command("path")
+@cmd_session.command(
+    "path",
+    epilog=examples(
+        "sigil session path",
+        "ls $(sigil session path)",
+    ),
+)
 @click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
 def session_path(json_output: bool) -> int:
-    """Print the current session state directory."""
+    """Print the current session state directory.
+
+    The directory lives under ~/.sigil/ unless SIGIL_STATE_DIR moves it.
+    """
     return print_session_path(json_output)
 
 
-@cmd_session.command("list")
+@cmd_session.command(
+    "list",
+    epilog=examples("sigil session list"),
+)
 @click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
 def session_list(json_output: bool) -> int:
-    """List all known shell sessions."""
+    """List all known shell sessions.
+
+    Each line shows a session id, its last working directory, its last
+    event type, and its state directory, tab-separated.
+    """
     return print_session_list(json_output)
 
 
-@cmd_session.command("clear")
+@cmd_session.command(
+    "clear",
+    epilog=examples("sigil session clear"),
+)
 @click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
 def session_clear(json_output: bool) -> int:
-    """Remove the current session's state directory."""
+    """Remove the current session's state directory.
+
+    Deletes the session's continuity files, trace store, and bridged turn
+    objects. The global ledger index and event log survive.
+    """
     return print_session_clear(json_output)
 
 
-@cmd_session.command("transcript")
+@cmd_session.command(
+    "transcript",
+    epilog=examples(
+        "sigil session transcript",
+        "sigil session transcript --limit 20",
+    ),
+)
 @click.option("--limit", type=int, default=None, help="Show only the last N events.")
 @click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
 def session_transcript(limit: int | None, json_output: bool) -> int:
-    """Render the session's agent conversation as a transcript."""
+    """Render the session's agent conversation as a transcript.
+
+    Shows questions, answers, and compact tool traces. Each answer is
+    tagged with the id of the exact prompt the model saw, usable with
+    `sigil trace show`; model reasoning appears in full as italic text
+    above the answer it led to.
+    """
     return print_session_transcript(limit, json_output)
 
 

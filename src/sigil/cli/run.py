@@ -18,6 +18,7 @@ from ._base import (
     EXIT_COMMAND_NOT_FOUND,
     EXIT_SIGNAL_BASE,
     cli,
+    examples,
 )
 
 DEFAULT_CAPTURE_BYTES = 6000
@@ -56,6 +57,10 @@ class TailBuffer:
         "allow_extra_args": True,
         "allow_interspersed_args": False,
     },
+    epilog=examples(
+        "sigil run -- cargo test",
+        "sigil run --shell 'pytest -q 2>&1 | tail -20'",
+    ),
 )
 @click.pass_context
 @click.option(
@@ -66,7 +71,12 @@ class TailBuffer:
 )
 @click.argument("argv", nargs=-1, type=click.UNPROCESSED)
 def cmd_run(ctx: click.Context, use_shell: bool, argv: tuple[str, ...]) -> int:
-    """Run a command, stream output live, and record clean output snippets.
+    """Run one command, stream output live, and record output snippets.
+
+    The `+` glyph calls this command. It streams stdout and stderr live,
+    records bounded output snippets for later failure context, and exits
+    with the command's own status: 127 when the executable is missing,
+    128+N when the command died from signal N.
 
     Sigil flags must come before the command; everything after the first
     command word (or after `--`) belongs to the command itself.

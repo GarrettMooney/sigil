@@ -376,16 +376,19 @@ The glyphs are thin shell functions over a regular CLI:
 ```text
 sigil ask [QUESTION]
 sigil status [--json]
-sigil log [--touched PATH] [--workflow W] [--since T] [--failed] [--cost] [--json]
-sigil log show TURN [--json]
+sigil log [--touched PATH] [--workflow W] [--since T] [--failed] [--session ID] [--cost] [--json]
+sigil log [show|reindex|export|import]
 sigil blame FILE
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear|transcript] [--json]
 sigil model [list|use|show|clear]
-sigil trace [log|grep|show|tree|closure|refs|prompts]  # ids accept refs and unique prefixes
+sigil trace [--session ID] [log|grep|show|tree|closure|refs|prompts|diff|replay]
 sigil install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--json]
 ```
+
+Every command documents itself: `sigil COMMAND --help` states what it reads
+and writes and ends with copy-pasteable examples.
 
 The bundled Zeta agent runtime is an internal Python package; Sigil workflows run
 it in-process. There is no separate `zeta` command.
@@ -394,13 +397,6 @@ From shells without the zsh binding, agent steps can be scripted through the
 same command the binding uses: `sigil step --workflow propose "OBJECTIVE"`
 stages reviewed shell work and `sigil step --workflow propose --continue` resumes a pending
 handoff (hidden from `--help` because the binding is the primary surface).
-
-Copy-pasteable examples:
-
-```sh
-sigil ask "what changed in this repo?"
-sigil events
-```
 
 ### Exit Codes
 

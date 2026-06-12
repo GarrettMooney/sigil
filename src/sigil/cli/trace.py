@@ -38,14 +38,21 @@ from ..zeta.trace import (
     resolve_object_id,
     warn_trace_failure_once,
 )
-from ._base import cli
+from ._base import cli, examples
 from ._shared import pretty_print_json
 
 NARRATIVE_KINDS = ("prompt", "assistant_message")
 BODY_LINE_LIMIT = 8
 
 
-@cli.group("trace")
+@cli.group(
+    "trace",
+    epilog=examples(
+        "sigil trace log",
+        "sigil trace show 4f9d01c2",
+        "sigil trace --session 47bd31c0 show turn/4f9d01c2",
+    ),
+)
 @click.option(
     "--session",
     "session_scope",
@@ -54,7 +61,16 @@ BODY_LINE_LIMIT = 8
 )
 @click.pass_context
 def trace_group(ctx: click.Context, session_scope: str | None) -> None:
-    """Inspect a session trace store, the current one by default."""
+    """Inspect a session trace store, the current one by default.
+
+    The store records prompts, assistant messages, tool calls, and tool
+    results, content-addressed and linked by derivations. It answers "what
+    exactly did the model see" for the prompt ids that `sigil log show`
+    and `?` hand out.
+
+    Every ID argument accepts a ref name (like turn/<id>), a full id, or
+    a unique prefix of an id.
+    """
     ctx.obj = session_scope
 
 
@@ -88,7 +104,14 @@ def open_session_store(session_id: str) -> SqliteStore:
         ) from error
 
 
-@trace_group.command("log")
+@trace_group.command(
+    "log",
+    epilog=examples(
+        "sigil trace log",
+        "sigil trace log --kind tool_call --limit 50",
+        "sigil trace log --all",
+    ),
+)
 @click.option(
     "--kind",
     "kinds",
@@ -136,7 +159,13 @@ def trace_log(
     return 0
 
 
-@trace_group.command("grep")
+@trace_group.command(
+    "grep",
+    epilog=examples(
+        'sigil trace grep "parser test" --kind prompt',
+        "sigil trace grep timeout --all-sessions",
+    ),
+)
 @click.argument("pattern")
 @click.option(
     "--kind",
@@ -168,7 +197,8 @@ def trace_grep(
     """Search trace object data for a substring, newest first.
 
     Matching is case-insensitive over the stored JSON data. LIKE
-    wildcards in PATTERN match literally.
+    wildcards in PATTERN match literally. --kind narrows the search;
+    --all-sessions searches every recorded session, grouped by session.
     """
     selected = tuple(kinds) or None
     lines = scope_listing_lines(
@@ -227,14 +257,19 @@ def format_trace_line(object_id: ObjectId, kind: str, summary: str) -> str:
     return f"{short_trace_id(object_id)}  {kind:<19} {summary}".rstrip()
 
 
-@trace_group.command("show")
+@trace_group.command(
+    "show",
+    epilog=examples(
+        "sigil trace show 4f9d01c2",
+        "sigil trace show turn/4f9d01c2 --json",
+    ),
+)
 @click.argument("object_id")
 @click.option("--json", "json_output", is_flag=True, help="Emit the raw object JSON.")
 @click.pass_context
 def trace_show(ctx: click.Context, object_id: str, json_output: bool) -> int:
     """Show one trace object, its body, and both derivation directions.
 
-    OBJECT_ID may be a ref name, a full id, or a unique id prefix.
     Renders a human summary by default; --json keeps the raw record.
     """
     store = scoped_store(ctx)
@@ -327,13 +362,17 @@ def trace_object_text(obj: Object) -> str:
     return ""
 
 
-@trace_group.command("closure")
+@trace_group.command(
+    "closure",
+    epilog=examples("sigil trace closure 4f9d01c2"),
+)
 @click.argument("object_id")
 @click.pass_context
 def trace_closure(ctx: click.Context, object_id: str) -> int:
     """List every object reachable from a trace object.
 
-    OBJECT_ID may be a ref name, a full id, or a unique id prefix.
+    Follows the object's links and derivations transitively and emits
+    the result as JSON, one entry per reachable object.
     """
     store = scoped_store(ctx)
     resolved = resolve_cli_object_id(object_id, store=store)
@@ -341,7 +380,13 @@ def trace_closure(ctx: click.Context, object_id: str) -> int:
     return 0
 
 
-@trace_group.command("tree")
+@trace_group.command(
+    "tree",
+    epilog=examples(
+        "sigil trace tree 4f9d01c2",
+        "sigil trace tree 4f9d01c2 --down",
+    ),
+)
 @click.argument("object_id")
 @click.option("--down", is_flag=True, help="Follow consumers instead of producers.")
 @click.option(
@@ -355,9 +400,9 @@ def trace_closure(ctx: click.Context, object_id: str) -> int:
 def trace_tree(ctx: click.Context, object_id: str, down: bool, depth: int) -> int:
     """Render the derivation tree around one trace object.
 
-    OBJECT_ID may be a ref name, a full id, or a unique id prefix.
-    Walks producers by default; --down walks what came of the object.
-    Edges carry the producer name; repeated objects render as `…`.
+    Walks what produced the object by default; --down walks what came
+    of it. Edges carry the producer name; repeated objects render as
+    `…`.
     """
     store = scoped_store(ctx)
     resolved = resolve_cli_object_id(object_id, store=store)
@@ -445,7 +490,13 @@ def resolve_cli_prompt(store: Store, token: str) -> tuple[ObjectId, Object]:
     return object_id, obj
 
 
-@trace_group.command("diff")
+@trace_group.command(
+    "diff",
+    epilog=examples(
+        "sigil trace diff 4f9d01c2 81be33aa",
+        "sigil trace diff 4f9d01c2 81be33aa --stat",
+    ),
+)
 @click.argument("old_id")
 @click.argument("new_id")
 @click.option(
@@ -459,8 +510,8 @@ def trace_diff(ctx: click.Context, old_id: str, new_id: str, stat_only: bool) ->
     """Compare two prompts component by component.
 
     Identical component ids are unchanged. A removed/added pair of the
-    same kind renders as changed, with a text diff of its messages.
-    Both arguments accept ref names, full ids, or unique prefixes.
+    same kind renders as changed, with a text diff of its messages;
+    --stat keeps one line per change instead.
     """
     store = scoped_store(ctx)
     old = resolve_cli_prompt(store, old_id)
@@ -561,7 +612,13 @@ def component_message_text(store: Store, object_id: ObjectId) -> str:
     return str(message.get("content") or "")
 
 
-@trace_group.command("replay")
+@trace_group.command(
+    "replay",
+    epilog=examples(
+        "sigil trace replay 4f9d01c2",
+        "sigil trace replay 4f9d01c2 --model fast --diff",
+    ),
+)
 @click.argument("object_id")
 @click.option(
     "--model",
@@ -584,10 +641,11 @@ def trace_replay(
 ) -> int:
     """Resend a stored prompt through the model boundary.
 
-    The request is rebuilt from the prompt's linked components and the
-    new answer is recorded with a ModelReplay derivation, so
-    replays are themselves traced. OBJECT_ID accepts a ref name, full
-    id, or unique prefix.
+    Rebuilds the exact request from the prompt's linked components,
+    verifies it against the recorded payload hash, and sends it to the
+    active model (--model replays against another profile). The new
+    answer is recorded with a ModelReplay derivation, so replays are
+    themselves traced.
     """
     store = scoped_store(ctx)
     prompt_id, _ = resolve_cli_prompt(store, object_id)
@@ -729,18 +787,32 @@ def render_replay(
     return lines
 
 
-@trace_group.command("refs")
+@trace_group.command(
+    "refs",
+    epilog=examples("sigil trace refs"),
+)
 @click.pass_context
 def trace_refs(ctx: click.Context) -> int:
-    """List the mutable refs and the objects they point at."""
+    """List the mutable refs and the objects they point at.
+
+    Refs are stable names like turn/<id> that track moving targets;
+    any of them works where an ID argument is expected.
+    """
     pretty_print_json({"refs": list_trace_refs(store=scoped_store(ctx))})
     return 0
 
 
-@trace_group.command("prompts")
+@trace_group.command(
+    "prompts",
+    epilog=examples("sigil trace prompts"),
+)
 @click.pass_context
 def trace_prompts(ctx: click.Context) -> int:
-    """List recorded prompts with store size statistics."""
+    """List recorded prompts with store size statistics.
+
+    Emits JSON: per prompt its id, component count, and estimated
+    tokens, plus the store's object count and total bytes.
+    """
     store = scoped_store(ctx)
     stats = store.stats()
     pretty_print_json(
