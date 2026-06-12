@@ -719,6 +719,8 @@ def test_zsh_glyph_widget_rewrites_buffer_to_safe_dispatch_line() -> None:
                 BUFFER="+ echo captured"
                 __sigil_accept_line_with_glyph_dispatch
                 print -- "buffer=$BUFFER"
+                print -- "pre=$PREDISPLAY"
+                print -- "rh=$region_highlight"
                 eval "$BUFFER"
                 print -- "exit=$?"
                 """
@@ -729,6 +731,8 @@ def test_zsh_glyph_widget_rewrites_buffer_to_safe_dispatch_line() -> None:
         assert_success(result)
         assert result.stderr == ""
         assert "buffer=__sigil_dispatch" in result.stdout
+        assert "pre=+ echo captured " in result.stdout
+        assert "rh=0 16 fg=8" in result.stdout
         assert "ran:--shell echo captured" in result.stdout
         assert "exit=0" in result.stdout
         assert read_log(tmp) == ["run --shell echo captured"]
@@ -1328,6 +1332,50 @@ def test_interactive_glyph_line_recallable_with_up_arrow() -> None:
         finally:
             shell.kill()
         assert read_log(tmp) == ["ask hello", "ask hello"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_accepted_glyph_line_keeps_typed_text_with_dim_trailer() -> None:
+    # The finalized line shows the typed text (PREDISPLAY survives the final
+    # render) and the executed dispatch word renders dim (fg=8 -> 90m).
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub, env={"TERM": "xterm-256color"})
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline(", what's the deal")
+            shell.expect("\x1b[90m__sigil_dispatch")
+            shell.expect("answer")
+            shell.expect_prompt()
+            shell.exit()
+        finally:
+            shell.kill()
+        assert read_log(tmp) == ["ask what's the deal"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_glyph_display_decoration_does_not_leak_to_next_line() -> None:
+    # PREDISPLAY and region_highlight persist across zle sessions; the
+    # line-init hook must clear them or the next prompt repaints the old
+    # glyph text.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub, env={"TERM": "xterm-256color"})
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline(", hello")
+            shell.expect("answer")
+            shell.expect_prompt()
+            start = len(shell.output)
+            shell.run('print -- "ma""rker-clean"')
+            segment = shell.output[start:]
+            shell.exit()
+        finally:
+            shell.kill()
+        assert "marker-clean" in segment
+        assert ", hello" not in segment
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

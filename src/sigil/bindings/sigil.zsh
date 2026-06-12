@@ -286,9 +286,27 @@ __sigil_accept_line_with_glyph_dispatch() {
   typeset -g __sigil_dispatch_glyph="${reply[1]}"
   typeset -g __sigil_dispatch_text="${reply[2]}"
   typeset -g __sigil_dispatch_line="$BUFFER"
+  typeset -g __sigil_display_decorated=1
+  # Display only: PREDISPLAY survives the final line render and is never
+  # parsed, so the finalized line keeps showing what was typed while the
+  # executed dispatch word renders as a dim trailer. region_highlight
+  # offsets are buffer-relative; appending leaves other plugins' entries
+  # alone.
+  PREDISPLAY="$BUFFER "
   BUFFER="__sigil_dispatch"
   CURSOR=$#BUFFER
+  region_highlight+=("0 $#BUFFER fg=8")
   zle __sigil_accept_line_without_glyph_dispatch
+}
+
+__sigil_clear_glyph_display() {
+  emulate -L zsh
+  # PREDISPLAY and region_highlight persist across zle sessions; without
+  # this, the next prompt repaints the previous glyph line.
+  [[ "${__sigil_display_decorated:-0}" == "1" ]] || return 0
+  typeset -g __sigil_display_decorated=0
+  PREDISPLAY=""
+  region_highlight=()
 }
 
 __sigil_install_glyph_dispatch_widget() {
@@ -297,6 +315,8 @@ __sigil_install_glyph_dispatch_widget() {
   [[ "$__sigil_glyph_dispatch_widget_installed" == "1" ]] && return 0
   zle -A accept-line __sigil_accept_line_without_glyph_dispatch 2>/dev/null || return 0
   zle -N accept-line __sigil_accept_line_with_glyph_dispatch 2>/dev/null || return 0
+  autoload -Uz add-zle-hook-widget 2>/dev/null || true
+  add-zle-hook-widget line-init __sigil_clear_glyph_display 2>/dev/null || true
   __sigil_glyph_dispatch_widget_installed=1
 }
 

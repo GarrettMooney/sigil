@@ -1,14 +1,14 @@
 # Sigil notes
 
 The core is hardened and the delegation ledger is queryable end to end:
-Stages 1–3 are landed (turn/effect records, the SQLite index + trace-graph
-bridge, and the query surface — `sigil log`, `blame`, `log show`, `?` v2
-with the model line, and the `query_log` ask tool). The trace explorer has
-its plumbing and porcelain (Stages A–B: forward index, resolver,
-`trace log|show|tree`). The bottom-up improvement walk is merged. What
-remains: web tools (proposal below), explorer Stages C–D (diff/replay,
-cross-session scope), ledger Stage 4 (durable/global/portable), and two
-small unblocked fixes.
+ledger Stages 1–3 are landed, the trace explorer has its plumbing,
+porcelain, and diff/replay (Stages A–C, graduated live), ask is folded
+into step, the zsh binding is owned end to end (pty harness, zero-fork
+spool, session-per-pty, raw glyph dispatch, `+` completion), and the
+public CLI exit codes are named constants. What remains: web tools
+(proposal below, open questions pending), the tool-contract CLI surface
+(proposal below), ledger Stage 4 (durable/global/portable), and explorer
+Stage D (cross-session scope, search).
 
 ## Decisions in force
 
@@ -54,6 +54,39 @@ small unblocked fixes.
   neither module is a natural home for both, so the 3-line function
   stays twice rather than coupling display to compaction.
 
+## Shell binding findings (2026-06-12)
+
+Durable facts from the own-zsh work, kept because they explain current
+behavior:
+
+- The `handoff shell-turn` CLI command and `append_shell_turn` are gone;
+  the spool (`shell-turns.spool`, `\x1f`/`\x1e`-delimited) is the only
+  binding→CLI recording path, claimed by rename, orphans recovered
+  after 60s. Measured recording cost 0.05ms/command (was 35–45ms warm).
+- zshaddhistory return-1 lines *linger* in internal history until the
+  next command executes; the widget therefore does not print -s — the
+  dispatch function inserts the original line while the rejected
+  dispatch line is the one being executed, which replaces the linger.
+  First up-arrow recalls what was typed.
+- The glyph aliases stayed: alias expansion runs before globbing, which
+  is what lets a bare `?` reach the function in eval/script contexts.
+  Interactive lines never reach them (widget first).
+- The accepted glyph line keeps showing what was typed: PREDISPLAY
+  survives the final zle render (verified empirically) and is never
+  parsed, so the widget sets it to the original buffer and dims the
+  rewritten dispatch word with a buffer-relative `region_highlight`
+  entry. Both persist across zle sessions, so a `zle-line-init` hook
+  (chained via `add-zle-hook-widget`) clears them. Two related facts:
+  the executed line is read from BUFFER *after* the widget chain
+  returns — display and execution cannot be made to differ by buffer
+  swapping — and a suspended external command launched from a function
+  lists with empty text in `jobs` for any function, not just ours.
+  zsh-syntax-highlighting may recolor the trailer (it rewrites
+  region_highlight); degradation is cosmetic only.
+- Harness lesson: macOS pty buffers are small; a blind sleep between
+  pty writes can block the shell mid-write and make signals appear
+  lost. `InteractiveZsh.settle()` drains while waiting.
+
 ---
 
 # Proposal: Sigil tool contracts and reviewable writes
@@ -74,9 +107,9 @@ orchestrator over them.
 - The invariant: Zeta never has a tool schema that the CLI cannot
   validate and run.
 
-This likely means moving executable tool modules out of
-`src/sigil/zeta/tools/` over time into `src/sigil/tools/`, while keeping
-the model-facing `ToolSpec` model under `sigil.zeta`.
+The concrete built-ins already live in `src/sigil/tools/` with the
+model-facing `ToolSpec` protocol and registry under `sigil.zeta.tools`;
+what remains is the contract-backed CLI surface below.
 
 ## Contract surfaces
 
@@ -238,88 +271,6 @@ The useful unit is the proposal batch, not each write call. Let the
 model finish a coherent proposal batch, then review the whole patch
 once.
 
----
-
-# Plan: move concrete tool implementations out of Zeta
-
-Decision: keep the model-facing tool protocol in `sigil.zeta`, but move
-the concrete built-in tool implementations to `sigil.tools`.
-
-## Observations
-
-- `src/sigil/zeta/tools/` currently mixes two concerns:
-  - Zeta/runtime concerns: `ToolSpec`, `ToolImpl`, effect metadata,
-    argument validation, registry state, model-facing metadata.
-  - Sigil capability implementations: `bash`, `read`, `write`, `edit`,
-    `grep`, `ls`, `query_log`, and CLI plugin loading.
-- The implementations touch Sigil-owned surfaces: shell execution,
-  filesystem reads/writes, handoff protocol, ledger, state, display
-  formatting, and user config.
-- The registry and protocol are still naturally Zeta-owned because they
-  describe what the model can call and how calls are validated/dispatched.
-- Tests currently import implementations from `sigil.zeta.tools`, so the
-  move needs test updates at the same time.
-
-## Target boundary
-
-- Keep in `sigil.zeta.tools`:
-  - `base.py` with `ToolSpec`, `ToolImpl`, effect kinds, diagnostics,
-    and common result helpers that are part of the model-call protocol.
-  - the registry/dispatcher in `__init__.py`: built-in registration,
-    plugin registration, schema validation, argument validation, and
-    direct/handoff dispatch.
-- Move to `sigil.tools`:
-  - concrete built-ins: `bash.py`, `read.py`, `write.py`, `edit.py`,
-    `grep.py`, `ls.py`, `query_log.py`.
-  - command-backed plugin implementation if it remains a Sigil feature
-    rather than generic Zeta infrastructure.
-- The direction of dependency should be:
-  - `sigil.tools.*` imports protocol helpers from `sigil.zeta.tools.base`.
-  - `sigil.zeta.tools` imports concrete tools from `sigil.tools` only at
-    registry assembly time.
-  - `sigil.zeta` runtime code continues to talk to the registry, not to
-    individual implementations.
-
-## Step-by-step implementation
-
-1. Add/prepare `src/sigil/tools/` by moving the concrete tool modules
-   there. Keep file contents as unchanged as possible, adjusting only
-   relative imports.
-2. Update `sigil.zeta.tools.__init__` so it imports built-ins from
-   `sigil.tools` and continues to expose the same registry functions.
-3. Update tests that import individual built-ins to use `sigil.tools.*`.
-   Keep tests that exercise registry behavior on `sigil.zeta.tools`.
-4. Run focused tests first:
-
-```sh
-uv run pytest tests/test_zeta_tools.py tests/test_zeta_agent.py tests/test_zeta_trace.py
-```
-
-5. Run the full suite:
-
-```sh
-uv run pytest
-```
-
-6. Because this plan updates `notes.md`, run pre-commit after code and
-   docs are settled:
-
-```sh
-uv run pre-commit run --all-files
-```
-
-## Risks to watch
-
-- Relative imports in moved modules, especially `query_log`, which
-  lazily imports `display`, `ledger`, and `state`.
-- Plugin loader placement: if command-backed plugins are part of the
-  registry contract, leave `plugins.py` in Zeta; if they are Sigil
-  capability discovery, move it with the concrete tools. My current
-  preference is to move it to `sigil.tools.plugins` because it reads
-  `~/.zeta/tools.toml` and constructs executable tool implementations,
-  while the registry only consumes the loaded implementations.
-- Public import compatibility is not required unless Remi asks for it.
-
 ## Future staged write shape
 
 Potential commands:
@@ -336,82 +287,6 @@ But `--staged` should be an enforced tool/runtime mode, not merely a
 prompt convention. In `,,`, the runner should force mutating tools into
 staged/proposal mode by construction; prompts can describe that mode but
 must not be the safety mechanism.
-
----
-
-# Next: explorer Stage C — implementation plan (in worktree
-# `trace-explorer-stage-c`)
-
-`trace diff` and `trace replay`, made concrete against the landed
-Stage A/B code and `docs/zeta-prompt-trace.md` (which promises both).
-
-Implemented, merged (3dfe676 + af247e4), and graduated live: replaying
-the real fd81e241 prompt against the local endpoint reported
-`payload verified` — the rebuilt request hashes to the recorded
-payload — and `tree --down` shows the `SigilModelReplay:v1` answers
-next to the original. The live run exposed one rendering gap, fixed in
-af247e4: tool-call-only answers now render as `→ bash` instead of
-nothing. A worked walkthrough with the real transcript lives in
-`docs/demos/trace-replay.md` (linked from the README). One caveat
-observed on the real store: when many components of the same kind
-change, kind-ordered diff pairing is positional — exact for the
-same-objective regression-hunt case the roadmap targets, approximate
-for prompts far apart in a conversation.
-
-## Observations
-
-- The doc's reconstruction claim holds in code: a prompt object's links
-  are the components in message order; message components carry
-  `data["message"]`; the tool descriptors ride in the
-  `tool_descriptor_set` component's `data["tools"]`; `tool_choice`
-  ("auto") and the body constants (temperature, stream options) live in
-  `chat_completion_request_body`; `max_tokens` and `selected_model` are
-  in the prompt's `SigilPromptBuilder:v1` derivation params. So the
-  exact request payload is rebuildable and `data["payload_sha256"]`
-  verifies the rebuild.
-- The original answer is one forward query away:
-  `derivations_for_input(prompt_id)` filtered to
-  `SigilModelResponse:v1` yields the assistant_message object(s),
-  ordered by `created_at` (latest wins when retries exist).
-- Content addressing makes the diff set algebra: identical component
-  id = unchanged; ids only in A = removed; only in B = added; a
-  removed/added pair of the same kind is a change worth a text diff of
-  the two `data["message"]` contents.
-- Replays must be traced like everything else: a new
-  `assistant_message` object linked to the prompt plus a
-  `SigilModelReplay:v1` derivation — `trace tree --down` from the
-  prompt then shows original and replay side by side.
-
-## Decisions (mine, flag if wrong)
-
-1. **Reconstruction lives in `zeta/prompt/builder.py`** —
-   `reconstructed_prompt_request(store, prompt_id)` returning messages,
-   tools, max_tokens, selected_model, and a `payload_verified` bool;
-   exported through `zeta.prompt`. The CLI consumes it; replay never
-   re-renders components by hand.
-2. **`trace diff A B`**: component-level by id; removed/added pairs of
-   the same kind render as changed with a unified text diff of their
-   message contents; `--stat` keeps the one-line-per-component view and
-   suppresses text diffs. Non-prompt arguments are a ClickException.
-3. **`trace replay ID [--model PROFILE] [--diff]`**: model = the named
-   profile (via `resolve_model_profile`), else the session's active
-   selection, else env defaults; the request reuses the original
-   max_tokens. Prints the hash-verification status, the original
-   answer, the replay answer (or a unified diff with `--diff`), and the
-   new object's short id. The replay is recorded fail-open like other
-   trace writes.
-4. **Plain text, no rich** — Stage B's convention; tests monkeypatch
-   `chat_completion_messages`, no network.
-
-## Work items (each: tests → impl → docs → pre-commit)
-
-1. Builder reconstruction + payload verification (round-trip test
-   against a real `PreparedPrompt`; tampered component → not verified).
-2. `cli/trace.py`: `trace diff` (+ `--stat`).
-3. `cli/trace.py`: `trace replay` (+ `--model`, `--diff`), recording the
-   replay derivation.
-4. README trace section + one-line help; `docs/zeta-prompt-trace.md`
-   gains the "exists now" sentence for diff/replay.
 
 ---
 
@@ -533,152 +408,6 @@ text; `web_search` queries a search backend and returns ranked results
 
 ---
 
-# Include reasoning in session transcript (done)
-
-Landed as eae7f78 (thinking on by default, `[[models]]` effort config),
-bf5c583 (reasoning as plain italic text, dim user-panel scaffolding),
-6b11d93 (cwd-relative paths in tool summaries). Verified live against
-llama.cpp + Qwen3.6.
-
-The model captures `reasoning_content` from the stream
-(`ChatStreamAccumulator.reasoning_content`), but
-`assistant_message_event()` in `zeta/agent.py` drops it — only `content`
-and `tool_calls` land in the event. The transcript renderer
-(`transcript_assistant_block`) never sees it.
-
-**Plan:** carry `reasoning_content` through the event and render it in
-`session transcript`.
-
-- `assistant_message_event()`: when the assistant response has
-  `reasoning_content`, store it as `event["reasoning"]`.
-- `transcript_assistant_block()`: if the event has reasoning, render it
-  before the main content in a separate color and italic (Remi). The
-  display layer themes through named ANSI colors that the terminal's
-  Rose Pine theme maps onto the palette (magenta = sigil, cyan = you,
-  yellow = aborted), so reasoning takes the unused `blue` (Rose Pine
-  foam). Rendered as plain `Text(reasoning, style="italic blue")`, no
-  Panel (Remi): panels denote messages, plain lines denote process —
-  reasoning sits with tool calls, not with answers. The pager in
-  `session transcript` makes it navigable.
-- Live loop: do not render reasoning inline. `render_transcript` is
-  consumed only by `session transcript` (`cli/session.py`), so the live
-  loop is untouched by construction; the `ThinkingStatus` timer is
-  enough.
-
-This gives users who want to inspect the model's reasoning a scrollable
-record without polluting the interactive experience.
-
-**Round-trip fix (found live):** the first cut only changed the event
-and the renderer; `sigil session transcript` still showed nothing
-because `current_timeline()` projects events back from trace objects
-and the projection rebuilt assistant events from `content`/`tool_calls`
-only. Reasoning now follows the same dedup path as content: the
-assistant object's `message` (which already stores `reasoning_content`)
-is the single copy, `stored_event_payload` drops the inline `reasoning`
-from the run event, and both projection paths
-(`assistant_event_from_object` via `chat_message_event`, and
-`rehydrated_assistant_event`) restore it as `event["reasoning"]`. The
-model-facing conversion (`event_chat_message`) never carries it, so
-prior-turn reasoning is not resent to the model.
-
-**Thinking on by default (Remi):** the transcript pipeline was correct
-but starved — `chat_completion_request_body` hardcoded
-`chat_template_kwargs: {"enable_thinking": false}` into every request,
-so the model (llama.cpp + Qwen3.6, which emits `reasoning_content` in
-both streaming and non-streaming — verified by probe) never produced
-reasoning to record. Decision: thinking is on by default and
-configurable per `[[models]]` profile with the Responses API
-reasoning-effort vocabulary — `thinking = "none" | "minimal" | "low" |
-"medium" | "high"`; omitted means the model's own default. `"none"`
-maps to `chat_template_kwargs: {enable_thinking: false}`, an effort
-level is sent as `reasoning_effort`. The value
-rides `ModelSelection` → `AgentConfig` → request body, and joins
-`max_tokens`/`selected_model` in the prompt builder derivation params
-so replay reconstruction stays exact; a prompt recorded without the
-param predates the change and rebuilds with thinking disabled, keeping
-`payload_verified` true on existing stores.
-
-**Objective label removed (Remi):** `zeta_context_message` no longer
-prefixes the user objective with `Objective:`; the message is now the
-objective followed by the `cwd:` section. `agent_prompt` in
-`workflows/step.py` still says `Objective: {objective}` inside the step
-instruction — left alone, that file is mid-refactor (fold ask into
-step).
-
----
-
-# Proposal: fold ask into step
-
-Make `ask.py` a thin wrapper like `do.py`/`propose.py` (35 lines each vs
-ask's 576). The turn-loop duplication is a refactor; the rest is three
-product decisions.
-
-## Observations
-
-- Where ask.py's 576 lines go: entry preprocessing (~60 —
-  `ask_requested` event, skill expansion, `prepend_recent_turns`),
-  the `run_tool_ask` turn loop (~120 — a near-duplicate of
-  `run_agent_step`'s orchestration), `AskEventRecorder` (~45),
-  fallback machinery (~190 — `fallback_*`,
-  `run_fallback_answer_with_status`, `StreamDeltaTracker`),
-  `record_answer` (~90 — the `answer` event, `--json` printing, the
-  final-render dance).
-- The orchestration skeleton is identical in both loops: server check
-  → renderer → ledger → user event → `run_agent_turn` → replay →
-  abort/finish. Variation points are already clean: both recorders
-  subclass `TurnEventRecorder`; the outcome mapping converges for free
-  (ask's read-only tools never produce effects, so step's `EXECUTED if
-  ledger.effect_ids else ANSWERED` yields ANSWERED for ask).
-- Behavior divergence on no-final-text: step prints "stopped without a
-  final answer", records FAILED, exits 1; ask answers anyway via a
-  one-shot `chat_text` over a hand-built evidence digest and exits 0.
-  This exists because small local models stall — arguably every
-  workflow deserves the recovery, not just ask.
-- Inconsistency found: ask records the raw `ASK_SYSTEM_PROMPT` in its
-  user event (`ask.py:161`) while step records the assembled prompt
-  via `system_prompt(...)` (`step.py:114`). Folding fixes it for free.
-- The `answer` event and `last-tools.jsonl` predate the ledger; their
-  consumers are `sigil events` rendering (`cli/events.py:126`) and the
-  session-dir cleanup list. Post ledger Stages 1–3 the turn record
-  already answers "what did ask answer".
-- `--json` threads through renderer, recorder, thinking status, and
-  output; step has no JSON mode today.
-
-## Options
-
-1. **Extract the shared loop only (no behavior change).** One core in
-   `step.py` with a recorder hook, outcome mapping, and a
-   no-final-text policy; ask keeps fallback, `--json`, and
-   `record_answer`. Kills the 120-line duplicate; ask.py lands ~350
-   lines. A day-ish; 451 existing tests pin both paths.
-2. **Converge behavior, then fold (the route to a 35-line ask.py).**
-   Move the remaining features into step or retire them, per the open
-   questions below. 2–3 sessions; touches the `events` vocabulary.
-
-Proposal: 2, staged — extract the loop first (option 1 is its first
-commit), then land each product decision separately.
-
-## Closed (Remi, 2026-06-11)
-
-1. **Fallback answer: delete.** No promotion to step; a stalled turn
-   reports failure honestly (step's behavior: message + exit 1 +
-   FAILED outcome).
-2. **`--json`: delete.** Do/propose never had it (`step` has no
-   such flag); ask loses it rather than step gaining it.
-3. **`answer` event + `last-tools.jsonl`: retire.** The turn record is
-   the audit; `sigil events` keeps rendering old logs. Remove
-   `last-tools.jsonl` from `SESSION_FILES`.
-
-Consequences accepted (alpha, no backcompat): ask turns record through
-the step path — user event carries `workflow: "ask"` and the assembled
-system prompt (fixing the raw-vs-assembled inconsistency); tool and
-assistant events are workflow-tagged; ledger workflow stays `ask`.
-`step` gains a verbatim-prompt
-parameter so ask's prepend-context prompt skips the step instruction
-scaffolding.
-
----
-
 # Roadmap: delegation ledger
 
 The trace of what you delegated becomes the product. `?` grows from a
@@ -725,13 +454,17 @@ The ledger answers *what happened* — turns, effects, cost — and hands you
 prompt ids. This roadmap makes the trace store answer *why* and *what it
 saw* from those ids.
 
-Stages A–B are landed: the forward index (`derivation_inputs`,
+Stages A–C are landed: the forward index (`derivation_inputs`,
 `derivations_for_input`), the resolver (ref → exact id → unique prefix,
 shared with `log show`/`blame`), recency-ordered multi-kind `objects()`,
-and the porcelain (`trace log|show|tree`, plain text, shared one-line
-renderers in `display/summarize.py`). Three commands take you from
-"what happened" to the exact bytes the model saw:
-`sigil log` → `log show <turn>` → `trace show <prompt-prefix>`.
+the porcelain (`trace log|show|tree`, plain text, shared one-line
+renderers in `display/summarize.py`), and diff/replay (`trace diff`
+with `--stat`, `trace replay` with `--model`/`--diff`, replays recorded
+as `SigilModelReplay:v1` derivations; graduated live, walkthrough in
+`docs/demos/trace-replay.md`). Known caveat: when many components of
+the same kind change, kind-ordered diff pairing is positional — exact
+for the same-objective regression-hunt case the roadmap targets,
+approximate for prompts far apart in a conversation.
 
 Structural facts to build on:
 
@@ -742,29 +475,6 @@ Structural facts to build on:
 - Prompt objects store the payload content hash plus linked components;
   the exact request is reconstructible from the component closure, which
   is what replay and diff consume.
-
-## Stage C — Diff and replay
-
-The two commands the design doc already promises. These prove the
-object-graph design publicly — they're the demo.
-
-1. `trace diff <a> <b>` (prompts): component-level first — added /
-   removed / replaced components by kind, matched by id (identical id =
-   skip); text diff only inside changed components. `--stat` for the
-   one-line-per-component view.
-2. `trace replay <id>` — reconstruct the stored request from its
-   component closure and resend it through the model boundary (honoring
-   the session's active model profile, or `--model`), recording the new
-   `assistant_message` with a `SigilModelReplay:v1` derivation so
-   replays are themselves traced. Print old vs new answer; `--diff` to
-   diff them.
-3. Natural follow-up once both exist: `trace diff` between a prompt and
-   its replay's prompt is the regression-hunting workflow (same
-   objective, different model/context).
-
-Graduation: a model-behavior question gets answered by replaying a
-stored prompt against a different profile and diffing — no manual prompt
-reconstruction.
 
 ## Stage D — Scope: cross-session and search
 
@@ -778,353 +488,3 @@ reconstruction.
 
 Graduation: "which session was I in when I asked about X last week" is
 answerable from the CLI without opening sqlite3 by hand.
-
----
-
-# Working note: Q2 2026 Board meeting Google Doc
-
-Observation: Remi asked whether I can read the Google Doc titled "Q2 2026 Board meeting." This is a read-only Google Drive/Docs connector task; no local code changes or Google Doc edits are needed.
-
-Plan:
-1. Use Google Drive search/recent-document discovery to find the exact Google Doc by title.
-2. Read the document through the Google Docs connector once the file identity is confirmed.
-3. Report whether I can access it, and summarize or quote only if Remi asks for that next.
-
-Update plan after Remi asked to improve the flow:
-1. Edit the live Google Doc "2026 Q2 .txt Board Memo" directly through the Google Docs connector.
-2. Preserve the existing argument and facts, but change the reading order so the enterprise-pilot momentum appears right after the executive summary.
-3. Tighten the tool-calling market explanation so it supports the board memo rather than reading as a standalone category essay.
-4. Separate litigation detail from the board asks into a clearer executive-session section.
-5. Verify each section-sized edit with connector readback before continuing.
-
-Update plan after Remi asked to add what is missing:
-1. Add a short "What changed since March" section after the executive summary to summarize the state transition.
-2. Add "Q3 success criteria" before Board Asks so the board has a concrete scoreboard.
-3. Add a "Risks" section before Board Asks so the downside case is explicit rather than distributed across the memo.
-4. Rewrite Board Asks so each item is answerable and action-oriented.
-5. Update the top outline and verify the final document structure through connector readback.
-
-## Review fixes for the registry refactor (2026-06-11)
-
-Findings from the code review of the working tree, fix plan agreed with Remi
-(allowed-tools filtering stays out of the registry; deduplicate at the
-prompt/runtime layers instead):
-
-1. Keep `enabled_tool_names` only in `prompt/system.py` (sorted, prompt-cache
-   stable); `builder.py` and `components.py` import it from there.
-2. Keep `model_tool_descriptors`/`tool_descriptor_name` only in
-   `prompt/system.py`; `agent.py` imports `model_tool_descriptors`.
-3. Move the order-preserving `enabled_tool_tuple` from `workflows/step.py`
-   to `zeta/agent.py`; `agent_allowed_tools` delegates to it so the step and
-   agent paths share one filtering contract. Caller order is load-bearing:
-   tests/test_workflows.py:2222 pins ASK_TOOLS order in the ledger contract.
-4. `handle_tool_call`: replace the `list_tool_names()` membership test with
-   `tool_registry.get(name) is None`.
-5. Trim vestigial generality from `ToolRegistry.register` (`replace`,
-   `origin`, isinstance check) and drop the `_origins` dict; `tools_list`
-   states `origin: builtin` directly. Re-add hooks when plugins return.
-
-Follow-up (done): `ToolRegistry.tools_list` had no production caller left
-after the analyze-surface removal — deleted; its test now pins the
-registered-builtins invariant via `list_tool_names`. Second pass, also done:
-`tool_metadata` deleted (tests use a local accessor over
-`get(name).spec.metadata()`); `model_tool_descriptors` removed from the
-registry — the prompt layer builds descriptors from specs directly, which
-also deleted the `tool_descriptor_name` parse-back helper; `ExecutionMode`
-is defined once in `tools/registry.py` and imported by agent/step; renamed
-`enabled_tool_tuple` to `registered_tools` and the test alias `zeta_tools`
-to `tool_registry`.
-
-## Proposal: own zsh completely (option 5 — no porting)
-
-What it would take to make the zsh binding flawless: fix the `+` widget's
-job-control limitation, harden tmux/multi-session behavior, and tighten
-binding latency. Grounded in the current `bindings/sigil.zsh`, `cli/run.py`,
-`session.py`, and measurements on this machine.
-
-**Implemented (2026-06-12), five commits:** pty harness (19f853b),
-zero-fork spool (44f48c7), session-per-pty + doctor check (e7327c5),
-raw-dispatch widget (c7a2aa1), completion shim + coexistence pins
-(9cb6207). Open questions resolved as proposed: ingest at every CLI
-entry, Ctrl-Z suspends the capture wrapper with the command, no
-parameter expansion in prompts. Smoke-tested end to end against the
-real CLI in a real interactive zsh: pipeline capture, spool → `?`,
-Ctrl-Z/jobs/fg/Ctrl-C on `+`, `$?` propagation, up-arrow recall,
-EPOCHREALTIME session ids. Measured recording cost 0.05ms/command
-(was 35–45ms warm).
-
-Implementation findings worth keeping:
-
-- The `handoff shell-turn` CLI command and `append_shell_turn` are gone;
-  the spool (`shell-turns.spool`, `\x1f`/`\x1e`-delimited) is the only
-  binding→CLI recording path, claimed by rename, orphans recovered
-  after 60s.
-- zshaddhistory return-1 lines *linger* in internal history until the
-  next command executes; the widget therefore does not print -s — the
-  dispatch function inserts the original line while the rejected
-  dispatch line is the one being executed, which replaces the linger.
-  First up-arrow recalls what was typed.
-- The glyph aliases stayed: alias expansion runs before globbing, which
-  is what lets a bare `?` reach the function in eval/script contexts.
-  Interactive lines never reach them (widget first).
-- Cosmetic, accepted for now: at accept time the typed glyph line
-  visibly morphs into `__sigil_dispatch` on the prompt line, and a
-  suspended `+` job lists with an empty command text in `jobs`.
-  Candidate refinement if it grates: POSTDISPLAY or a printed dim echo
-  of the original line.
-- Harness lesson: macOS pty buffers are small; a blind sleep between
-  pty writes can block the shell mid-write and make signals appear
-  lost. `InteractiveZsh.settle()` drains while waiting.
-
-### Observations
-
-- **`+` job control.** The accept-line widget *executes* `sigil run --shell`
-  inside zle (`__sigil_accept_line_with_plus_capture`). Anything run inside a
-  widget is outside the shell's job table: no Ctrl-Z, no `jobs` entry, signal
-  handling is the ad-hoc `zle -I` / `reset-prompt` dance. The README documents
-  this as a limitation rather than fixing it.
-- **`+` multiline gap.** The capture regex `'^\+[[:space:]]+(.+)$'` cannot
-  match a multiline buffer (`.` does not cross newlines), so a multiline
-  `+` buffer falls through to plain zsh and dies on `command not found: +` —
-  contradicting the README's "multiline buffers intact" claim.
-- **tmux session bleed.** `SIGIL_SESSION_ID` is exported once per shell and
-  inherited through the environment. The tmux server captures its environment
-  at server start, and every new pane/window inherits it — so all panes share
-  one session id. Consequences: `recent-turns.jsonl` interleaves commands from
-  unrelated panes, `--continue` continuity crosses panes, and a `,,` handoff
-  staged in pane A is "resolved" by pane B's next command
-  (`latest_unresolved_shell_handoff` reads the shared timeline). Same bleed
-  for nested terminals that re-source the binding with the variable set.
-- **Glyph prompts go through the zsh parser.** `,`/`,,`/`,,,`/`?` are
-  aliases over functions, so the natural-language text is parsed as shell
-  grammar before the function sees it. `, what's the deal` leaves an
-  unbalanced quote and drops the user into `quote>`; `(` is a parse error;
-  `!` can fire history expansion; `#` is stripped under
-  `interactive_comments`. `noglob` only papers over the globbing slice of
-  this class. Only `+` is currently exempt, because only `+` is captured
-  raw by the accept-line widget.
-- **Latency, measured.** Three independent costs:
-  1. `precmd` runs `sigil handoff shell-turn` synchronously before every
-     prompt draw: 35–45ms warm (venv entry point, this machine), ~300ms+
-     cold. Every command pays it.
-  2. The accept-line widget runs `$(__sigil_plus_capture_command "$BUFFER")`
-     — a fork via command substitution on **every Enter press**, including
-     empty lines and ordinary commands.
-  3. Source time forks twice: `$(command -v sigil)` and `$(uuidgen)`.
-- **Concurrency floor is already in place.** `ledger.sqlite3` and the trace
-  store both open with WAL + `busy_timeout=5000`. Per-session files become
-  single-writer once the session-bleed fix lands.
-- **Test gap.** `test_shell_bindings.py` covers the binding well, but only
-  through scripted non-interactive `zsh -c` with a fake CLI. Nothing
-  exercises zle: the `+` widget, job control, history recall, or prompt
-  latency are untested today. Interactive behavior is exactly the surface
-  "own one shell" promises.
-
-### Plan
-
-Ordered so the harness pins current behavior before the riskiest change.
-
-**1. Interactive test harness (the enabling investment).**
-Drive a real interactive `zsh -i` under a pty (pexpect or stdlib `pty`),
-binding sourced, temp HOME, fake `sigil` on PATH — the interactive sibling
-of the existing scripted tests. First tests pin today's contract: `+`
-dispatch, glyph aliases, history filtering. This is most of the cost of
-option 5 and it is reusable for every future binding change.
-
-**2. Latency (smallest blast radius, immediately felt).**
-- Replace the synchronous per-command Python call with a pure-zsh spool
-  append: `precmd` writes one `${(qq)}`-quoted record (time, command,
-  status, cwd) to a per-session spool file with `print -r` — zero forks —
-  and every sigil CLI entry point ingests the spool before reading recent
-  turns. Ordering is preserved and there is no race: the reader does the
-  ingestion, so a `,,` issued immediately after a failure still sees it.
-  Backgrounding with `&!` is rejected for exactly that race.
-  This also front-runs roadmap Phase 3: the binding becomes a dumb
-  emitter; the spool is the proto-`sigil emit`.
-- Inline the `+` test in the widget as a pattern match on `$BUFFER` before
-  any command substitution; non-`+` lines take zero forks.
-- Source time: `__sigil_bin=${commands[sigil]:-sigil}` (no fork) and
-  session id from `zmodload zsh/datetime` + `EPOCHREALTIME` + `$$` instead
-  of `uuidgen`.
-- Targets: ordinary Enter = 0 forks; per-command prompt overhead < 1ms;
-  binding source < 5ms; `+` dispatch = 1 fork (sigil run itself).
-
-**3. tmux/multi-session.**
-- Tie the session id to the pty, not the environment: export
-  `SIGIL_SESSION_TTY` next to the id; on source, if the id is inherited but
-  the recorded tty differs from `$TTY`, regenerate both. Subshells and
-  `exec zsh` on the same pty keep continuity; every tmux pane, ssh login,
-  and new terminal window gets a fresh session. No tmux configuration
-  required of the user.
-- `sigil doctor` check: flag an inherited session id whose tty does not
-  match the current one.
-- Pty harness test: two ptys from one exported environment must end up with
-  distinct session ids; a same-pty subshell keeps its id.
-
-**4. One raw-dispatch widget for every glyph (job control + quoting,
-lands on the harness).**
-- The accept-line widget becomes the single interactive entry point for
-  all glyphs — `+`, `,`, `,,`, `,,,`, `?` — and it stops executing
-  anything. It captures the rest of the buffer raw, before any parsing,
-  stashes it in a `typeset -g` variable, rewrites the buffer to a fixed
-  safe line (`__sigil_dispatch <glyph>` reading the stash), and calls
-  `zle .accept-line`. The rewritten line contains no user text, so quotes,
-  parens, `#`, and `!` in prompts can never confuse the parser or trigger
-  history expansion — no more `quote>`. The glyph aliases and `noglob`
-  hacks go away; the named functions stay for scripts and non-interactive
-  use.
-- Job control comes with the same move: the command runs as a normal
-  foreground job. Ctrl-Z suspends `sigil run` and its child shell (one
-  process group), `jobs`/`fg`/`bg` work, Ctrl-C is ordinary INT delivery,
-  `$?` is set naturally, and preexec/precmd fire like any other command.
-- History: `print -s` the original glyph line in the widget so up-arrow
-  recalls what the user typed; extend the zshaddhistory filter to drop the
-  rewritten `__sigil_*` form. The rewritten line already matches the
-  `__sigil_*` recording exclusion, so no double record — pin with a test.
-- Fix the multiline capture while in there: prefix test
-  `[[ $BUFFER == '+'[[:space:]]* ]]` (and glyph siblings) plus parameter
-  stripping instead of the single-line regex, passing the whole remaining
-  buffer through.
-- Pty tests: `, what's the deal` runs without `quote>`; `, why (really)`
-  and `, fix it!` dispatch verbatim; `+ sleep 100` then Ctrl-Z shows a
-  suspended job, `fg` resumes, Ctrl-C interrupts; `+ false` leaves
-  `$?` = 1; multiline `+` pipelines round-trip.
-
-### Beyond friction removal: pleasantness gaps still in binding scope
-
-The four items above remove what users notice; these two are the positive
-polish that the plan should pick up, both small and binding-scoped:
-
-- **Completion behind `+`.** `+ cargo te<TAB>` falls back to file
-  completion because zsh treats `+` as the command word. Add a completion
-  shim that strips the glyph prefix and re-enters completion as though the
-  command started at the second word (the `_precommand`/`words=`
-  `(( CURRENT-- ))` idiom used by `sudo`/`nohup` completions).
-- **Ecosystem coexistence, pinned.** zsh-autosuggestions,
-  zsh-syntax-highlighting, and vi-mode plugins also wrap `accept-line`;
-  source order decides who wins. The pty harness gets matrix tests:
-  binding sourced before and after zsh-autosuggestions and
-  zsh-syntax-highlighting, asserting glyph dispatch and suggestion
-  behavior both survive. The named glyph functions staying defined is
-  what keeps highlighters painting `, …` as valid — pin that too, it is
-  currently luck.
-
-Out of binding scope but worth saying: once the binding is invisible,
-perceived pleasantness is dominated by the Python side — time to first
-streamed token for `,`, tool-trace rendering for `,,`. Option 5 does not
-move that needle and should not claim to.
-
-### Open questions for Remi
-
-1. Spool ingestion point: every CLI entry (`,`/`,,`/`?`/`step`) ingests on
-   start — acceptable, or should `?` stay pure-read and tolerate spool lag?
-   Proposal: ingest everywhere; it is one small append-file read.
-2. With buffer rewrite, Ctrl-Z suspends the `sigil run` wrapper together
-   with the user command — `fg` resumes both. Acceptable semantics, or
-   should suspension be documented as suspending the capture wrapper too?
-   Proposal: accept; it matches what `tee`-style wrappers do.
-3. Session-per-pty means `exec ssh`/reattach edge cases inherit whichever
-   pty they land on. Any continuity case you care about beyond tmux panes,
-   nested shells, and new windows?
-4. Raw glyph capture ends parameter expansion in prompts: today
-   `, explain $PWD` expands before the function sees it; after the change
-   the model receives the literal `$PWD`. Acceptable? Proposal: yes —
-   prompts are natural language, the cwd already rides in context, and
-   silent expansion is exactly the class of surprise being removed.
-
-## Operational maturity follow-up (2026-06-12)
-
-Request: fix root-user test assumptions and loosen the `rich>=15` floor.
-
-Observations:
-
-- `pyproject.toml` currently pins the runtime dependency as `rich>=15.0`.
-  The display code imports stable Rich primitives (`Console`, `Live`,
-  `Markdown`, `Panel`, etc.), so the floor can likely move lower.
-- `test_doctor_reports_expected_checks` patches `state_dir` to a temporary
-  directory and then assumes `check_state_writable` returns `ok`. That is a
-  test of the filesystem probe, not of doctor aggregation, and it can behave
-  differently when tests run with root-style permissions. The aggregation
-  test should patch `check_state_writable` directly.
-
-Plan:
-
-1. Add/update the doctor aggregation test so it does not depend on real
-   filesystem writability.
-2. Loosen the Rich dependency floor in `pyproject.toml`, then refresh
-   `uv.lock` with `uv lock`.
-3. Run the focused install tests, then the full suite. Since this updates
-   dependency metadata and notes, run pre-commit before finishing.
-
----
-
-# Implementation plan: harden exit codes only
-
-Goal: codify the public CLI exit codes first. Do not harden ledger
-schemas, trace objects, glyph behavior, or audit JSON in this pass.
-
-## Boundary
-
-Only stabilize process exit behavior that callers can observe from the
-CLI and shell binding:
-
-- successful command/workflow
-- usage/configuration error
-- model unavailable
-- permission or state-directory failure
-- tool/schema failure
-- interrupted/aborted execution
-
-## Location
-
-Keep the constants close to the CLI base, not as a broad public contract
-module yet. Add them in `src/sigil/cli/_base.py` unless the implementation
-shape makes a tiny sibling module under `src/sigil/cli/` clearer.
-
-The intent is that CLI modules and workflows import names, not magic
-integers, while keeping the contract visibly attached to the CLI layer.
-
-## Implementation
-
-1. Add named constants for the exit codes already present in behavior.
-   Start conservative:
-
-```python
-EXIT_OK = 0
-EXIT_USAGE = 2
-EXIT_MODEL_UNAVAILABLE = ...
-EXIT_STATE_ERROR = ...
-EXIT_TOOL_ERROR = ...
-EXIT_ABORTED = 130
-```
-
-2. Search for literal returns/`SystemExit` in CLI and workflow paths.
-   Replace only obvious public process outcomes. Do not normalize every
-   integer in helper code.
-
-3. Add or update focused tests that assert names map to current behavior:
-
-- successful command/workflow returns `EXIT_OK`
-- model-unavailable path returns `EXIT_MODEL_UNAVAILABLE`
-- permission/state failures return `EXIT_STATE_ERROR`
-- schema/tool failures return `EXIT_TOOL_ERROR` where currently exposed
-- interrupts/aborts return `EXIT_ABORTED` if already represented
-
-4. If existing behavior is inconsistent, preserve behavior unless the fix
-   is clearly part of the CLI contract. Flag any ambiguous exit-code
-   mismatch in notes before changing it.
-
-## Focused tests
-
-```sh
-uv run pytest tests/test_operators.py tests/test_workflows.py tests/test_install.py tests/test_security_state.py
-```
-
-## Release gate
-
-```sh
-uv run pytest
-uv run pre-commit run --all-files
-uvx --with radon radon cc src tests -s
-uv run complexipy src tests --plain --failed --max-complexity-allowed 25
-```

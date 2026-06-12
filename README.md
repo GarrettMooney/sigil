@@ -278,8 +278,10 @@ reach the model untouched instead of confusing the parser — and nothing in a
 prompt is expanded, so `, explain $PATH` asks about the literal `$PATH`.
 Captured lines are handed back to the shell as ordinary foreground commands:
 Ctrl-Z suspends a `+` command, it shows up in `jobs`, `fg` resumes it, and
-`$?` carries its exit status. In scripts and non-interactive shells the named
-glyph functions dispatch instead; `+` is interactive-only.
+`$?` carries its exit status. The accepted line keeps showing exactly what
+you typed, with a dim marker after it where the shell ran the handed-off
+dispatch. In scripts and non-interactive shells the named glyph functions
+dispatch instead; `+` is interactive-only.
 
 To install the CLI without punctuation shortcuts:
 
