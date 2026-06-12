@@ -10,25 +10,26 @@ export SIGIL_BINDING_LOADED="zsh"
 
 # ── CLI Resolution ───────────────────────────────────────────────────────
 
-# Resolve the CLI once at source time. SIGIL_BIN lets tests, local checkouts, and
-# packaged installs point the binding at a specific executable without changing
-# the user's PATH.
+# Resolve the CLI once at source time, fork-free: SIGIL_BIN lets tests, local
+# checkouts, and packaged installs point the binding at a specific executable;
+# otherwise the $commands hash answers without a subshell.
 if [[ -n "${SIGIL_BIN:-}" ]]; then
   typeset -g __sigil_bin="$SIGIL_BIN"
-elif command -v sigil >/dev/null 2>&1; then
-  typeset -g __sigil_bin="$(command -v sigil)"
 else
-  typeset -g __sigil_bin="sigil"
+  typeset -g __sigil_bin="${commands[sigil]:-sigil}"
 fi
 
 # ── Session And Terminal Context ─────────────────────────────────────────
 
+zmodload zsh/datetime 2>/dev/null
+
 # A session id scopes continuity files such as recent-turns.jsonl. The id is
 # generated once per shell process and inherited by subprocesses so CLI calls from
-# the same terminal window write to the same session directory.
+# the same terminal window write to the same session directory. EPOCHREALTIME
+# plus the pid is unique without forking uuidgen.
 if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
-  if command -v uuidgen >/dev/null 2>&1; then
-    export SIGIL_SESSION_ID="$(uuidgen)"
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then
+    export SIGIL_SESSION_ID="${EPOCHREALTIME/./-}-$$"
   else
     __sigil_session_tty="${TTY:-tty}"
     export SIGIL_SESSION_ID="${__sigil_session_tty:t}-$$"
@@ -74,6 +75,10 @@ __sigil_glyphs_enabled() {
 # Every interactive command is recorded at the next prompt: command line,
 # exit status, and cwd — never output. A leading space skips recording (the
 # ignorespace convention); SIGIL_RECORD=0 disables recording entirely.
+#
+# Recording is a zero-fork spool append; the CLI ingests the spool at its
+# next invocation, before anything reads recent turns or failure context.
+# Forking the CLI here would add its startup time to every prompt draw.
 typeset -g __sigil_zeta_current_command=""
 
 __sigil_recording_enabled() {
@@ -96,12 +101,15 @@ __sigil_zeta_recordable_command() {
 
 __sigil_zeta_record_shell_turn() {
   emulate -L zsh
-  local command="$1"
+  # Field separator \x1f and record separator \x1e cannot appear in fields;
+  # stray control bytes in pasted commands become spaces.
+  local command="${1//[$'\x1e\x1f']/ }"
   local exit_status="$2"
-  "$__sigil_bin" handoff shell-turn \
-    --command "$command" \
-    --status "$exit_status" \
-    --cwd "$PWD" >/dev/null 2>&1 || true
+  local dir="${SIGIL_SESSION_DIR:-${SIGIL_STATE_DIR:-$HOME/.sigil}/sessions/${SIGIL_SESSION_ID:-default}}"
+  [[ -d "$dir" ]] || command mkdir -p -- "$dir" 2>/dev/null || return 0
+  print -rn -- \
+    "${EPOCHREALTIME:-}"$'\x1f'"${command}"$'\x1f'"${exit_status}"$'\x1f'"${PWD//[$'\x1e\x1f']/ }"$'\x1e' \
+    >> "$dir/shell-turns.spool" 2>/dev/null || true
 }
 
 __sigil_zeta_before_command() {
@@ -225,10 +233,16 @@ __sigil_run_plus_capture_line() {
 __sigil_accept_line_with_plus_capture() {
   emulate -L zsh
   local command exit_status
-  command="$(__sigil_plus_capture_command "$BUFFER")" || {
+  # The match runs inside the shell: a plain Enter press must not fork.
+  if [[ "$BUFFER" != '+'* ]] || ! [[ "$BUFFER" =~ '^\+[[:space:]]+(.+)$' ]]; then
     zle __sigil_accept_line_without_plus_capture
     return $?
-  }
+  fi
+  command="${match[1]}"
+  if [[ -z "${command//[[:space:]]/}" ]]; then
+    zle __sigil_accept_line_without_plus_capture
+    return $?
+  fi
 
   BUFFER=""
   CURSOR=0

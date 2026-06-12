@@ -255,8 +255,13 @@ def record_turn(
     stdout_snippet: str | None = None,
     stderr_snippet: str | None = None,
     duration_ms: int | None = None,
+    at: float | None = None,
 ) -> None:
-    """Persist one shell turn and fan out to failure recording on non-zero exit."""
+    """Persist one shell turn and fan out to failure recording on non-zero exit.
+
+    ``at`` carries the original timestamp for turns recorded after the fact,
+    such as spooled binding records; live recording stamps the current time.
+    """
     if turn_is_skippable(command):
         return
 
@@ -265,7 +270,7 @@ def record_turn(
     stderr_text = truncate_snippet(stderr_snippet)
     entry = {
         "id": str(uuid.uuid4()),
-        "time": time.time(),
+        "time": time.time() if at is None else at,
         "session": session_id(),
         "command": command,
         "status": status,
@@ -319,6 +324,72 @@ def record_run_ledger(
     )
     turn["cwd"] = cwd
     append_turn_record(turn)
+
+
+SHELL_TURN_SPOOL_FILE = "shell-turns.spool"
+SPOOL_FIELD_SEPARATOR = "\x1f"
+SPOOL_RECORD_SEPARATOR = "\x1e"
+SPOOL_ORPHAN_AGE_SECONDS = 60.0
+
+
+def ingest_spooled_turns() -> int:
+    """Record shell turns spooled by the bindings; return how many landed.
+
+    The binding appends raw spool records with zero subprocess cost; every
+    CLI invocation calls this matching reader, so spooled turns are recorded
+    before anything reads recent turns or failure context. The spool is
+    claimed by rename, which keeps concurrent CLI processes from
+    double-recording the same records.
+    """
+    recorded = 0
+    for path in _claimed_spool_files():
+        recorded += _record_spool_text(
+            path.read_text(encoding="utf-8", errors="replace")
+        )
+        path.unlink(missing_ok=True)
+    return recorded
+
+
+def _claimed_spool_files() -> list[Path]:
+    root = session_dir()
+    spool = root / SHELL_TURN_SPOOL_FILE
+    claim = spool.with_name(f"{spool.name}.{os.getpid()}.ingesting")
+    claimed: list[Path] = []
+    try:
+        spool.rename(claim)
+        claimed.append(claim)
+    except OSError:
+        pass
+    for orphan in root.glob(f"{SHELL_TURN_SPOOL_FILE}.*.ingesting"):
+        if orphan == claim:
+            continue
+        try:
+            age = time.time() - orphan.stat().st_mtime
+        except OSError:
+            continue
+        if age > SPOOL_ORPHAN_AGE_SECONDS:
+            claimed.append(orphan)
+    return claimed
+
+
+def _record_spool_text(text: str) -> int:
+    recorded = 0
+    for record in text.split(SPOOL_RECORD_SEPARATOR):
+        fields = record.split(SPOOL_FIELD_SEPARATOR)
+        if len(fields) != 4:
+            continue
+        raw_time, command, raw_status, cwd = fields
+        try:
+            status = int(raw_status)
+        except ValueError:
+            continue
+        try:
+            at = float(raw_time)
+        except ValueError:
+            at = time.time()
+        record_turn(command, status, cwd, at=at)
+        recorded += 1
+    return recorded
 
 
 def _append_recent_turn(entry: dict[str, Any]) -> None:

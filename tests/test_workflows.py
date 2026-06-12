@@ -42,7 +42,7 @@ from sigil.protocols import (
     turn_contract,
     turn_record,
 )
-from sigil.session import read_event_log, recent_turns, record_turn
+from sigil.session import read_event_log, record_turn
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
 from sigil.zeta import agent as zeta_agent
@@ -805,38 +805,6 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
     assert output.out.count("edited and verified") == 1
     assert "❯" not in output.out
     assert "❯ edit   a.txt  (applied · a.txt)" in output.err
-
-
-def test_sigil_handoff_shell_turn_records_recent_turn(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
-
-    result = CliRunner().invoke(
-        sigil_cli,
-        [
-            "handoff",
-            "shell-turn",
-            "--command",
-            "uv run pytest",
-            "--status",
-            "1",
-            "--cwd",
-            "/repo",
-        ],
-    )
-
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert data["type"] == "shell_turn_recorded"
-    assert data["command"] == "uv run pytest"
-    turns = recent_turns()
-    assert len(turns) == 1
-    assert turns[0]["command"] == "uv run pytest"
-    assert turns[0]["status"] == 1
-    assert turns[0]["turn_cwd"] == "/repo"
 
 
 def test_zeta_step_only_the_do_workflow_executes_directly() -> None:

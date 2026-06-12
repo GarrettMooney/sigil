@@ -8,6 +8,7 @@ shell-turn recording must not pay for the heaviest workflow's import graph.
 from __future__ import annotations
 
 import importlib
+from contextlib import suppress
 
 import click
 
@@ -21,7 +22,6 @@ COMMAND_MODULES = {
     "blame": "sigil.cli.log",
     "doctor": "sigil.cli.install",
     "events": "sigil.cli.events",
-    "handoff": "sigil.cli.handoff",
     "install": "sigil.cli.install",
     "log": "sigil.cli.log",
     "model": "sigil.cli.model",
@@ -85,6 +85,13 @@ def cli(ctx: click.Context) -> None:
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
         ctx.exit(0)
+    # The binding spools shell turns with zero forks; the CLI is the reader.
+    # Recording must never break a command, mirroring the binding's fail-open
+    # writes.
+    from ..session import ingest_spooled_turns
+
+    with suppress(OSError):
+        ingest_spooled_turns()
 
 
 def main(argv: list[str] | None = None) -> int:

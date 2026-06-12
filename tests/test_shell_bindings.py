@@ -24,11 +24,6 @@ def make_stub(tmp: Path) -> Path:
         textwrap.dedent(
             """\
             #!/usr/bin/env bash
-            if [ "$1" = "handoff" ] && [ "$2" = "shell-turn" ]; then
-              printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
-              printf '%s\n' '{"ok":true}'
-              exit 0
-            fi
             if [ "$1" = "step" ]; then
               continue_step=0
               handoff_file=""
@@ -336,15 +331,24 @@ def step_calls() -> list[str]:
     return ["step"]
 
 
-def shell_turn_calls(tmp: Path) -> list[str]:
-    return [line for line in read_log(tmp) if line.startswith("handoff shell-turn ")]
-
-
-def dispatch_calls(tmp: Path) -> list[str]:
-    """Stub calls minus shell-turn recording, for dispatch assertions."""
-    return [
-        line for line in read_log(tmp) if not line.startswith("handoff shell-turn ")
-    ]
+def shell_turn_calls(tmp: Path) -> list[dict[str, str]]:
+    """Parse the recording spool the binding appends to with zero forks."""
+    path = tmp / "state" / "sessions" / "shell-test" / "shell-turns.spool"
+    if not path.exists():
+        return []
+    records = []
+    for record in path.read_text(encoding="utf-8").split("\x1e"):
+        fields = record.split("\x1f")
+        if len(fields) == 4:
+            records.append(
+                {
+                    "time": fields[0],
+                    "command": fields[1],
+                    "status": fields[2],
+                    "cwd": fields[3],
+                }
+            )
+    return records
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -490,6 +494,7 @@ def test_zsh_does_not_record_sigil_commands() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == []
+        assert shell_turn_calls(tmp) == []
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -787,9 +792,10 @@ def test_zsh_records_shell_turns_without_a_handoff() -> None:
         assert_success(result)
         calls = shell_turn_calls(tmp)
         assert len(calls) == 1
-        assert "--command echo recorded" in calls[0]
-        assert "--status 0" in calls[0]
-        assert f"--cwd {ROOT}" in calls[0]
+        assert calls[0]["command"] == "echo recorded"
+        assert calls[0]["status"] == "0"
+        assert calls[0]["cwd"] == str(ROOT)
+        assert float(calls[0]["time"]) > 0
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -815,10 +821,11 @@ def test_zsh_records_every_command_with_no_turn_limit() -> None:
         )
         assert_success(result)
         calls = shell_turn_calls(tmp)
-        assert len(calls) == 3
-        assert "--command echo one" in calls[0]
-        assert "--command echo two" in calls[1]
-        assert "--command echo three" in calls[2]
+        assert [call["command"] for call in calls] == [
+            "echo one",
+            "echo two",
+            "echo three",
+        ]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -848,7 +855,7 @@ def test_zsh_leading_space_skips_recording() -> None:
         assert_success(result)
         calls = shell_turn_calls(tmp)
         assert len(calls) == 1
-        assert "--command echo recorded" in calls[0]
+        assert calls[0]["command"] == "echo recorded"
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -882,7 +889,7 @@ def test_zsh_sigil_record_opt_out_disables_recording() -> None:
         assert_success(result)
         calls = shell_turn_calls(tmp)
         assert len(calls) == 1
-        assert "--command echo recorded" in calls[0]
+        assert calls[0]["command"] == "echo recorded"
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -906,8 +913,8 @@ def test_zsh_records_interactive_commands_end_to_end() -> None:
         )
         calls = shell_turn_calls(tmp)
         assert len(calls) == 1
-        assert "--command echo hi" in calls[0]
-        assert "--status 0" in calls[0]
+        assert calls[0]["command"] == "echo hi"
+        assert calls[0]["status"] == "0"
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -943,6 +950,56 @@ def test_zsh_recordable_command_excludes_all_sigil_invocations() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_generates_session_id_without_uuidgen() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                unset SIGIL_SESSION_ID
+                function uuidgen() { return 127 }
+                source src/sigil/bindings/sigil.zsh
+                print -- "sid=$SIGIL_SESSION_ID"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        sid = result.stdout.split("sid=", 1)[1].strip()
+        assert sid
+        assert "uuidgen" not in sid
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_resolves_cli_from_commands_hash_without_forking() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        bin_dir = tmp / "bin"
+        bin_dir.mkdir()
+        shutil.copy(stub, bin_dir / "sigil")
+        (bin_dir / "sigil").chmod(0o755)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                f"""\
+                unset SIGIL_BIN
+                path=({bin_dir} $path)
+                source src/sigil/bindings/sigil.zsh
+                print -- "bin=$__sigil_bin"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert f"bin={bin_dir}/sigil" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_shell_turn_recording_does_not_spawn_python3() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -962,8 +1019,9 @@ def test_zsh_shell_turn_recording_does_not_spawn_python3() -> None:
         assert_success(result)
         calls = shell_turn_calls(tmp)
         assert len(calls) == 1
-        assert "--command echo hi" in calls[0]
-        assert "--status 3" in calls[0]
+        assert calls[0]["command"] == "echo hi"
+        assert calls[0]["status"] == "3"
+        assert read_log(tmp) == []
         assert not (tmp / "zle.log").exists()
 
 
@@ -1109,7 +1167,7 @@ def test_interactive_plus_dispatches_pipeline_through_widget() -> None:
         finally:
             shell.kill()
         assert "st=0" in shell.output
-        assert dispatch_calls(tmp) == ["run --shell echo captured | cat"]
+        assert read_log(tmp) == ["run --shell echo captured | cat"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -1126,7 +1184,7 @@ def test_interactive_comma_glyph_dispatches_to_ask() -> None:
             shell.exit()
         finally:
             shell.kill()
-        assert dispatch_calls(tmp) == ["ask hello"]
+        assert read_log(tmp) == ["ask hello"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -1143,7 +1201,7 @@ def test_interactive_status_glyph_dispatches_to_status() -> None:
             shell.exit()
         finally:
             shell.kill()
-        assert dispatch_calls(tmp) == ["status"]
+        assert read_log(tmp) == ["status"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -1166,7 +1224,7 @@ def test_interactive_glyph_line_recallable_with_up_arrow() -> None:
             shell.exit()
         finally:
             shell.kill()
-        assert dispatch_calls(tmp) == ["ask hello", "ask hello"]
+        assert read_log(tmp) == ["ask hello", "ask hello"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -1184,10 +1242,10 @@ def test_interactive_commands_recorded_in_order_with_status() -> None:
             shell.kill()
         calls = shell_turn_calls(tmp)
         assert len(calls) == 2
-        assert "--command true" in calls[0]
-        assert "--status 0" in calls[0]
-        assert "--command false" in calls[1]
-        assert "--status 1" in calls[1]
+        assert calls[0]["command"] == "true"
+        assert calls[0]["status"] == "0"
+        assert calls[1]["command"] == "false"
+        assert calls[1]["status"] == "1"
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

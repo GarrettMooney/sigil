@@ -19,6 +19,7 @@ from sigil.cli import cli, main
 from sigil.display.tty import should_color
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.session import (
+    ingest_spooled_turns,
     recent_turns,
     recent_turns_context,
     record_turn,
@@ -120,14 +121,18 @@ def test_status_dispatch_does_not_load_workflow_modules() -> None:
         )
 
 
-def test_shell_turn_dispatch_does_not_load_display_or_model() -> None:
+def test_spool_ingestion_does_not_load_display_or_model() -> None:
+    # Every CLI start ingests the spool; the ingestion path must stay light
+    # or glyph latency regresses for all commands at once.
     with tempfile.TemporaryDirectory() as tmp:
         env = {**os.environ, "SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"}
+        spool = Path(tmp) / "sessions" / "test" / "shell-turns.spool"
+        spool.parent.mkdir(parents=True)
+        spool.write_text("1700000000.0\x1fecho hi\x1f0\x1f/repo\x1e", encoding="utf-8")
         script = (
-            "import sys; from sigil.cli import main; "
-            "code = main(['handoff', 'shell-turn', '--command', 'ls', "
-            "'--status', '0', '--cwd', '/tmp']); "
-            "assert code == 0, code; "
+            "import sys; from sigil.session import ingest_spooled_turns; "
+            "count = ingest_spooled_turns(); "
+            "assert count == 1, count; "
             "heavy = [name for name in sys.modules "
             "if name.startswith('sigil.display') "
             "or name.startswith('sigil.zeta.agent') "
@@ -851,6 +856,148 @@ def test_record_turn_does_not_record_failure_on_zero_status() -> None:
         assert len(rows) == 1
         failure_path = Path(tmp) / "sessions" / "test" / "last-failure.json"
         assert not failure_path.exists()
+
+
+def write_spool(tmp: str, records: list[tuple[str, ...]]) -> Path:
+    root = Path(tmp) / "sessions" / "test"
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "shell-turns.spool"
+    path.write_text(
+        "".join("\x1f".join(fields) + "\x1e" for fields in records),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_ingest_spooled_turns_records_commands_with_spool_time() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            write_spool(
+                tmp,
+                [
+                    ("1700000000.25", "echo one", "0", "/repo"),
+                    ("1700000001.50", "echo two", "1", "/repo/sub"),
+                ],
+            )
+            assert ingest_spooled_turns() == 2
+
+        rows = read_recent_turns(tmp)
+        assert [row["command"] for row in rows] == ["echo one", "echo two"]
+        assert rows[0]["time"] == 1700000000.25
+        assert rows[0]["status"] == 0
+        assert rows[0]["turn_cwd"] == "/repo"
+        assert rows[1]["time"] == 1700000001.5
+        assert rows[1]["status"] == 1
+        assert rows[1]["turn_cwd"] == "/repo/sub"
+
+
+def test_ingest_spooled_turns_removes_the_spool() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            path = write_spool(tmp, [("1700000000.0", "echo hi", "0", "/repo")])
+            ingest_spooled_turns()
+            assert not path.exists()
+            leftovers = list(path.parent.glob("shell-turns.spool*"))
+            assert leftovers == []
+
+
+def test_ingest_spooled_turns_skips_malformed_records() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            write_spool(
+                tmp,
+                [
+                    ("not-enough-fields",),
+                    ("1700000000.0", "echo ok", "0", "/repo"),
+                    ("1700000001.0", "echo bad-status", "nope", "/repo"),
+                ],
+            )
+            assert ingest_spooled_turns() == 1
+
+        rows = read_recent_turns(tmp)
+        assert [row["command"] for row in rows] == ["echo ok"]
+
+
+def test_ingest_spooled_turns_fans_out_failure_recording() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            write_spool(tmp, [("1700000000.0", "make build", "2", "/repo")])
+            ingest_spooled_turns()
+
+        failure_path = Path(tmp) / "sessions" / "test" / "last-failure.json"
+        failure = json.loads(failure_path.read_text(encoding="utf-8"))
+        assert failure["command"] == "make build"
+        assert failure["status"] == 2
+
+
+def test_ingest_spooled_turns_without_spool_is_noop() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            assert ingest_spooled_turns() == 0
+        assert read_recent_turns(tmp) == []
+
+
+def test_ingest_spooled_turns_recovers_orphaned_claims() -> None:
+    # A crash between claim and delete leaves a .ingesting file behind; old
+    # orphans are ingested on the next pass instead of leaking turns forever.
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            path = write_spool(tmp, [("1700000000.0", "echo orphan", "0", "/repo")])
+            orphan = path.with_name("shell-turns.spool.999.ingesting")
+            path.rename(orphan)
+            stale = time.time() - 120
+            os.utime(orphan, (stale, stale))
+            assert ingest_spooled_turns() == 1
+            assert not orphan.exists()
+
+        rows = read_recent_turns(tmp)
+        assert [row["command"] for row in rows] == ["echo orphan"]
+
+
+def test_ingest_spooled_turns_leaves_fresh_claims_alone() -> None:
+    # A fresh .ingesting file belongs to a live concurrent CLI process.
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            path = write_spool(tmp, [("1700000000.0", "echo live", "0", "/repo")])
+            claim = path.with_name("shell-turns.spool.999.ingesting")
+            path.rename(claim)
+            assert ingest_spooled_turns() == 0
+            assert claim.exists()
+
+
+def test_cli_invocation_ingests_spooled_turns() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            write_spool(tmp, [("1700000000.0", "echo spooled", "0", "/repo")])
+            result = CliRunner().invoke(cli, ["events", "--limit", "1"])
+            assert result.exit_code == 0
+
+        rows = read_recent_turns(tmp)
+        assert [row["command"] for row in rows] == ["echo spooled"]
 
 
 def test_record_turn_cli_command_is_not_public_surface() -> None:

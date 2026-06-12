@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from typing import Any
 
@@ -20,25 +19,8 @@ from .protocols import (
     is_shell_handoff_result,
     is_shell_prompt_handoff,
 )
-from .session import event_time, recent_turns, record_turn
+from .session import event_time, recent_turns
 from .zeta.timeline import current_timeline, record_event
-
-
-def append_shell_turn(
-    command: str,
-    status: int,
-    cwd: str | None = None,
-) -> dict[str, Any]:
-    """Record one user shell command for the current Zeta continuation."""
-    turn_cwd = cwd or os.getcwd()
-    record_turn(command, status, turn_cwd)
-    return {
-        "ok": True,
-        "type": "shell_turn_recorded",
-        "command": command,
-        "status": status,
-        "cwd": turn_cwd,
-    }
 
 
 def append_shell_result() -> dict[str, Any]:
