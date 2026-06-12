@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from io import StringIO
@@ -11,9 +13,9 @@ from pathlib import Path
 from typing import Any, cast
 
 from sigil.zeta import agent as zeta_agent
-from sigil.zeta import model as zeta_model
 from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import trace as zeta_trace
+from sigil.zeta.models import chat_completions as zeta_model
 
 
 class TtyBuffer(StringIO):
@@ -380,3 +382,34 @@ class BatchSpyStore(zeta_trace.InMemoryStore):
     def batch(self) -> Iterator[None]:
         self.batches += 1
         yield
+
+
+def fake_jwt(claims: dict[str, Any]) -> str:
+    def segment(data: dict[str, Any]) -> str:
+        raw = json.dumps(data).encode()
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    return f"{segment({'alg': 'RS256'})}.{segment(claims)}.signature"
+
+
+def write_codex_auth_file(
+    path: Path,
+    *,
+    expires_in: float = 3600.0,
+    account_claim: str | None = "acct_1",
+    account_field: str | None = None,
+) -> str:
+    claims: dict[str, Any] = {"exp": int(time.time() + expires_in)}
+    if account_claim is not None:
+        claims["https://api.openai.com/auth"] = {"chatgpt_account_id": account_claim}
+    access_token = fake_jwt(claims)
+    tokens: dict[str, Any] = {
+        "access_token": access_token,
+        "refresh_token": "refresh-1",
+        "id_token": "id-1",
+    }
+    if account_field is not None:
+        tokens["account_id"] = account_field
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"tokens": tokens}), encoding="utf-8")
+    return access_token

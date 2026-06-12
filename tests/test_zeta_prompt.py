@@ -21,10 +21,10 @@ from _zeta_helpers import (
 )
 
 from sigil.zeta import context as zeta_context
-from sigil.zeta import model as zeta_model
 from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import skills as zeta_skills
 from sigil.zeta import trace as zeta_trace
+from sigil.zeta.models import chat_completions as zeta_model
 from sigil.zeta.prompt.system import model_tool_descriptors
 
 

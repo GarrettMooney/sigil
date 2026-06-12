@@ -13,12 +13,19 @@ from pathlib import Path
 from typing import Any
 
 from .state import state_dir
-from .zeta.model import (
+from .zeta.models import (
+    CODEX_RESPONSES_API,
     endpoint_reachable,
+    load_model_profiles,
     model_endpoint_valid,
     request_model_metadata,
+    resolve_active_model,
 )
-from .zeta.models import model_url, model_url_from_env
+from .zeta.models.codex_auth import (
+    access_token_expired,
+    codex_auth_path,
+    read_auth_tokens,
+)
 
 BINDING_NAME = "sigil.zsh"
 
@@ -238,26 +245,37 @@ def check_state_writable() -> DoctorCheck:
         )
 
 
-def check_endpoint(env: dict[str, str] | None = None) -> DoctorCheck:
+def check_endpoint(model_endpoint: str | None = None) -> DoctorCheck:
     """Check that the model endpoint answers like an OpenAI-compatible server.
 
     A TCP connect alone passes for any listener on the port and the first
     `,` then fails; doctor is the place to pay for a real GET /v1/models.
     """
-    model_endpoint = model_url() if env is None else model_url_from_env(env)
+    if model_endpoint is None:
+        selection = resolve_active_model().selection
+        if selection.api == CODEX_RESPONSES_API:
+            return DoctorCheck(
+                "model:endpoint",
+                "ok",
+                f"codex-responses profile {selection.profile}; "
+                "credentials reported by model:codex-auth",
+            )
+        model_endpoint = selection.url
     if not model_endpoint_valid(model_endpoint):
         return DoctorCheck(
             "model:endpoint",
             "fail",
-            f"invalid ZETA_MODEL_URL: {model_endpoint}",
-            "Set ZETA_MODEL_URL to an OpenAI-compatible chat completions endpoint.",
+            f"invalid model url: {model_endpoint}",
+            "Point the profile's url in ~/.zeta/models.toml at an "
+            "OpenAI-compatible chat completions endpoint.",
         )
     if not endpoint_reachable(model_endpoint):
         return DoctorCheck(
             "model:endpoint",
             "warn",
             f"not reachable at {model_endpoint}",
-            "Start the local model server or set ZETA_MODEL_URL.",
+            "Start the local model server or fix the profile's url in "
+            "~/.zeta/models.toml.",
         )
     if request_model_metadata("/v1/models", selected_url=model_endpoint) is None:
         return DoctorCheck(
@@ -265,7 +283,7 @@ def check_endpoint(env: dict[str, str] | None = None) -> DoctorCheck:
             "warn",
             f"listening at {model_endpoint} but GET /v1/models failed",
             "Something is listening but it does not answer like an "
-            "OpenAI-compatible server; check ZETA_MODEL_URL.",
+            "OpenAI-compatible server; check the profile's url.",
         )
     return DoctorCheck("model:endpoint", "ok", model_endpoint)
 
@@ -381,6 +399,7 @@ def doctor_checks() -> list[DoctorCheck]:
     checks = [
         check_sigil_installed(),
         check_endpoint(),
+        *codex_auth_checks(),
         check_shell_binding_installed(),
         check_shell_binding_loaded(),
         check_glyphs_enabled(),
@@ -389,6 +408,39 @@ def doctor_checks() -> list[DoctorCheck]:
         check_state_writable(),
     ]
     return checks
+
+
+def codex_auth_checks() -> list[DoctorCheck]:
+    check = check_codex_auth()
+    return [check] if check is not None else []
+
+
+def check_codex_auth() -> DoctorCheck | None:
+    """Report ChatGPT credential state when a codex profile is configured."""
+    catalog = load_model_profiles()
+    has_codex = any(
+        profile.api == CODEX_RESPONSES_API for profile in catalog.profiles.values()
+    )
+    if not has_codex:
+        return None
+    path = codex_auth_path()
+    try:
+        tokens = read_auth_tokens(path)
+    except RuntimeError as exc:
+        return DoctorCheck(
+            "model:codex-auth",
+            "fail",
+            str(exc),
+            "Run `codex login` to create ChatGPT credentials.",
+        )
+    if access_token_expired(tokens):
+        return DoctorCheck(
+            "model:codex-auth",
+            "warn",
+            f"access token at {path} is expired",
+            "The next codex request will refresh it automatically.",
+        )
+    return DoctorCheck("model:codex-auth", "ok", str(path))
 
 
 def checks_to_json(checks: list[DoctorCheck]) -> str:

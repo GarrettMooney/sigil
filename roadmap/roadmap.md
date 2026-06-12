@@ -454,8 +454,12 @@ them.
   and any cloud component are out of scope here. The substrate's content
   addressing was chosen partly because it will extend to replication
   cleanly, but nothing in this document depends on a network.
-- **Hosted models.** The design assumes a local OpenAI-compatible endpoint
-  throughout; per-event inference is only economical locally.
+- **Hosted models for ambient inference.** Interactive workflows may
+  target a hosted backend through an explicit model profile (the
+  `codex-responses` api is the first), but the substrate design assumes a
+  local endpoint throughout: per-event ambient inference is only
+  economical — and only acceptable under the local-first invariant —
+  locally.
 - **A plugin marketplace.** Schemas and agent definitions are designed to be
   shareable files; distribution mechanisms come later, if ever.
 

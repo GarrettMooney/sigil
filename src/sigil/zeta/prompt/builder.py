@@ -11,7 +11,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Any
 
-from ..model import DEFAULT_MAX_COMPLETION_TOKENS, chat_completion_request_body
+from ..models import DEFAULT_MAX_COMPLETION_TOKENS, chat_completion_request_body
 from ..skills import Skill, available_skills
 from ..tools.base import content_hash
 from ..trace import (

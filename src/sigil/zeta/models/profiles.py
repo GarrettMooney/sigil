@@ -2,24 +2,27 @@
 
 from __future__ import annotations
 
-import os
 import re
 import tomllib
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from ..state import read_json, remove_json, write_json
+from ...state import read_json, remove_json, write_json
 
 ACTIVE_MODEL_STATE = "active-model.json"
 MODEL_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
 DEFAULT_MODEL_NAME = "local-model"
+DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api"
 
-ModelSource = Literal["session", "env"]
+ModelSource = Literal["session", "config", "builtin"]
 
 THINKING_EFFORTS = ("none", "minimal", "low", "medium", "high")
+
+CHAT_COMPLETIONS_API = "chat-completions"
+CODEX_RESPONSES_API = "codex-responses"
+MODEL_APIS = (CHAT_COMPLETIONS_API, CODEX_RESPONSES_API)
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,8 @@ class ModelProfile:
     model: str
     url: str | None = None
     thinking: str | None = None
+    api: str | None = None
+    default: bool = False
 
 
 @dataclass(frozen=True)
@@ -40,6 +45,7 @@ class ModelDiagnostic:
 class ModelCatalog:
     profiles: dict[str, ModelProfile] = field(default_factory=dict)
     diagnostics: list[ModelDiagnostic] = field(default_factory=list)
+    default_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +54,7 @@ class ModelSelection:
     model: str
     url: str
     thinking: str | None = None
+    api: str = CHAT_COMPLETIONS_API
 
 
 @dataclass(frozen=True)
@@ -59,21 +66,12 @@ class ModelResolution:
 
 def model_url(selected_url: str | None = None) -> str:
     """Return the OpenAI-compatible chat completions endpoint."""
-    if selected_url:
-        return selected_url
-    return model_url_from_env(os.environ)
+    return selected_url or DEFAULT_MODEL_URL
 
 
 def model_name(selected_model: str | None = None) -> str:
     """Return the model name sent to the configured endpoint."""
-    if selected_model:
-        return selected_model
-    return os.environ.get("ZETA_MODEL_NAME") or DEFAULT_MODEL_NAME
-
-
-def model_url_from_env(env: Mapping[str, str]) -> str:
-    """Return the configured model URL from explicit environment values."""
-    return env.get("ZETA_MODEL_URL") or DEFAULT_MODEL_URL
+    return selected_model or DEFAULT_MODEL_NAME
 
 
 def user_models_config_path() -> Path:
@@ -99,14 +97,32 @@ def load_model_profiles(config_path: Path | None = None) -> ModelCatalog:
         )
     profiles: dict[str, ModelProfile] = {}
     diagnostics: list[ModelDiagnostic] = []
+    default_profile: str | None = None
     for index, raw_profile in enumerate(raw_profiles):
         profile, diagnostic = _parse_profile(path, index, raw_profile)
         if diagnostic is not None:
             diagnostics.append(diagnostic)
             continue
-        if profile is not None:
-            profiles[profile.name] = profile
-    return ModelCatalog(profiles=profiles, diagnostics=diagnostics)
+        if profile is None:
+            continue
+        profiles[profile.name] = profile
+        if not profile.default:
+            continue
+        if default_profile is None:
+            default_profile = profile.name
+        else:
+            diagnostics.append(
+                ModelDiagnostic(
+                    path,
+                    f"only one profile may set default = true; keeping "
+                    f"{default_profile}, ignoring {profile.name}",
+                )
+            )
+    return ModelCatalog(
+        profiles=profiles,
+        diagnostics=diagnostics,
+        default_profile=default_profile,
+    )
 
 
 def resolve_model_profile(
@@ -119,11 +135,19 @@ def resolve_model_profile(
     profile = catalog.profiles.get(name)
     if profile is None:
         return None
+    api = profile.api or CHAT_COMPLETIONS_API
+    if profile.url:
+        url = profile.url
+    elif api == CODEX_RESPONSES_API:
+        url = DEFAULT_CODEX_BASE_URL
+    else:
+        url = model_url()
     return ModelSelection(
         profile=profile.name,
         model=profile.model,
-        url=profile.url or model_url(),
+        url=url,
         thinking=profile.thinking,
+        api=api,
     )
 
 
@@ -139,11 +163,24 @@ def active_model_profile() -> str | None:
 
 
 def active_model_selection() -> ModelSelection | None:
-    """Return the active resolved model for this session, if configured."""
+    """Return the session's model, falling back to the configured default."""
+    catalog = load_model_profiles()
     profile = active_model_profile()
-    if profile is None:
+    if profile is not None:
+        selection = resolve_model_profile(profile, catalog=catalog)
+        if selection is not None:
+            return selection
+    return configured_default_selection(catalog)
+
+
+def configured_default_selection(
+    catalog: ModelCatalog | None = None,
+) -> ModelSelection | None:
+    """Resolve the profile marked ``default = true``, if any."""
+    catalog = catalog or load_model_profiles()
+    if catalog.default_profile is None:
         return None
-    return resolve_model_profile(profile)
+    return resolve_model_profile(catalog.default_profile, catalog=catalog)
 
 
 def set_active_model_profile(name: str) -> None:
@@ -164,20 +201,31 @@ def default_model_selection() -> ModelSelection:
 def resolve_active_model() -> ModelResolution:
     """Resolve the model the next request will use, and where it came from.
 
-    A session selection naming a profile that no longer resolves falls back
-    to the env default but carries the stale name, so status surfaces can
-    say the selection went stale instead of pretending none was made.
+    Session selection wins, then the profile marked ``default = true``,
+    then the builtin local endpoint. A session selection naming a profile
+    that no longer resolves falls through but carries the stale name, so
+    status surfaces can say the selection went stale instead of
+    pretending none was made.
     """
+    catalog = load_model_profiles()
     profile = active_model_profile()
-    if profile is None:
-        return ModelResolution(selection=default_model_selection(), source="env")
-    selection = resolve_model_profile(profile)
-    if selection is not None:
-        return ModelResolution(selection=selection, source="session")
+    stale_profile: str | None = None
+    if profile is not None:
+        selection = resolve_model_profile(profile, catalog=catalog)
+        if selection is not None:
+            return ModelResolution(selection=selection, source="session")
+        stale_profile = profile
+    configured = configured_default_selection(catalog)
+    if configured is not None:
+        return ModelResolution(
+            selection=configured,
+            source="config",
+            stale_profile=stale_profile,
+        )
     return ModelResolution(
         selection=default_model_selection(),
-        source="env",
-        stale_profile=profile,
+        source="builtin",
+        stale_profile=stale_profile,
     )
 
 
@@ -219,9 +267,26 @@ def _parse_profile(
                 f"{label}.thinking must be one of {', '.join(THINKING_EFFORTS)}",
             ),
         )
+    api = value.get("api")
+    if api is not None and api not in MODEL_APIS:
+        return (
+            None,
+            ModelDiagnostic(
+                path,
+                f"{label}.api must be one of {', '.join(MODEL_APIS)}",
+            ),
+        )
+    default = value.get("default")
+    if default is not None and not isinstance(default, bool):
+        return (
+            None,
+            ModelDiagnostic(path, f"{label}.default must be a boolean"),
+        )
     return ModelProfile(
         name=name,
         model=model.strip(),
         url=url.strip() if url else None,
         thinking=thinking,
+        api=api,
+        default=bool(default),
     ), None

@@ -25,8 +25,6 @@ def test_status_clean_when_no_live_state() -> None:
 
 
 def test_status_clean_shows_model_line(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ZETA_MODEL_NAME", raising=False)
-    monkeypatch.delenv("ZETA_MODEL_URL", raising=False)
 
     status = current_status()
 
@@ -34,12 +32,12 @@ def test_status_clean_shows_model_line(monkeypatch: pytest.MonkeyPatch) -> None:
         "profile": "default",
         "model": "local-model",
         "url": "http://127.0.0.1:8080/v1/chat/completions",
-        "source": "env",
+        "source": "builtin",
     }
     assert format_status(status) == (
         "clean\n"
         "model: default -> local-model @ "
-        "http://127.0.0.1:8080/v1/chat/completions (env)"
+        "http://127.0.0.1:8080/v1/chat/completions (builtin)"
     )
 
 
@@ -80,15 +78,13 @@ def test_status_model_line_reports_stale_profile(
     write_models_config(home, "")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-stale-model")
-    monkeypatch.delenv("ZETA_MODEL_NAME", raising=False)
-    monkeypatch.delenv("ZETA_MODEL_URL", raising=False)
     set_active_model_profile("gone")
 
     status = current_status()
 
-    assert status.model["source"] == "env"
+    assert status.model["source"] == "builtin"
     assert status.model["stale_profile"] == "gone"
-    assert "(env; profile 'gone' missing from models.toml)" in format_status(status)
+    assert "(builtin; profile 'gone' missing from models.toml)" in format_status(status)
 
 
 def test_status_reports_last_failure() -> None:
@@ -230,8 +226,6 @@ def test_status_json_carries_ledger_fields(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_status_cli_json_includes_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ZETA_MODEL_NAME", raising=False)
-    monkeypatch.delenv("ZETA_MODEL_URL", raising=False)
 
     result = CliRunner().invoke(cli, ["status", "--json"])
 
@@ -241,5 +235,5 @@ def test_status_cli_json_includes_model(monkeypatch: pytest.MonkeyPatch) -> None
         "profile": "default",
         "model": "local-model",
         "url": "http://127.0.0.1:8080/v1/chat/completions",
-        "source": "env",
+        "source": "builtin",
     }

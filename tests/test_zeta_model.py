@@ -21,15 +21,15 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
-from sigil.zeta import model as zeta_model
-from sigil.zeta import models as zeta_models
 from sigil.zeta import prompt as zeta_prompt
+from sigil.zeta.models import chat_completions as zeta_model
+from sigil.zeta.models import profiles as zeta_models
 
 
-def test_zeta_model_config_uses_zeta_env(monkeypatch) -> None:
-    monkeypatch.delenv("ZETA_MODEL_URL", raising=False)
-    monkeypatch.delenv("ZETA_MODEL_NAME", raising=False)
+def test_zeta_model_config_ignores_model_env_vars(monkeypatch) -> None:
     monkeypatch.delenv("ZETA_MODEL_IDLE_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("ZETA_MODEL_URL", "http://zeta.invalid/v1/chat/completions")
+    monkeypatch.setenv("ZETA_MODEL_NAME", "zeta-model")
 
     assert zeta_model.model_url() == zeta_models.DEFAULT_MODEL_URL
     assert zeta_model.model_name() == zeta_models.DEFAULT_MODEL_NAME
@@ -38,12 +38,7 @@ def test_zeta_model_config_uses_zeta_env(monkeypatch) -> None:
     )
     assert zeta_model.DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS == 120.0
 
-    monkeypatch.setenv("ZETA_MODEL_URL", "http://zeta.invalid/v1/chat/completions")
-    monkeypatch.setenv("ZETA_MODEL_NAME", "zeta-model")
     monkeypatch.setenv("ZETA_MODEL_IDLE_TIMEOUT_SECONDS", "2.5")
-
-    assert zeta_model.model_url() == "http://zeta.invalid/v1/chat/completions"
-    assert zeta_model.model_name() == "zeta-model"
     assert zeta_model.model_idle_timeout() == 2.5
 
     monkeypatch.setenv("ZETA_MODEL_IDLE_TIMEOUT_SECONDS", "0")
@@ -584,7 +579,6 @@ model = "default-url-model"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("ZETA_MODEL_URL", "http://env.invalid/v1/chat/completions")
 
     catalog = zeta_models.load_model_profiles()
     fast = zeta_models.resolve_model_profile("fast", catalog=catalog)
@@ -599,7 +593,7 @@ model = "default-url-model"
     assert default_url == zeta_models.ModelSelection(
         profile="default-url",
         model="default-url-model",
-        url="http://env.invalid/v1/chat/completions",
+        url=zeta_models.DEFAULT_MODEL_URL,
     )
 
 
@@ -780,19 +774,131 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     )
 
 
-def test_zeta_models_resolve_active_model_defaults_to_env(monkeypatch) -> None:
-    monkeypatch.setenv("ZETA_MODEL_NAME", "env-model")
-    monkeypatch.setenv("ZETA_MODEL_URL", "http://env.invalid/v1/chat/completions")
+def test_zeta_models_resolve_active_model_falls_back_to_builtin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
     resolution = zeta_models.resolve_active_model()
 
-    assert resolution.source == "env"
+    assert resolution.source == "builtin"
     assert resolution.stale_profile is None
     assert resolution.selection == zeta_models.ModelSelection(
         profile="default",
-        model="env-model",
-        url="http://env.invalid/v1/chat/completions",
+        model=zeta_models.DEFAULT_MODEL_NAME,
+        url=zeta_models.DEFAULT_MODEL_URL,
     )
+
+
+def test_zeta_models_default_profile_resolves_without_selection(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "fast"
+model = "fast-model"
+
+[[models]]
+name = "codex"
+model = "gpt-5.5"
+api = "codex-responses"
+default = true
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "default-profile-session")
+
+    resolution = zeta_models.resolve_active_model()
+    selection = zeta_models.active_model_selection()
+
+    assert resolution.source == "config"
+    assert resolution.selection.profile == "codex"
+    assert selection is not None and selection.profile == "codex"
+
+
+def test_zeta_models_session_selection_beats_default_profile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "fast"
+model = "fast-model"
+
+[[models]]
+name = "codex"
+model = "gpt-5.5"
+api = "codex-responses"
+default = true
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "selection-beats-default")
+    zeta_models.set_active_model_profile("fast")
+
+    resolution = zeta_models.resolve_active_model()
+
+    assert resolution.source == "session"
+    assert resolution.selection.profile == "fast"
+
+
+def test_zeta_models_rejects_multiple_default_profiles(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "one"
+model = "one-model"
+default = true
+
+[[models]]
+name = "two"
+model = "two-model"
+default = true
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    catalog = zeta_models.load_model_profiles()
+
+    assert catalog.default_profile == "one"
+    assert len(catalog.diagnostics) == 1
+    assert "default" in catalog.diagnostics[0].message
+
+
+def test_zeta_models_rejects_non_boolean_default(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "one"
+model = "one-model"
+default = "yes"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    catalog = zeta_models.load_model_profiles()
+
+    assert catalog.profiles == {}
+    assert len(catalog.diagnostics) == 1
+    assert "default" in catalog.diagnostics[0].message
 
 
 def test_zeta_models_resolve_active_model_survives_vanished_profile(
@@ -803,13 +909,11 @@ def test_zeta_models_resolve_active_model_survives_vanished_profile(
     write_models_config(home, "")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("SIGIL_SESSION_ID", "stale-session")
-    monkeypatch.delenv("ZETA_MODEL_NAME", raising=False)
-    monkeypatch.delenv("ZETA_MODEL_URL", raising=False)
     zeta_models.set_active_model_profile("gone")
 
     resolution = zeta_models.resolve_active_model()
 
-    assert resolution.source == "env"
+    assert resolution.source == "builtin"
     assert resolution.selection.profile == "default"
     assert resolution.stale_profile == "gone"
 
@@ -1167,3 +1271,177 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     bound = CliRunner().invoke(sigil_cli, ["model", "use", "fast"])
     assert bound.exit_code == 0, bound.output
     assert "default" not in bound.stderr
+
+
+def test_zeta_model_profiles_read_api(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "codex"
+model = "gpt-5.5"
+api = "codex-responses"
+
+[[models]]
+name = "local"
+model = "local-model"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    catalog = zeta_models.load_model_profiles()
+    codex = zeta_models.resolve_model_profile("codex", catalog=catalog)
+    local = zeta_models.resolve_model_profile("local", catalog=catalog)
+
+    assert catalog.diagnostics == []
+    assert codex is not None and codex.api == "codex-responses"
+    assert codex.url == zeta_models.DEFAULT_CODEX_BASE_URL
+    assert local is not None and local.api == "chat-completions"
+
+
+def test_zeta_model_profiles_reject_unknown_api(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "bad"
+model = "bad-model"
+api = "grpc"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    catalog = zeta_models.load_model_profiles()
+
+    assert catalog.profiles == {}
+    assert len(catalog.diagnostics) == 1
+    assert "api" in catalog.diagnostics[0].message
+
+
+def test_zeta_models_package_dispatches_default_api_to_chat_completions(
+    monkeypatch,
+) -> None:
+    from sigil.zeta import models as models_pkg
+
+    captured: dict[str, Any] = {}
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **options: Any,
+    ) -> dict[str, Any]:
+        captured["messages"] = messages
+        captured["options"] = options
+        return {"role": "assistant", "content": "ok"}
+
+    monkeypatch.setattr(
+        zeta_model, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    message = models_pkg.chat_completion_messages(
+        [{"role": "user", "content": "hi"}],
+        thinking="low",
+    )
+
+    assert message == {"role": "assistant", "content": "ok"}
+    assert captured["messages"] == [{"role": "user", "content": "hi"}]
+    assert captured["options"] == {"thinking": "low"}
+
+
+def test_zeta_models_package_routes_codex_api_to_responses(monkeypatch) -> None:
+    from sigil.zeta import models as models_pkg
+    from sigil.zeta.models import responses as zeta_responses
+
+    captured: dict[str, Any] = {}
+
+    def fake_completion(messages: list[dict[str, Any]], **options: Any) -> dict:
+        captured["completion"] = (messages, options)
+        return {"role": "assistant", "content": "ok"}
+
+    def fake_structured(messages: list[dict[str, Any]], **options: Any) -> dict:
+        captured["structured"] = (messages, options)
+        return {"state": "done"}
+
+    monkeypatch.setattr(zeta_responses, "codex_completion_messages", fake_completion)
+    monkeypatch.setattr(zeta_responses, "codex_structured_output", fake_structured)
+
+    message = models_pkg.chat_completion_messages(
+        [{"role": "user", "content": "hi"}], api="codex-responses", thinking="low"
+    )
+    data = models_pkg.chat_structured_output(
+        [{"role": "user", "content": "hi"}],
+        schema={"type": "object"},
+        response_name="state",
+        api="codex-responses",
+    )
+
+    assert message == {"role": "assistant", "content": "ok"}
+    assert data == {"state": "done"}
+    assert captured["completion"][1] == {"thinking": "low"}
+    assert captured["structured"][1]["response_name"] == "state"
+
+
+def test_zeta_models_package_rejects_unknown_api() -> None:
+    from sigil.zeta import models as models_pkg
+
+    with pytest.raises(ValueError, match="grpc"):
+        models_pkg.chat_completion_messages(
+            [{"role": "user", "content": "hi"}], api="grpc"
+        )
+
+
+def test_zeta_model_cli_list_resolves_urls_and_marks_default(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "codex"
+model = "gpt-5.5"
+api = "codex-responses"
+default = true
+
+[[models]]
+name = "fast"
+model = "fast-model"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    result = CliRunner().invoke(sigil_cli, ["model", "list"])
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert "codex\tgpt-5.5\thttps://chatgpt.com/backend-api\t(default)" in lines
+    assert f"fast\tfast-model\t{zeta_models.DEFAULT_MODEL_URL}" in lines
+
+
+def test_zeta_model_cli_show_reports_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "codex"
+model = "gpt-5.5"
+api = "codex-responses"
+default = true
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "show-source-session")
+
+    result = CliRunner().invoke(sigil_cli, ["model", "show"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "model: codex -> gpt-5.5 @ https://chatgpt.com/backend-api (config)"
+        in result.output
+    )

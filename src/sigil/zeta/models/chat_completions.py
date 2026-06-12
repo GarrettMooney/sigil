@@ -16,8 +16,8 @@ from urllib.parse import urlparse, urlunparse
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from ..display.tty import LOVE, RESET, muted, should_color
-from .models import model_name, model_url
+from ...display.tty import LOVE, RESET, muted, should_color
+from .profiles import model_name, model_url
 
 DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS = 120.0
 DEFAULT_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS = 600.0

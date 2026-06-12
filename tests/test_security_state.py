@@ -118,7 +118,7 @@ def test_status_dispatch_does_not_load_workflow_modules() -> None:
             "assert code in (0, 1), code; "
             "heavy = [name for name in sys.modules "
             "if name.startswith('sigil.workflows') or name.startswith('rich') "
-            "or name in ('sigil.zeta.model', 'sigil.zeta.agent', 'jsonschema')]; "
+            "or name in ('sigil.zeta.models.chat_completions', 'sigil.zeta.agent', 'jsonschema')]; "
             "assert not heavy, heavy"
         )
         subprocess.run(
@@ -161,7 +161,7 @@ def test_model_selection_import_does_not_load_transport() -> None:
         "import sys; "
         "import sigil.zeta.models; "
         "heavy = [name for name in sys.modules "
-        "if name == 'sigil.zeta.model' or name == 'jsonschema']; "
+        "if name == 'sigil.zeta.models.chat_completions' or name == 'jsonschema']; "
         "assert not heavy, heavy"
     )
     subprocess.run([sys.executable, "-c", script], check=True)
@@ -171,7 +171,7 @@ def test_tty_helpers_do_not_load_display_renderer() -> None:
     script = (
         "import sys; "
         "import sigil.display.tty; "
-        "import sigil.zeta.model; "
+        "import sigil.zeta.models.chat_completions; "
         "heavy = [name for name in sys.modules "
         "if name == 'sigil.display.render' or name.startswith('rich')]; "
         "assert not heavy, heavy"

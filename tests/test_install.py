@@ -11,12 +11,14 @@ from io import StringIO
 from pathlib import Path
 
 from _patch import patch, patch_dict
+from _zeta_helpers import write_codex_auth_file
 from click.testing import CliRunner
 
 from sigil.cli import cli, main
 from sigil.cli._base import EXIT_ERROR, EXIT_OK
 from sigil.install import (
     DoctorCheck,
+    check_codex_auth,
     check_endpoint,
     check_session_tty,
     doctor_checks,
@@ -275,9 +277,7 @@ class ModelsEndpointHandler(BaseHTTPRequestHandler):
 def test_doctor_endpoint_warns_when_listener_is_not_openai_compatible() -> None:
     server, port = serve_one_non_openai_response()
     try:
-        check = check_endpoint(
-            {"ZETA_MODEL_URL": f"http://127.0.0.1:{port}/v1/chat/completions"}
-        )
+        check = check_endpoint(f"http://127.0.0.1:{port}/v1/chat/completions")
     finally:
         server.close()
 
@@ -291,11 +291,75 @@ def test_doctor_endpoint_ok_when_models_endpoint_answers() -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        check = check_endpoint(
-            {"ZETA_MODEL_URL": f"http://127.0.0.1:{port}/v1/chat/completions"}
-        )
+        check = check_endpoint(f"http://127.0.0.1:{port}/v1/chat/completions")
     finally:
         server.shutdown()
         server.server_close()
 
     assert check.status == "ok"
+
+
+def test_doctor_codex_auth_check_absent_without_codex_profiles(tmp_path) -> None:
+    with patch_dict(os.environ, {"HOME": str(tmp_path)}):
+        assert check_codex_auth() is None
+
+
+def test_doctor_codex_auth_fails_without_credentials(tmp_path) -> None:
+    models = tmp_path / ".zeta" / "models.toml"
+    models.parent.mkdir(parents=True)
+    models.write_text(
+        '[[models]]\nname = "codex"\nmodel = "gpt-5.5"\napi = "codex-responses"\n',
+        encoding="utf-8",
+    )
+    with patch_dict(os.environ, {"HOME": str(tmp_path)}):
+        check = check_codex_auth()
+
+    assert check is not None
+    assert check.status == "fail"
+    assert "codex login" in (check.hint or "")
+
+
+def test_doctor_codex_auth_ok_with_fresh_credentials(tmp_path) -> None:
+    models = tmp_path / ".zeta" / "models.toml"
+    models.parent.mkdir(parents=True)
+    models.write_text(
+        '[[models]]\nname = "codex"\nmodel = "gpt-5.5"\napi = "codex-responses"\n',
+        encoding="utf-8",
+    )
+    write_codex_auth_file(tmp_path / ".codex" / "auth.json")
+    with patch_dict(os.environ, {"HOME": str(tmp_path)}):
+        check = check_codex_auth()
+
+    assert check is not None
+    assert check.status == "ok"
+
+
+def test_doctor_codex_auth_warns_when_token_expired(tmp_path) -> None:
+    models = tmp_path / ".zeta" / "models.toml"
+    models.parent.mkdir(parents=True)
+    models.write_text(
+        '[[models]]\nname = "codex"\nmodel = "gpt-5.5"\napi = "codex-responses"\n',
+        encoding="utf-8",
+    )
+    write_codex_auth_file(tmp_path / ".codex" / "auth.json", expires_in=-60.0)
+    with patch_dict(os.environ, {"HOME": str(tmp_path)}):
+        check = check_codex_auth()
+
+    assert check is not None
+    assert check.status == "warn"
+    assert "refresh" in (check.detail or "") + (check.hint or "")
+
+
+def test_doctor_endpoint_defers_to_codex_auth_for_codex_default(tmp_path) -> None:
+    models = tmp_path / ".zeta" / "models.toml"
+    models.parent.mkdir(parents=True)
+    models.write_text(
+        '[[models]]\nname = "codex"\nmodel = "gpt-5.5"\n'
+        'api = "codex-responses"\ndefault = true\n',
+        encoding="utf-8",
+    )
+    with patch_dict(os.environ, {"HOME": str(tmp_path), "SIGIL_SESSION_ID": "t"}):
+        check = check_endpoint()
+
+    assert check.status == "ok"
+    assert "codex-auth" in check.detail

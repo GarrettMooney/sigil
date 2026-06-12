@@ -8,7 +8,7 @@ from typing import Any, Protocol
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from ...model import chat_structured_output
+from ...models import chat_structured_output
 from ...tools.base import content_hash
 from ..components import PromptComponent
 

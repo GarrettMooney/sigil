@@ -81,8 +81,6 @@ without duplicating the rc block.
 Useful environment variables:
 
 ```sh
-ZETA_MODEL_URL=http://127.0.0.1:8080/v1/chat/completions
-ZETA_MODEL_NAME=local-model
 ZETA_MODEL_PATH=/path/to/model.gguf
 # Client-side stream idle timeout in seconds (default 120); <=0 disables it.
 ZETA_MODEL_IDLE_TIMEOUT_SECONDS=120
@@ -91,6 +89,10 @@ ZETA_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS=600
 SIGIL_STATE_DIR=$HOME/.sigil
 SIGIL_RUN_CAPTURE_BYTES=6000
 ```
+
+Model endpoints are configured through profiles in `~/.zeta/models.toml`
+(below), not environment variables. Without any configuration sigil talks
+to `local-model` at the default local endpoint.
 
 Sigil sends Zeta model requests with OpenAI-compatible streaming enabled
 internally, even though it still renders the final assistant message as one
@@ -113,6 +115,7 @@ name = "fast"
 model = "qwen2.5-coder"
 url = "http://127.0.0.1:8080/v1/chat/completions"
 thinking = "none"
+default = true
 
 [[models]]
 name = "deep"
@@ -120,6 +123,11 @@ model = "qwen3-coder"
 url = "http://127.0.0.1:8081/v1/chat/completions"
 thinking = "high"
 ```
+
+At most one profile may set `default = true`: it is the model every new
+session starts on. Omit the flag everywhere and sessions start on the
+builtin local default (`local-model` @
+`http://127.0.0.1:8080/v1/chat/completions`).
 
 `thinking` controls model reasoning per profile, using the reasoning-effort
 values of OpenAI's Responses API: `"none"` disables thinking, and
@@ -132,6 +140,29 @@ muted `thought for 12s` line in scrollback. Set `SIGIL_THINKING_TRACE=0`
 to keep only the timer. Reasoning is recorded in the trace and shown in
 full by `sigil session transcript`; it is never resent to the model in
 later turns, and never written to redirected or piped output.
+
+### Codex profiles
+
+A profile with `api = "codex-responses"` talks to the OpenAI Codex backend
+on a ChatGPT subscription instead of a local chat-completions server:
+
+```toml
+[[models]]
+name = "codex"
+model = "gpt-5.5"
+api = "codex-responses"
+thinking = "high"
+```
+
+Authentication reuses the Codex CLI credentials at `~/.codex/auth.json`:
+run `codex login` once, and sigil refreshes the access token in place when
+it expires. `sigil doctor` reports credential state whenever a codex
+profile is configured. Requests carry `originator: zeta`.
+
+This is an explicit departure from the local-first default: while a codex
+profile is active, prompts — including file contents read by tools — leave
+the machine for OpenAI's backend. Reasoning summaries stream like local
+thinking traces; the full chain of thought stays encrypted with OpenAI.
 
 Then select a profile for the active shell session:
 
@@ -148,12 +179,14 @@ sigil model clear
 ```
 
 The selected profile is scoped to the current `SIGIL_SESSION_ID`, so another
-terminal keeps its own model selection. Clearing the profile returns the session
-to `ZETA_MODEL_NAME` and `ZETA_MODEL_URL`.
+terminal keeps its own model selection. Clearing the profile returns the
+session to the `default = true` profile, or to the builtin local default
+when no profile claims the flag.
 
 `?` always shows the model the next request will use and where the selection
 comes from — `(session)` for a profile selected with `sigil model use`,
-`(env)` for the `ZETA_MODEL_*` defaults:
+`(config)` for the `default = true` profile, `(builtin)` for the
+no-configuration fallback:
 
 ```text
 clean
@@ -161,7 +194,7 @@ model: fast -> qwen2.5-coder @ http://127.0.0.1:8080/v1/chat/completions (sessio
 ```
 
 If the selected profile has since been removed from `models.toml`, the line
-says so — `(env; profile 'fast' missing from models.toml)` — instead of
+says so — `(builtin; profile 'fast' missing from models.toml)` — instead of
 pretending no selection was made.
 
 ## Quick Start

@@ -46,9 +46,9 @@ from sigil.session import read_event_log, record_turn
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
 from sigil.zeta import agent as zeta_agent
-from sigil.zeta import models as zeta_models
 from sigil.zeta import timeline as zeta_timeline
 from sigil.zeta import trace as zeta_trace
+from sigil.zeta.models import profiles as zeta_models
 from sigil.zeta.trace import PromptTrace
 
 
@@ -2328,3 +2328,19 @@ def test_latest_unresolved_shell_handoff_surfaces_turn_id() -> None:
     handoff_meta = sigil_handoff.latest_unresolved_shell_handoff(timeline)
 
     assert handoff_meta["turn_id"] == "turn-stage-1"
+
+
+def test_model_server_ready_skips_probe_for_codex_api(monkeypatch) -> None:
+    def fail_probe(**kwargs: object) -> bool:
+        raise AssertionError("codex selections must not probe a local endpoint")
+
+    monkeypatch.setattr(agent_io, "ensure_server", fail_probe)
+
+    selection = zeta_models.ModelSelection(
+        profile="codex",
+        model="gpt-5.5",
+        url=zeta_models.DEFAULT_CODEX_BASE_URL,
+        api=zeta_models.CODEX_RESPONSES_API,
+    )
+
+    assert agent_io.model_server_ready(selection) is True

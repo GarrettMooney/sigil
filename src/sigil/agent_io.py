@@ -35,8 +35,7 @@ from .protocols import (
     turn_record,
 )
 from .zeta.agent import AgentTurnResult
-from .zeta.model import ensure_server
-from .zeta.models import ModelSelection
+from .zeta.models import CODEX_RESPONSES_API, ModelSelection, ensure_server
 from .zeta.timeline import add_event_link, record_event
 from .zeta.trace import (
     Derivation,
@@ -49,6 +48,8 @@ from .zeta.trace import (
 
 def model_server_ready(selected_model: ModelSelection | None) -> bool:
     """Check endpoint reachability for the active model selection."""
+    if selected_model is not None and selected_model.api == CODEX_RESPONSES_API:
+        return True
     if selected_model is not None:
         return ensure_server(
             selected_url=selected_model.url,

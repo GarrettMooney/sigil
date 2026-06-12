@@ -20,9 +20,9 @@ from sigil.protocols import (
     SHELL_PROMPT_HANDOFF_TYPE,
 )
 from sigil.zeta import agent as zeta_agent
-from sigil.zeta import model as zeta_model
 from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import trace as zeta_trace
+from sigil.zeta.models import chat_completions as zeta_model
 
 
 def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
@@ -1206,3 +1206,38 @@ def test_zeta_agent_direct_mode_continues_after_edit(
     assert requests == 2
     assert result.final_text == "done"
     assert target.read_text(encoding="utf-8") == "new\n"
+
+
+def test_zeta_agent_codex_api_skips_endpoint_probe(monkeypatch) -> None:
+    def fail_probe(url: str | None = None) -> bool:
+        raise AssertionError("codex profiles must not probe a local endpoint")
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", fail_probe)
+
+    config = zeta_agent.AgentConfig(model_api="codex-responses")
+
+    assert zeta_agent.agent_model_endpoint_open(config) is True
+
+
+def test_zeta_agent_turn_passes_api_to_the_model(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assert captured["api"] is None

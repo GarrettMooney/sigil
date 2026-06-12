@@ -14,8 +14,12 @@ from ..display.summarize import (
     text_content,
     trace_object_summary,
 )
-from ..zeta.model import chat_completion_messages
-from ..zeta.models import ModelSelection, resolve_active_model, resolve_model_profile
+from ..zeta.models import (
+    ModelSelection,
+    chat_completion_messages,
+    resolve_active_model,
+    resolve_model_profile,
+)
 from ..zeta.prompt import reconstructed_prompt_request
 from ..zeta.trace import (
     AmbiguousIdError,
@@ -437,6 +441,7 @@ def trace_replay(object_id: str, model_profile: str | None, diff_output: bool) -
     original = latest_model_answer(store, prompt_id)
     message = chat_completion_messages(
         reconstructed.messages,
+        api=selection.api,
         tools=reconstructed.tools or None,
         tool_choice="auto",
         max_tokens=reconstructed.max_tokens,

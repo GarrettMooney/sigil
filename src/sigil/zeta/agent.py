@@ -10,7 +10,8 @@ from types import TracebackType
 from typing import Any, cast
 
 from ..protocols import is_shell_prompt_handoff
-from .model import (
+from .models import (
+    CODEX_RESPONSES_API,
     ChatCompletionStreamSink,
     chat_completion_messages,
     model_endpoint_open,
@@ -40,6 +41,7 @@ class AgentConfig:
     model_name: str | None = None
     model_url: str | None = None
     thinking: str | None = None
+    model_api: str | None = None
 
 
 @dataclass(frozen=True)
@@ -155,6 +157,8 @@ def run_agent_turn(
 
 
 def agent_model_endpoint_open(config: AgentConfig) -> bool:
+    if config.model_api == CODEX_RESPONSES_API:
+        return True
     if config.model_url is None:
         return model_endpoint_open()
     return model_endpoint_open(config.model_url)
@@ -221,6 +225,7 @@ def request_assistant_message(
     try:
         assistant = chat_completion_messages(
             messages,
+            api=config.model_api,
             tools=tools,
             tool_choice=tool_choice,
             selected_model=config.model_name,

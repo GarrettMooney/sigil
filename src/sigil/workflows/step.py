@@ -152,6 +152,7 @@ def step(
                 thinking=(
                     selected_model.thinking if selected_model is not None else None
                 ),
+                model_api=selected_model.api if selected_model is not None else None,
             ),
             context=context,
             event_sink=recorder.record,

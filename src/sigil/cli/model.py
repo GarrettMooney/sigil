@@ -6,13 +6,11 @@ import os
 
 import click
 
-from ..zeta import model as zeta_model
 from ..zeta.models import (
-    active_model_profile,
-    active_model_selection,
     clear_active_model_profile,
     default_model_selection,
     load_model_profiles,
+    resolve_active_model,
     resolve_model_profile,
     set_active_model_profile,
 )
@@ -34,15 +32,19 @@ def cmd_model_list() -> int:
         default = default_model_selection()
         click.echo(f"{default.profile}\t{default.model}\t{default.url}")
         click.echo(
-            "no profiles configured; using ZETA_MODEL_* defaults. "
+            "no profiles configured; using the builtin local default. "
             "Add profiles in ~/.zeta/models.toml.",
             err=True,
         )
         return 1 if catalog.diagnostics else 0
     for profile in sorted(catalog.profiles.values(), key=lambda item: item.name):
-        click.echo(
-            f"{profile.name}\t{profile.model}\t{profile.url or zeta_model.model_url()}"
-        )
+        selection = resolve_model_profile(profile.name, catalog=catalog)
+        if selection is None:
+            continue
+        line = f"{selection.profile}\t{selection.model}\t{selection.url}"
+        if profile.name == catalog.default_profile:
+            line += "\t(default)"
+        click.echo(line)
     return 1 if catalog.diagnostics else 0
 
 
@@ -69,12 +71,16 @@ def cmd_model_use(name: str) -> int:
 @cmd_model.command("show")
 def cmd_model_show() -> int:
     """Show the active model for the current shell session."""
-    active_profile = active_model_profile()
-    selection = active_model_selection()
-    if active_profile is not None and selection is None:
-        click.echo(f"model: {active_profile} is no longer configured", err=True)
-    active = selection or default_model_selection()
-    click.echo(f"model: {active.profile} -> {active.model} @ {active.url}")
+    resolution = resolve_active_model()
+    if resolution.stale_profile is not None:
+        click.echo(
+            f"model: {resolution.stale_profile} is no longer configured", err=True
+        )
+    active = resolution.selection
+    click.echo(
+        f"model: {active.profile} -> {active.model} @ {active.url}"
+        f" ({resolution.source})"
+    )
     return 0
 
 
