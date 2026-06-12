@@ -65,18 +65,36 @@ behavior:
   binding→CLI recording path, claimed by rename, orphans recovered
   after 60s. Measured recording cost 0.05ms/command (was 35–45ms warm).
 - zshaddhistory return-1 lines *linger* in internal history until the
-  next command executes; the widget therefore does not print -s — the
-  dispatch function inserts the original line while the rejected
-  dispatch line is the one being executed, which replaces the linger.
-  First up-arrow recalls what was typed.
-- The glyph aliases stayed: alias expansion runs before globbing, which
-  is what lets a bare `?` reach the function in eval/script contexts.
-  Interactive lines never reach them (widget first).
-- The accepted glyph line keeps showing what was typed: PREDISPLAY
+  next command executes; the `+` widget therefore does not print -s —
+  the line-init hook inserts the original line at the next prompt in
+  the parent shell, which replaces the linger. First up-arrow recalls
+  what was typed.
+- The glyph aliases are load-bearing: alias expansion runs before
+  globbing, which is what lets a bare `?` reach the function instead of
+  filename generation, and `noglob` keeps unquoted glob characters in
+  prompts literal. With pure command semantics they are the interactive
+  path for the comma family.
+- **Glyphs have pure command semantics (Remi, 2026-06-12, after the
+  three-model comparison below).** `,`/`,,`/`,,,`/`?` are ordinary
+  commands: zsh parses the line, the functions receive argv, shell
+  quoting/expansion/redirects/pipes apply natively. Docs quote every
+  example to teach the habit, and show `$(…)` interpolation as the
+  payoff. The earlier mandatory-quote + refusal design (one commit's
+  worth: bbc4cec) is superseded; the widget now captures only `+`,
+  whose text is raw shell grammar that argv cannot carry (the sudo
+  re-evaluation problem). Sharp edge inherited from zsh, documented in
+  the README: `!` immediately before a closing double quote (`"fix
+  it!"`) is zsh's `!"` history-mechanism sequence and eats the quote —
+  single quotes for prompts with bangs.
+- The accepted `+` line keeps showing what was typed: PREDISPLAY
   survives the final zle render (verified empirically) and is never
   parsed, so the widget sets it to the original buffer and dims the
   rewritten dispatch word with a buffer-relative `region_highlight`
-  entry. Both persist across zle sessions, so a `zle-line-init` hook
+  entry (character offsets, multibyte-safe). The dispatch word is a
+  single `…` in UTF-8 locales — a function delegating to
+  `__sigil_dispatch`, which stays the fallback word elsewhere — so the
+  trailer is one dim character. Both words are excluded from history
+  and from spool recording. Both persist across zle sessions, so a `zle-line-init` hook
   (chained via `add-zle-hook-widget`) clears them. Two related facts:
   the executed line is read from BUFFER *after* the widget chain
   returns — display and execution cannot be made to differ by buffer
@@ -87,6 +105,180 @@ behavior:
 - Harness lesson: macOS pty buffers are small; a blind sleep between
   pty writes can block the shell mid-write and make signals appear
   lost. `InteractiveZsh.settle()` drains while waiting.
+
+## Display palette stance
+
+The display layer is unapologetically Rose Pine: `tty.py` hardcodes
+true-color MUTED, LOVE, and IRIS, and the Rich layer's named colors
+(magenta = sigil, cyan = you) assume a Rose Pine terminal mapping.
+Under another terminal theme the named colors follow that theme but the
+true-color lines do not. Owned as an opinionated-product stance, not
+debt. Reasoning is one voice in one color: italic iris live (true
+color) and italic magenta in the transcript (named, lands on iris
+under Rose Pine) — sigil speaks in magenta panels and thinks in iris
+italics. This supersedes "reasoning takes the unused blue".
+
+## Done: live thinking trace, erased on answer
+
+Remi's idea (2026-06-12): show the model's chain of thought in the
+shell while it streams, and erase it once the model answers or returns
+tool calls. This supersedes the earlier decision "the live loop never
+prints reasoning; the ThinkingStatus timer is enough" — that decision
+predates thinking-on-by-default, where a local model can sit silent for
+30+ seconds.
+
+### Observations
+
+- The seam is one method. Reasoning deltas already reach
+  `ChatStreamAccumulator.add_delta` (`zeta/model.py:478`) and are only
+  accumulated; visible content goes through `stream_sink.content_delta`.
+  Adding `reasoning_delta(text)` to the sink protocol routes the stream
+  without touching transport or recording.
+- `ThinkingStatus` (`display/render.py`) already is an ephemeral
+  self-erasing renderer: thread-driven refresh, `rendered_line_count`,
+  erase-on-exit, auto-disabled on non-tty output. The feature is
+  "ThinkingStatus grows a rolling dim tail of reasoning under its
+  timer", not a new rendering system.
+- Erasure physics force a bounded window: ANSI cannot reclaim lines
+  that scrolled off the top of the screen, so the trace must be a
+  rolling tail (last ~6 lines, width-truncated), never the full CoT.
+  This is also the calmer display.
+- Non-tty safety is inherited: ThinkingStatus is disabled when output
+  is not interactive, so `, "x" > file` and pipes never capture
+  reasoning.
+- Nothing durable is lost by erasing: the full reasoning is already
+  recorded in the trace and rendered by `session transcript` (italic
+  blue). The live tail is pure process display — consistent with the
+  established language: panels are messages, plain/muted lines are
+  process, process does not persist.
+- Why it matters: perceived latency under long local-model thinking,
+  and an abort-early signal — watching reasoning drift lets the user
+  Ctrl-C a `,,`/`,,,` turn before a bad tool call instead of after.
+
+### Plan (tests → impl → docs, per step)
+
+1. Sink protocol: add `reasoning_delta` (default no-op) to the stream
+   sink; accumulator forwards reasoning deltas to it.
+2. ThinkingStatus: keep a deque of reasoning lines; render timer +
+   dim/italic tail (last N lines, truncated to terminal width); erase
+   all rendered lines on exit as today. Show the tail only once
+   reasoning has actually streamed (no flicker for non-thinking
+   profiles or instant answers).
+3. On exit, leave one muted process line in scrollback —
+   `thought for 12s` — matching the tool-trace aesthetic and pointing
+   the curious at `session transcript`. (Open question 1.)
+4. Wire through both turn paths (step/do/propose and ask context);
+   `--json`-less, display-only, no event changes.
+5. README: one sentence under the transcript/reasoning paragraph.
+
+### Resolved (Remi, 2026-06-12)
+
+1. After erase: one muted `thought for Ns` line stays in scrollback
+   (only on clean exit; an aborted turn leaves nothing).
+2. Tail height: 6 lines, fixed (`THINKING_TRACE_LINES`).
+3. Opt-out: global `SIGIL_THINKING_TRACE=0`, keeps the timer.
+4. Ctrl-C erases like normal.
+
+Verified live against llama.cpp + Qwen3.6: tail streams during
+thinking, erased on answer, `thought for 4s` left, answer rendered.
+Lines are width-truncated (never wrapped) because a wrapped line would
+break the rendered-line accounting the eraser depends on.
+
+## Decided 2026-06-12: glyph semantics — three models compared
+
+**Resolution: Model 1** (pure command semantics), with quoted examples
+throughout the docs and an expansion example showing what the shell buys.
+The comparison is kept for the record.
+
+Remi asked which behavior is the most Unix-friendly. The yardstick: a
+Unix tool receives argv after the shell parses the line; quoting belongs
+to the shell and is motivated, never required; double quotes interpolate,
+single quotes are literal; composition is pipes and redirects. The three
+candidate models, then a behavior matrix on concrete inputs.
+
+**Model 1 — pure command semantics (most Unix).** Delete the widget for
+the comma family: `,`/`,,`/`,,,`/`?` are ordinary commands reached
+through the existing functions and `noglob` aliases. zsh parses the
+line; the function receives argv. `+` keeps raw capture: argv cannot
+faithfully carry arbitrary shell text (the sudo problem — re-joining
+argv re-evaluates quoting), so the widget machinery survives, scoped to
+`+` only. The dispatch word, stash, PREDISPLAY, dim trailer, line-init
+hook, ellipsis function, and quote-refusal are deleted for the comma
+family.
+
+**Model 2 — current + shell-aligned quotes.** Keep mandatory quoting
+and the refusal hint, but make the span follow shell semantics: double
+quotes interpolate `$VAR` and `$(cmd)` at dispatch time; single quotes
+stay literal. One deliberate deviation remains: history expansion (`!`)
+is never performed inside the span — a safety improvement over the
+shell, not a drift from it (bash users disable it with `set +H` for the
+same reason).
+
+**Model 3 — current as shipped.** Mandatory quoting; the span is always
+literal regardless of quote type. Quoting selects nothing; it is only a
+delimiter. Safest prompts, furthest from shell quoting semantics.
+
+### Behavior matrix
+
+| Input | 1: pure command | 2: aligned quotes | 3: shipped |
+| --- | --- | --- | --- |
+| `, fix the tests` | works, prompt = `fix the tests` | refused with hint | refused with hint |
+| `, what's the deal` | `quote>` continuation prompt | refused with hint | refused with hint |
+| `, "what's the deal"` | works | works | works |
+| `, "fix it!!"` | **`!!` expands**: last command injected into the prompt, history rewritten | literal `!!` | literal `!!` |
+| `, "explain $PATH"` | `$PATH` expands | `$PATH` expands | literal `$PATH` |
+| `, "error: $(tail -1 e.log)"` | command runs, output in prompt | command runs, output in prompt | literal `$(…)` text |
+| `, 'fix it!! $PATH'` | all literal | all literal | all literal |
+| `, summarize > out.txt` | **redirects** (prompt = `summarize`) | refused with hint | refused with hint |
+| `, "summarize" > out.txt` | redirects | redirects | redirects |
+| `, "x" \| wc -l` | pipes | pipes | pipes |
+| `, what do *.log files do` | works (`noglob` alias) | refused | refused |
+| `, why (really)` | **parse error** near `(` | refused | refused |
+| `, what does # mean` | `#` truncates under `interactive_comments` (oh-my-zsh default) | refused | refused |
+| surprise execution in a prompt | backticks/`$(…)` anywhere unquoted or double-quoted | only inside double quotes, explicit | never |
+| bare `,` / `,,` / `?` | works | works | works |
+| `git diff \| , "review"` | works (alias path) | works (alias path) | works (alias path) |
+| `+ cargo test \| tee log` | widget: whole line is the captured command | same | same |
+
+### Consequences beyond parsing
+
+- **Display.** Model 1: nothing decorated for the comma family — the
+  typed line, history, and scrollback are simply real; no trailer. The
+  `…` trailer remains only on `+` lines. Models 2/3: as today.
+- **History.** Model 1: the shell owns it; histexpand rewrites the
+  stored line (the `!!` row above also changes what up-arrow recalls).
+  Models 2/3: the original typed line is restored at line-init.
+- **Provenance.** Model 1 records post-expansion argv — what the model
+  actually received; the typed form is gone if expansion occurred.
+  Models 2/3 record the typed span (model 2: plus whatever `$(…)`
+  produced inside it). All are honest at different layers.
+- **Failure modes.** Model 1's sharp edges are the shell's own:
+  `quote>`, parse errors, histexpand injection — familiar, documented,
+  and identical to every other command. Models 2/3 replace them with
+  one sigil-specific behavior (the refusal hint) that no other tool
+  has.
+- **Code.** Model 1 deletes roughly half the dispatch machinery and its
+  tests (second rework in two days; the pty harness and `+` path stay).
+  Model 2 adds a small, careful expansion step (`$`/`$(…)` only — no
+  globbing, no histexpand) plus tests. Model 3 is zero change.
+- **`jobs` text and Ctrl-Z** behave identically in all three (the
+  empty-text quirk is zsh's function-job behavior, not ours).
+
+### Assessment
+
+Model 1 is the most Unix-friendly without qualification, and it matches
+the project's stated posture (explicit, inspectable, "this file should
+stay boring", CLI as the source of truth). Its real cost is one class
+of accident: silent expansion in double-quoted prompts (`!!`, `$`,
+backticks) sending unintended text to the model — the shell's knives,
+kept sharp. Model 2 keeps exactly one guardrail (no histexpand, plus
+the refusal teaching the quoted form) at the cost of one nonstandard
+behavior. Model 3 is the safest and the least shell-like; its quoting
+is sigil grammar, not zsh grammar.
+
+The honest framing: 1 trusts the user with the shell, 2 files down one
+knife, 3 replaces the knife block. Pick by product identity, not by
+safety argument alone — all three are defensible.
 
 ---
 
@@ -492,6 +684,181 @@ Structural facts to build on:
 
 Graduation: "which session was I in when I asked about X last week" is
 answerable from the CLI without opening sqlite3 by hand.
+
+---
+
+# Roadmap: Codex / GPT-5.5 backend
+
+Make sigil a daily driver by letting the comma family run against
+Codex models (gpt-5.5 and friends) on a ChatGPT subscription, the way
+pi does it. Reference implementation: `earendil-works/pi` (ex
+`badlogic/pi-mono` — "aerendil" is Earendil, the company that acquired
+pi in April 2026; the Codex integration is theirs, not a fork's).
+Key files there: `packages/ai/src/providers/openai-codex-responses.ts`,
+`providers/openai-responses-shared.ts`, `utils/oauth/openai-codex.ts`.
+
+Anti-goal: the local-first default does not move. `ZETA_MODEL_URL`
+against llama.cpp stays the zero-config path; Codex is an explicit
+opt-in profile, and the roadmap's "hosted models" non-goal gets an
+amendment, not a deletion — per-event ambient inference stays local.
+
+## Observations
+
+Sigil today, the parts that matter:
+
+- One wire protocol, baked in: OpenAI chat-completions SSE over
+  stdlib urllib. Single entry `chat_completion_messages()`
+  (`zeta/model.py:612`) used by the agent loop (`zeta/agent.py:222`)
+  and trace replay (`cli/trace.py:438`); `chat_structured_output()`
+  (`model.py:707`) used by task-state compaction. Dispatching *inside*
+  these two functions upgrades all callers — replay against a Codex
+  profile included — without touching them.
+- The internal lingua franca is the chat-completions message dict
+  (`role`/`content`/`tool_calls`); the agent loop, timeline bridging,
+  and trace store all consume it. Keep it; translate at the edge.
+- The stream sink protocol (`content_delta`/`reasoning_delta`) and the
+  thinking-effort vocabulary already model what Codex needs; only the
+  wire names differ.
+- Profiles: `~/.zeta/models.toml` `{name, model, url, thinking}` →
+  `ModelSelection`; no auth field anywhere, no secret ever stored —
+  `model_selection_event()` records profile/model/url only.
+- Two llama.cpp-isms break on a hosted backend: `model_endpoint_open`
+  probes the URL for readiness, and `model_context_tokens` reads
+  `/props` / `/v1/models`. Codex needs a static context table
+  (gpt-5.5: 272k) and "ready" = credentials present and unexpired.
+
+What pi's integration actually is (verified against source):
+
+- Endpoint: `POST https://chatgpt.com/backend-api/codex/responses`,
+  SSE (`OpenAI-Beta: responses=experimental`). pi also has a
+  WebSocket transport with input-delta caching; ignore it for v1.
+- Request body: `model`, `stream: true`, `store: false` (the backend
+  *rejects* `store: true`), own system prompt in top-level
+  `instructions` with no system message in `input`,
+  `include: ["reasoning.encrypted_content"]`, `prompt_cache_key` =
+  session id, `reasoning: {effort, summary: "auto"}`, tools as
+  `{type: "function", name, description, parameters, strict: null}`.
+  Statelessness + `prompt_cache_key` means resending full context
+  every step — exactly sigil's current shape.
+- Headers: `Authorization: Bearer <access>`, `chatgpt-account-id`
+  (JWT claim `"https://api.openai.com/auth".chatgpt_account_id`),
+  `originator`, `session-id`.
+- Auth: ChatGPT OAuth, authorization-code + PKCE, client id
+  `app_EMoamEEZ73f0CkXaXp7hrann` (same as Codex CLI), callback
+  `localhost:1455`, refresh via `auth.openai.com/oauth/token`. pi
+  keeps its own `~/.pi/agent/auth.json` with file locking around
+  refresh; it does not reuse `~/.codex/auth.json`.
+- Streaming: Responses events map cleanly onto the sink —
+  `reasoning_summary_text.delta`/`reasoning_text.delta` →
+  `reasoning_delta`, `output_text.delta` → `content_delta`,
+  `function_call_arguments.delta/.done` → tool calls,
+  `response.completed` → usage (cached input tokens reported inside
+  `input_tokens`; subtract for telemetry), `response.failed`/`error`
+  → raised. Quota errors (`usage_limit_reached`) carry `resets_at` —
+  render the friendly "resets in ~N min" line, not a stack trace.
+- Reasoning round-trip: the full reasoning item (with
+  `encrypted_content`) comes back on `output_item.done`; pi stores it
+  opaquely on the message and replays it verbatim in the next
+  request's `input`. Function-call items carry `call_id|item_id`
+  pairs the backend validates.
+- **The risk that decides feasibility: `originator` is whitelisted.**
+  The backend 403s unknown originators; pi sends `originator: pi`
+  legitimately because OpenAI's *Codex for OSS* program approved it
+  (developers.openai.com/community/codex-for-oss). Sigil is not on
+  that list. The honest path is applying to the program; the
+  fallback is presenting as an approved client, which is ToS
+  territory I won't pick by default. This gates the transport stage,
+  not the seam stages — and `openai-responses` with an API key (open
+  question 4) is the same translator minus the gate.
+
+## Contract decisions (proposed)
+
+1. **The seam is an `api` field on the profile, dispatched inside the
+   existing entry points.** `models.toml` gains
+   `api = "chat-completions" | "codex-responses"` (default the
+   former; absent field changes nothing). `ModelProfile`,
+   `ModelSelection`, and `AgentConfig` carry it;
+   `chat_completion_messages` / `chat_structured_output` dispatch on
+   it. No new public function names, no provider registry — two
+   protocols is an `if`, not a framework.
+2. **Translate at the edge, keep the message dict.** A pure module
+   (`zeta/responses.py`) converts messages → Responses input items
+   and back. Reasoning items and Responses item ids ride opaquely on
+   the assistant message dict (e.g. `"_responses_items"`), so the
+   agent loop, timeline, and trace store stay protocol-blind. Within
+   one `run_agent_turn` loop the round-trip is exact; across sigil
+   turns v1 drops the encrypted reasoning (the model re-reasons;
+   correctness unaffected) — full persistence is a follow-up, see
+   open question 3.
+3. **Stdlib only, SSE only.** The transport reuses
+   `request_chat_completion`'s machinery: urllib, the existing SSE
+   parser, first-output/idle timeouts. No SDK, no WebSocket.
+4. **Secrets live in an auth store, never in models.toml and never
+   in events.** Proposal: v1 reads `~/.codex/auth.json` (the user
+   already runs Codex CLI; refresh with the shared client id, write
+   back under a lockfile). `sigil model login` PKCE flow only if
+   reuse proves brittle. `doctor`/`?` report auth state, never
+   tokens.
+
+## Work items (each step: tests → impl → docs → pre-commit)
+
+1. Profile seam: `api` field parsed and validated in `models.py`,
+   threaded through `ModelSelection`/`AgentConfig` and workflow
+   call sites; readiness (`model_server_ready`, `ensure_server`,
+   `model_endpoint_open` call sites) and context probing dispatch on
+   it (static table for Codex). Behavior identical for existing
+   profiles.
+2. `zeta/responses.py`, pure and offline-tested: message/tool-spec/
+   tool-result → input items (system → `instructions`), Responses
+   SSE event stream → sink calls + final message dict with
+   `tool_calls`, usage normalization (cached-token subtraction),
+   reasoning-item round-trip via the opaque field, error/quota
+   mapping. Table-driven tests from recorded pi/Codex event fixtures.
+3. Auth: `zeta/codex_auth.py` — read `~/.codex/auth.json`, expiry
+   check, refresh-with-lock, account id from the JWT. Tests with
+   synthetic auth files and a monkeypatched token endpoint.
+4. Transport: request builder (body + headers above,
+   `prompt_cache_key` = sigil session id) wired into the dispatch
+   from step 1; structured output via Responses `text.format` so
+   task-state compaction works unchanged. End-to-end against the
+   real backend behind a manual smoke script, not CI.
+5. Enablement: example profile in the README
+   (`name = "codex"`, `model = "gpt-5.5"`,
+   `api = "codex-responses"`, `thinking = "high"`), `sigil model
+   use codex`, status/doctor output, roadmap.md non-goal amendment,
+   originator note documenting whatever question 1 resolves to.
+
+Graduation: a full day driven through `,`/`,,`/`,,,` on gpt-5.5 —
+live thinking trace renders, tool calls execute, telemetry and ledger
+records land, `trace replay --model` works across both protocols —
+with the local default untouched and no secret anywhere in
+`~/.sigil` state or timeline events.
+
+## Open questions for Remi
+
+1. Originator: apply to Codex for OSS as `sigil` (free, public repo
+   required — sigil already is), and what do we do while the
+   application is pending? This blocks step 4 only.
+2. Auth posture: reuse `~/.codex/auth.json` (v1 proposal — zero new
+   flow, but we share a refresh token with Codex CLI and must not
+   corrupt its file) vs own `sigil model login` PKCE flow with a
+   separate store from day one?
+3. Reasoning persistence: is within-turn round-trip enough for v1,
+   or should assistant timeline events grow a field for raw
+   Responses items so cross-turn context keeps the encrypted
+   reasoning (better cache hits, no re-reasoning)?
+4. Should `api = "openai-responses"` (plain `OPENAI_API_KEY`,
+   api.openai.com) ship alongside? It is the same translator with
+   boring auth and no originator gate — a useful hedge if question 1
+   stalls, at API-token prices instead of the subscription.
+5. Thinking vocabulary: Codex models accept `xhigh`. Extend
+   `THINKING_EFFORTS` or map `high` → `xhigh` per-profile?
+
+### Resolved (Remi, 2026-06-12)
+
+1. Originator: `originator: zeta` (Remi). Application to Codex for
+   OSS in flight; one constant in the transport module either way.
+   Step 4 is unblocked.
 
 ---
 
