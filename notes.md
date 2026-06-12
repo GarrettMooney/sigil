@@ -105,6 +105,72 @@ behavior:
   pty writes can block the shell mid-write and make signals appear
   lost. `InteractiveZsh.settle()` drains while waiting.
 
+## Done: live thinking trace, erased on answer
+
+Remi's idea (2026-06-12): show the model's chain of thought in the
+shell while it streams, and erase it once the model answers or returns
+tool calls. This supersedes the earlier decision "the live loop never
+prints reasoning; the ThinkingStatus timer is enough" — that decision
+predates thinking-on-by-default, where a local model can sit silent for
+30+ seconds.
+
+### Observations
+
+- The seam is one method. Reasoning deltas already reach
+  `ChatStreamAccumulator.add_delta` (`zeta/model.py:478`) and are only
+  accumulated; visible content goes through `stream_sink.content_delta`.
+  Adding `reasoning_delta(text)` to the sink protocol routes the stream
+  without touching transport or recording.
+- `ThinkingStatus` (`display/render.py`) already is an ephemeral
+  self-erasing renderer: thread-driven refresh, `rendered_line_count`,
+  erase-on-exit, auto-disabled on non-tty output. The feature is
+  "ThinkingStatus grows a rolling dim tail of reasoning under its
+  timer", not a new rendering system.
+- Erasure physics force a bounded window: ANSI cannot reclaim lines
+  that scrolled off the top of the screen, so the trace must be a
+  rolling tail (last ~6 lines, width-truncated), never the full CoT.
+  This is also the calmer display.
+- Non-tty safety is inherited: ThinkingStatus is disabled when output
+  is not interactive, so `, "x" > file` and pipes never capture
+  reasoning.
+- Nothing durable is lost by erasing: the full reasoning is already
+  recorded in the trace and rendered by `session transcript` (italic
+  blue). The live tail is pure process display — consistent with the
+  established language: panels are messages, plain/muted lines are
+  process, process does not persist.
+- Why it matters: perceived latency under long local-model thinking,
+  and an abort-early signal — watching reasoning drift lets the user
+  Ctrl-C a `,,`/`,,,` turn before a bad tool call instead of after.
+
+### Plan (tests → impl → docs, per step)
+
+1. Sink protocol: add `reasoning_delta` (default no-op) to the stream
+   sink; accumulator forwards reasoning deltas to it.
+2. ThinkingStatus: keep a deque of reasoning lines; render timer +
+   dim/italic tail (last N lines, truncated to terminal width); erase
+   all rendered lines on exit as today. Show the tail only once
+   reasoning has actually streamed (no flicker for non-thinking
+   profiles or instant answers).
+3. On exit, leave one muted process line in scrollback —
+   `thought for 12s` — matching the tool-trace aesthetic and pointing
+   the curious at `session transcript`. (Open question 1.)
+4. Wire through both turn paths (step/do/propose and ask context);
+   `--json`-less, display-only, no event changes.
+5. README: one sentence under the transcript/reasoning paragraph.
+
+### Resolved (Remi, 2026-06-12)
+
+1. After erase: one muted `thought for Ns` line stays in scrollback
+   (only on clean exit; an aborted turn leaves nothing).
+2. Tail height: 6 lines, fixed (`THINKING_TRACE_LINES`).
+3. Opt-out: global `SIGIL_THINKING_TRACE=0`, keeps the timer.
+4. Ctrl-C erases like normal.
+
+Verified live against llama.cpp + Qwen3.6: tail streams during
+thinking, erased on answer, `thought for 4s` left, answer rendered.
+Lines are width-truncated (never wrapped) because a wrapped line would
+break the rendered-line accounting the eraser depends on.
+
 ## Decided 2026-06-12: glyph semantics — three models compared
 
 **Resolution: Model 1** (pure command semantics), with quoted examples

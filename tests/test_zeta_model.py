@@ -143,6 +143,40 @@ def test_zeta_stream_reassembles_chunks_split_mid_character() -> None:
     assert payload["choices"][0]["message"]["content"] == "café"
 
 
+def test_zeta_stream_forwards_reasoning_deltas_to_sink() -> None:
+    sink = DeltaSink()
+
+    payload = zeta_model.read_streamed_chat_completion(
+        sse_lines(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "reasoning_content": "think"},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"reasoning_content": "ing", "content": "done"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            "[DONE]",
+        ),
+        stream_sink=sink,
+    )
+
+    assert sink.reasoning_deltas == ["think", "ing"]
+    assert sink.deltas == ["done"]
+    message = payload["choices"][0]["message"]
+    assert message["reasoning_content"] == "thinking"
+
+
 def test_zeta_stream_emits_content_deltas_in_order() -> None:
     sink = DeltaSink()
 

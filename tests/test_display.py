@@ -5,6 +5,7 @@ from __future__ import annotations
 from io import StringIO
 from pathlib import Path
 
+import pytest
 from _zeta_helpers import (
     TtyBuffer,
     visible_terminal_text,
@@ -349,6 +350,132 @@ def test_sigil_display_thinking_status_skips_non_tty() -> None:
         pass
 
     assert output.getvalue() == ""
+
+
+def test_sigil_display_thinking_status_renders_reasoning_tail(monkeypatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    output = TtyBuffer()
+
+    with display_render.ThinkingStatus(output, interval=60, clock=lambda: 0.0) as s:
+        s.reasoning_delta("the user wants a summary\nso check ")
+        s.reasoning_delta("the recent diff")
+        s.refresh()
+
+    text = output.getvalue()
+    assert "  the user wants a summary\n" in text
+    assert "  so check the recent diff\n  thinking 0s" in text
+
+
+def test_sigil_display_thinking_status_tail_keeps_last_lines(monkeypatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    output = TtyBuffer()
+
+    with display_render.ThinkingStatus(
+        output, interval=60, clock=lambda: 0.0, reasoning_lines=3
+    ) as s:
+        s.reasoning_delta("\n".join(f"step-{i}" for i in range(1, 9)))
+        s.refresh()
+
+    text = output.getvalue()
+    assert "step-1" not in text
+    assert "step-5" not in text
+    assert "  step-6\n  step-7\n  step-8\n  thinking 0s" in text
+
+
+def test_sigil_display_thinking_status_truncates_long_reasoning_lines(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    output = TtyBuffer()
+
+    with display_render.ThinkingStatus(
+        output, interval=60, clock=lambda: 0.0, width=20
+    ) as s:
+        s.reasoning_delta("a reasoning line far longer than the terminal width")
+        s.refresh()
+
+    rendered = [
+        line
+        for line in output.getvalue().split("\n")
+        if "a reasoning" in line or "a reasonin" in line
+    ]
+    assert rendered
+    assert all(len(line.replace("\r\x1b[2K", "")) < 20 for line in rendered)
+
+
+def test_sigil_display_thinking_status_repaints_on_new_reasoning(monkeypatch) -> None:
+    # New reasoning within the same second must repaint; the seconds
+    # short-circuit alone would hold the tail frozen for the interval.
+    monkeypatch.setenv("NO_COLOR", "1")
+    output = TtyBuffer()
+
+    with display_render.ThinkingStatus(output, interval=60, clock=lambda: 0.0) as s:
+        s.reasoning_delta("first thought")
+        s.refresh()
+        s.reasoning_delta("\nsecond thought")
+        s.refresh()
+
+    text = output.getvalue()
+    assert "first thought" in text
+    assert "second thought" in text
+
+
+def test_sigil_display_thinking_status_leaves_thought_summary_line(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    output = TtyBuffer()
+    now = 0.0
+
+    with display_render.ThinkingStatus(output, interval=60, clock=lambda: now) as s:
+        s.reasoning_delta("hmm")
+        now = 12.3
+        s.refresh()
+
+    assert output.getvalue().endswith("  thought for 12s\n")
+
+
+def test_sigil_display_thinking_status_no_summary_without_reasoning(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    output = TtyBuffer()
+
+    with display_render.ThinkingStatus(output, interval=60):
+        pass
+
+    assert "thought for" not in output.getvalue()
+
+
+def test_sigil_display_thinking_status_no_summary_on_error_exit(monkeypatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    output = TtyBuffer()
+
+    with pytest.raises(RuntimeError):
+        with display_render.ThinkingStatus(output, interval=60) as s:
+            s.reasoning_delta("hmm")
+            raise RuntimeError("aborted")
+
+    text = output.getvalue()
+    assert "thought for" not in text
+    assert text.endswith("\x1b[2K")
+
+
+def test_sigil_display_thinking_trace_opt_out(monkeypatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("SIGIL_THINKING_TRACE", "0")
+    output = TtyBuffer()
+    now = 0.0
+
+    with display_render.ThinkingStatus(output, interval=60, clock=lambda: now) as s:
+        s.reasoning_delta("secret reasoning")
+        now = 5.0
+        s.refresh()
+
+    text = output.getvalue()
+    assert "secret reasoning" not in text
+    assert "thought for" not in text
+    assert "thinking 5s" in text
 
 
 def test_sigil_display_summarizes_shell_results() -> None:

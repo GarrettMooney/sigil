@@ -125,9 +125,13 @@ thinking = "high"
 values of OpenAI's Responses API: `"none"` disables thinking, and
 `"minimal"`, `"low"`, `"medium"`, or `"high"` request that effort
 (sent as `reasoning_effort`). Omit it to leave the model's own default in
-place — thinking models think. Reasoning is recorded in the trace and shown
-by `sigil session transcript`; it is never resent to the model in later
-turns.
+place — thinking models think. While the model thinks, the last few lines
+of its reasoning stream as a muted tail under the thinking timer; the tail
+is erased the moment the answer or a tool call arrives, leaving a single
+muted `thought for 12s` line in scrollback. Set `SIGIL_THINKING_TRACE=0`
+to keep only the timer. Reasoning is recorded in the trace and shown in
+full by `sigil session transcript`; it is never resent to the model in
+later turns, and never written to redirected or piped output.
 
 Then select a profile for the active shell session:
 
@@ -210,8 +214,8 @@ ask turns, handoff timeline events, and command results recorded through `+`.
 `sigil session transcript` renders that conversation back as a transcript —
 questions, answers, and compact tool traces, with each answer tagged by the
 id of the exact prompt the model saw. When the model streams reasoning, the
-transcript shows it as italic text above the answer it led to; the live
-loop never prints reasoning.
+transcript shows it in full as italic text above the answer it led to; the
+live loop shows only the ephemeral tail and the `thought for 12s` line.
 
 The zsh binding also records every interactive command: the command line,
 exit status, working directory, and timestamp — never its output. Output is

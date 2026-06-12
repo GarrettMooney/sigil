@@ -211,9 +211,13 @@ def request_assistant_message(
         status_open = False
         status_context.__exit__(exc_type, exc, traceback)
 
-    turn_stream_sink = ModelTurnStreamSink(stream_sink, close_status)
-    status_context.__enter__()
+    status = status_context.__enter__()
     status_open = True
+    turn_stream_sink = ModelTurnStreamSink(
+        stream_sink,
+        close_status,
+        reasoning_sink=getattr(status, "reasoning_delta", None),
+    )
     try:
         assistant = chat_completion_messages(
             messages,
@@ -242,9 +246,11 @@ class ModelTurnStreamSink:
             [type[BaseException] | None, BaseException | None, TracebackType | None],
             None,
         ],
+        reasoning_sink: Callable[[str], None] | None = None,
     ) -> None:
         self.stream_sink = stream_sink
         self.close_status = close_status
+        self.reasoning_sink = reasoning_sink
         self.streamed_content = False
 
     def content_delta(self, text: str) -> None:
@@ -254,6 +260,12 @@ class ModelTurnStreamSink:
         self.close_status(None, None, None)
         if self.stream_sink is not None:
             self.stream_sink.content_delta(text)
+
+    def reasoning_delta(self, text: str) -> None:
+        # Reasoning is process, not answer: it feeds the status renderer
+        # while the status is open and never reaches the answer stream.
+        if self.reasoning_sink is not None:
+            self.reasoning_sink(text)
 
 
 def model_status_context(

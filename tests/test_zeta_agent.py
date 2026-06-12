@@ -436,6 +436,87 @@ def test_zeta_agent_turn_forwards_content_deltas_and_marks_final(monkeypatch) ->
     assert result.final_text_streamed is True
 
 
+def test_zeta_agent_reasoning_deltas_feed_status_without_closing_it(
+    monkeypatch,
+) -> None:
+    events: list[str] = []
+
+    class Status:
+        def __enter__(self) -> object:
+            events.append("start")
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            events.append("stop")
+            return False
+
+        def reasoning_delta(self, text: str) -> None:
+            assert "stop" not in events
+            events.append(f"reasoning:{text}")
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del args
+        stream_sink = required_stream_sink(kwargs)
+        stream_sink.reasoning_delta("mull")
+        stream_sink.content_delta("done")
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(max_turns=1),
+        stream_sink=DeltaSink(),
+        model_status=Status,
+    )
+
+    assert result.final_text == "done"
+    assert events == ["start", "reasoning:mull", "stop"]
+
+
+def test_zeta_agent_reasoning_deltas_are_dropped_without_status(monkeypatch) -> None:
+    # A bare sink (no status renderer) must not receive reasoning text in
+    # its answer stream, and nothing may crash.
+    sink = DeltaSink()
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del args
+        stream_sink = required_stream_sink(kwargs)
+        stream_sink.reasoning_delta("mull")
+        stream_sink.content_delta("done")
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(max_turns=1),
+        stream_sink=sink,
+    )
+
+    assert result.final_text == "done"
+    assert sink.deltas == ["done"]
+    assert sink.reasoning_deltas == []
+
+
 def test_zeta_agent_turn_stops_status_before_first_stream_delta(monkeypatch) -> None:
     events: list[str] = []
 
@@ -453,6 +534,9 @@ def test_zeta_agent_turn_stops_status_before_first_stream_delta(monkeypatch) -> 
             assert text == "done"
             assert events == ["start", "stop"]
             events.append("delta")
+
+        def reasoning_delta(self, text: str) -> None:
+            del text
 
     def fake_chat_completion_messages(
         *args: object,

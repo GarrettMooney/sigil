@@ -50,9 +50,13 @@ class FakeStreamingResponse:
 class DeltaSink:
     def __init__(self) -> None:
         self.deltas: list[str] = []
+        self.reasoning_deltas: list[str] = []
 
     def content_delta(self, text: str) -> None:
         self.deltas.append(text)
+
+    def reasoning_delta(self, text: str) -> None:
+        self.reasoning_deltas.append(text)
 
 
 def required_stream_sink(

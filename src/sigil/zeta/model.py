@@ -36,6 +36,10 @@ class ChatCompletionStreamSink(Protocol):
         """Handle one visible assistant text delta."""
         ...
 
+    def reasoning_delta(self, text: str) -> None:
+        """Handle one model reasoning text delta."""
+        ...
+
 
 def stream_timeout_from_env(
     env: Mapping[str, str],
@@ -478,6 +482,8 @@ class ChatStreamAccumulator:
         reasoning_content = delta.get("reasoning_content")
         if isinstance(reasoning_content, str):
             self.reasoning_content.append(reasoning_content)
+            if reasoning_content and self.stream_sink is not None:
+                self.stream_sink.reasoning_delta(reasoning_content)
         tool_calls = delta.get("tool_calls")
         if tool_calls is not None:
             self.add_tool_calls(tool_calls)

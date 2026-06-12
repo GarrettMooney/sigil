@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import TracebackType
 from typing import Any, Protocol, TextIO
 
 from rich.console import Console
@@ -25,6 +27,7 @@ THINKING_STATUS_INTERVAL_SECONDS = 1.0
 RICH_STREAM_REFRESH_SECONDS = 0.125
 RICH_STREAM_LEFT_PADDING = 2
 THINKING_STATUS_LEFT_PADDING = RICH_STREAM_LEFT_PADDING
+THINKING_TRACE_LINES = 6
 CONTEXT_USAGE_BAR_WIDTH = 20
 CONTEXT_USAGE_BAR_FILLED = "█"
 CONTEXT_USAGE_BAR_EMPTY = "░"
@@ -115,6 +118,11 @@ class TraceAwareStreamRenderer:
         self.output = output
         self.before_output = before_output
         self.text_active = False
+
+    def reasoning_delta(self, text: str) -> None:
+        # Reasoning is process display, owned by the thinking status; the
+        # answer renderer never shows it.
+        del text
 
     def content_delta(self, text: str) -> None:
         if not text:
@@ -463,7 +471,14 @@ def estimated_tool_result_context_tokens(result: dict[str, Any]) -> int:
 
 
 class ThinkingStatus:
-    """Render an ephemeral thinking timer while a blocking model request runs."""
+    """Render an ephemeral thinking timer while a blocking model request runs.
+
+    When the model streams reasoning, the last few lines show as a muted
+    tail above the timer and are erased with it; a clean exit that saw
+    reasoning leaves one muted `thought for Ns` line in scrollback. The
+    full reasoning is recorded in the trace and rendered by
+    `sigil session transcript`.
+    """
 
     def __init__(
         self,
@@ -475,6 +490,8 @@ class ThinkingStatus:
         clock: Callable[[], float] = time.monotonic,
         before_start: Callable[[], None] | None = None,
         detail: Callable[[], str] | None = None,
+        reasoning_lines: int = THINKING_TRACE_LINES,
+        width: int | None = None,
     ) -> None:
         self.output = output
         self.enabled = is_interactive(output) if enabled is None else enabled
@@ -483,6 +500,12 @@ class ThinkingStatus:
         self.clock = clock
         self.before_start = before_start
         self.detail = detail
+        self.reasoning_lines = reasoning_lines
+        self.width = width
+        self.trace_enabled = thinking_trace_enabled()
+        self.reasoning_parts: list[str] = []
+        self.reasoning_dirty = False
+        self.reasoning_seen = False
         self.started_at = 0.0
         self.last_seconds: int | None = None
         self.wrote_status = False
@@ -502,14 +525,35 @@ class ThinkingStatus:
         self.thread.start()
         return self
 
-    def __exit__(self, *exc: object) -> bool:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> bool:
         if not self.enabled:
             return False
         self.stop.set()
         if self.thread is not None:
             self.thread.join()
         self.clear()
+        if exc_type is None and self.reasoning_seen:
+            seconds = max(int(self.clock() - self.started_at), 0)
+            line = muted(
+                f"{' ' * self.left_padding}thought for {seconds}s",
+                enabled=should_color(self.output),
+            )
+            self.write(f"{line}\n")
         return False
+
+    def reasoning_delta(self, text: str) -> None:
+        """Stream one reasoning delta into the rolling tail."""
+        if not text or not self.enabled or not self.trace_enabled:
+            return
+        with self.lock:
+            self.reasoning_parts.append(text)
+            self.reasoning_seen = True
+            self.reasoning_dirty = True
 
     def run(self) -> None:
         while not self.stop.wait(self.interval):
@@ -517,9 +561,10 @@ class ThinkingStatus:
 
     def refresh(self) -> None:
         seconds = max(int(self.clock() - self.started_at), 0)
-        if seconds == self.last_seconds:
+        if seconds == self.last_seconds and not self.reasoning_dirty:
             return
         self.last_seconds = seconds
+        self.reasoning_dirty = False
         prefix = ""
         if self.wrote_status:
             prefix = clear_terminal_lines(self.rendered_line_count)
@@ -531,17 +576,41 @@ class ThinkingStatus:
 
     def status_text(self, seconds: int) -> str:
         color = should_color(self.output)
-        text = muted(
-            thinking_status_text(seconds, self.left_padding),
-            enabled=color,
+        lines: list[str] = []
+        if self.detail is not None:
+            detail = self.detail()
+            if detail:
+                lines.append(muted(f"{' ' * self.left_padding}{detail}", enabled=color))
+        for tail_line in self.reasoning_tail():
+            lines.append(muted(tail_line, enabled=color))
+        lines.append(
+            muted(thinking_status_text(seconds, self.left_padding), enabled=color)
         )
-        if self.detail is None:
-            return text
-        detail = self.detail()
-        if not detail:
-            return text
-        detail_text = muted(f"{' ' * self.left_padding}{detail}", enabled=color)
-        return f"{detail_text}\n{text}"
+        return "\n".join(lines)
+
+    def reasoning_tail(self) -> list[str]:
+        """Return the last reasoning lines, padded and width-truncated.
+
+        Truncation rather than wrapping: a line that wraps would break the
+        rendered-line accounting the eraser depends on. Width is counted in
+        characters, an approximation for double-width glyphs.
+        """
+        with self.lock:
+            text = "".join(self.reasoning_parts)
+        if not text:
+            return []
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return []
+        width = self.width if self.width is not None else terminal_width(self.output)
+        limit = max(width - 1, 10)
+        tail = []
+        for line in lines[-self.reasoning_lines :]:
+            padded = f"{' ' * self.left_padding}{line}"
+            if len(padded) > limit:
+                padded = padded[: limit - 1] + "\u2026"
+            tail.append(padded)
+        return tail
 
     def clear(self) -> None:
         if not self.wrote_status:
@@ -557,6 +626,19 @@ class ThinkingStatus:
 
 def thinking_status_text(seconds: int, left_padding: int = 0) -> str:
     return f"{' ' * left_padding}thinking {seconds}s"
+
+
+def thinking_trace_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Return whether the live reasoning tail is enabled."""
+    values = os.environ if env is None else env
+    return values.get("SIGIL_THINKING_TRACE", "1").lower() not in {"0", "false"}
+
+
+def terminal_width(output: TextIO) -> int:
+    try:
+        return os.get_terminal_size(output.fileno()).columns
+    except (OSError, ValueError, AttributeError):
+        return 80
 
 
 def clear_terminal_lines(line_count: int) -> str:
