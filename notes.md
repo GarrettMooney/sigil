@@ -842,6 +842,40 @@ job-control limitation, harden tmux/multi-session behavior, and tighten
 binding latency. Grounded in the current `bindings/sigil.zsh`, `cli/run.py`,
 `session.py`, and measurements on this machine.
 
+**Implemented (2026-06-12), five commits:** pty harness (19f853b),
+zero-fork spool (44f48c7), session-per-pty + doctor check (e7327c5),
+raw-dispatch widget (c7a2aa1), completion shim + coexistence pins
+(9cb6207). Open questions resolved as proposed: ingest at every CLI
+entry, Ctrl-Z suspends the capture wrapper with the command, no
+parameter expansion in prompts. Smoke-tested end to end against the
+real CLI in a real interactive zsh: pipeline capture, spool → `?`,
+Ctrl-Z/jobs/fg/Ctrl-C on `+`, `$?` propagation, up-arrow recall,
+EPOCHREALTIME session ids. Measured recording cost 0.05ms/command
+(was 35–45ms warm).
+
+Implementation findings worth keeping:
+
+- The `handoff shell-turn` CLI command and `append_shell_turn` are gone;
+  the spool (`shell-turns.spool`, `\x1f`/`\x1e`-delimited) is the only
+  binding→CLI recording path, claimed by rename, orphans recovered
+  after 60s.
+- zshaddhistory return-1 lines *linger* in internal history until the
+  next command executes; the widget therefore does not print -s — the
+  dispatch function inserts the original line while the rejected
+  dispatch line is the one being executed, which replaces the linger.
+  First up-arrow recalls what was typed.
+- The glyph aliases stayed: alias expansion runs before globbing, which
+  is what lets a bare `?` reach the function in eval/script contexts.
+  Interactive lines never reach them (widget first).
+- Cosmetic, accepted for now: at accept time the typed glyph line
+  visibly morphs into `__sigil_dispatch` on the prompt line, and a
+  suspended `+` job lists with an empty command text in `jobs`.
+  Candidate refinement if it grates: POSTDISPLAY or a printed dim echo
+  of the original line.
+- Harness lesson: macOS pty buffers are small; a blind sleep between
+  pty writes can block the shell mid-write and make signals appear
+  lost. `InteractiveZsh.settle()` drains while waiting.
+
 ### Observations
 
 - **`+` job control.** The accept-line widget *executes* `sigil run --shell`
@@ -927,23 +961,58 @@ option 5 and it is reusable for every future binding change.
 - Pty harness test: two ptys from one exported environment must end up with
   distinct session ids; a same-pty subshell keeps its id.
 
-**4. `+` job control (biggest behavior change, lands on the harness).**
-- The widget stops executing. It rewrites the buffer to
-  `__sigil_run_plus_capture_command ${(q)command}` and calls
-  `zle .accept-line`. The command then runs as a normal foreground job:
-  Ctrl-Z suspends `sigil run` and its child shell (one process group),
-  `jobs`/`fg`/`bg` work, Ctrl-C is ordinary INT delivery, `$?` is set
-  naturally, and preexec/precmd fire like any other command.
-- History: `print -s` the original `+ ...` line in the widget so up-arrow
+**4. One raw-dispatch widget for every glyph (job control + quoting,
+lands on the harness).**
+- The accept-line widget becomes the single interactive entry point for
+  all glyphs — `+`, `,`, `,,`, `,,,`, `?` — and it stops executing
+  anything. It captures the rest of the buffer raw, before any parsing,
+  stashes it in a `typeset -g` variable, rewrites the buffer to a fixed
+  safe line (`__sigil_dispatch <glyph>` reading the stash), and calls
+  `zle .accept-line`. The rewritten line contains no user text, so quotes,
+  parens, `#`, and `!` in prompts can never confuse the parser or trigger
+  history expansion — no more `quote>`. The glyph aliases and `noglob`
+  hacks go away; the named functions stay for scripts and non-interactive
+  use.
+- Job control comes with the same move: the command runs as a normal
+  foreground job. Ctrl-Z suspends `sigil run` and its child shell (one
+  process group), `jobs`/`fg`/`bg` work, Ctrl-C is ordinary INT delivery,
+  `$?` is set naturally, and preexec/precmd fire like any other command.
+- History: `print -s` the original glyph line in the widget so up-arrow
   recalls what the user typed; extend the zshaddhistory filter to drop the
   rewritten `__sigil_*` form. The rewritten line already matches the
   `__sigil_*` recording exclusion, so no double record — pin with a test.
 - Fix the multiline capture while in there: prefix test
-  `[[ $BUFFER == '+'[[:space:]]* ]]` plus parameter stripping instead of
-  the single-line regex, passing the whole remaining buffer through.
-- Pty tests: `+ sleep 100` then Ctrl-Z shows a suspended job, `fg`
-  resumes, Ctrl-C interrupts; `+ false` leaves `$?` = 1; multiline `+`
-  pipelines round-trip.
+  `[[ $BUFFER == '+'[[:space:]]* ]]` (and glyph siblings) plus parameter
+  stripping instead of the single-line regex, passing the whole remaining
+  buffer through.
+- Pty tests: `, what's the deal` runs without `quote>`; `, why (really)`
+  and `, fix it!` dispatch verbatim; `+ sleep 100` then Ctrl-Z shows a
+  suspended job, `fg` resumes, Ctrl-C interrupts; `+ false` leaves
+  `$?` = 1; multiline `+` pipelines round-trip.
+
+### Beyond friction removal: pleasantness gaps still in binding scope
+
+The four items above remove what users notice; these two are the positive
+polish that the plan should pick up, both small and binding-scoped:
+
+- **Completion behind `+`.** `+ cargo te<TAB>` falls back to file
+  completion because zsh treats `+` as the command word. Add a completion
+  shim that strips the glyph prefix and re-enters completion as though the
+  command started at the second word (the `_precommand`/`words=`
+  `(( CURRENT-- ))` idiom used by `sudo`/`nohup` completions).
+- **Ecosystem coexistence, pinned.** zsh-autosuggestions,
+  zsh-syntax-highlighting, and vi-mode plugins also wrap `accept-line`;
+  source order decides who wins. The pty harness gets matrix tests:
+  binding sourced before and after zsh-autosuggestions and
+  zsh-syntax-highlighting, asserting glyph dispatch and suggestion
+  behavior both survive. The named glyph functions staying defined is
+  what keeps highlighters painting `, …` as valid — pin that too, it is
+  currently luck.
+
+Out of binding scope but worth saying: once the binding is invisible,
+perceived pleasantness is dominated by the Python side — time to first
+streamed token for `,`, tool-trace rendering for `,,`. Option 5 does not
+move that needle and should not claim to.
 
 ### Open questions for Remi
 
@@ -957,6 +1026,11 @@ option 5 and it is reusable for every future binding change.
 3. Session-per-pty means `exec ssh`/reattach edge cases inherit whichever
    pty they land on. Any continuity case you care about beyond tmux panes,
    nested shells, and new windows?
+4. Raw glyph capture ends parameter expansion in prompts: today
+   `, explain $PWD` expands before the function sees it; after the change
+   the model receives the literal `$PWD`. Acceptable? Proposal: yes —
+   prompts are natural language, the cwd already rides in context, and
+   silent expansion is exactly the class of surprise being removed.
 
 ## Operational maturity follow-up (2026-06-12)
 
@@ -981,3 +1055,76 @@ Plan:
    `uv.lock` with `uv lock`.
 3. Run the focused install tests, then the full suite. Since this updates
    dependency metadata and notes, run pre-commit before finishing.
+
+---
+
+# Implementation plan: harden exit codes only
+
+Goal: codify the public CLI exit codes first. Do not harden ledger
+schemas, trace objects, glyph behavior, or audit JSON in this pass.
+
+## Boundary
+
+Only stabilize process exit behavior that callers can observe from the
+CLI and shell binding:
+
+- successful command/workflow
+- usage/configuration error
+- model unavailable
+- permission or state-directory failure
+- tool/schema failure
+- interrupted/aborted execution
+
+## Location
+
+Keep the constants close to the CLI base, not as a broad public contract
+module yet. Add them in `src/sigil/cli/_base.py` unless the implementation
+shape makes a tiny sibling module under `src/sigil/cli/` clearer.
+
+The intent is that CLI modules and workflows import names, not magic
+integers, while keeping the contract visibly attached to the CLI layer.
+
+## Implementation
+
+1. Add named constants for the exit codes already present in behavior.
+   Start conservative:
+
+```python
+EXIT_OK = 0
+EXIT_USAGE = 2
+EXIT_MODEL_UNAVAILABLE = ...
+EXIT_STATE_ERROR = ...
+EXIT_TOOL_ERROR = ...
+EXIT_ABORTED = 130
+```
+
+2. Search for literal returns/`SystemExit` in CLI and workflow paths.
+   Replace only obvious public process outcomes. Do not normalize every
+   integer in helper code.
+
+3. Add or update focused tests that assert names map to current behavior:
+
+- successful command/workflow returns `EXIT_OK`
+- model-unavailable path returns `EXIT_MODEL_UNAVAILABLE`
+- permission/state failures return `EXIT_STATE_ERROR`
+- schema/tool failures return `EXIT_TOOL_ERROR` where currently exposed
+- interrupts/aborts return `EXIT_ABORTED` if already represented
+
+4. If existing behavior is inconsistent, preserve behavior unless the fix
+   is clearly part of the CLI contract. Flag any ambiguous exit-code
+   mismatch in notes before changing it.
+
+## Focused tests
+
+```sh
+uv run pytest tests/test_operators.py tests/test_workflows.py tests/test_install.py tests/test_security_state.py
+```
+
+## Release gate
+
+```sh
+uv run pytest
+uv run pre-commit run --all-files
+uvx --with radon radon cc src tests -s
+uv run complexipy src tests --plain --failed --max-complexity-allowed 25
+```

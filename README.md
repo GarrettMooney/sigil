@@ -215,12 +215,15 @@ loop never prints reasoning.
 
 The zsh binding also records every interactive command: the command line,
 exit status, working directory, and timestamp — never its output. Output is
-only captured when you ask for it explicitly with `+`. As with zsh history,
-a command typed with a leading space is not recorded, and `SIGIL_RECORD=0`
-turns recording off; secrets typed into command arguments are exposed
-exactly as they are in `~/.zsh_history`, and the same escape hatches apply.
-Recording feeds the session log and the delegation ledger; prompts sent to
-the model only ever include a bounded window of recent commands.
+only captured when you ask for it explicitly with `+`. Recording costs
+nothing at the prompt: the binding appends to a per-session spool without
+starting any process, and the CLI folds the spool in the next time any
+`sigil` command runs. As with zsh history, a command typed with a leading
+space is not recorded, and `SIGIL_RECORD=0` turns recording off; secrets
+typed into command arguments are exposed exactly as they are in
+`~/.zsh_history`, and the same escape hatches apply. Recording feeds the
+session log and the delegation ledger; prompts sent to the model only ever
+include a bounded window of recent commands.
 
 ## Glyph Reference
 
@@ -384,9 +387,13 @@ trace show`. Clearing a session removes its continuity files and
 trace store; the ledger index and event log are global and survive
 `sigil session clear`.
 
-Installed zsh bindings set `SIGIL_SESSION_ID` once when the shell
-starts, so separate terminal windows keep separate continuity. Override the
-boundary with `SIGIL_SESSION_ID` or `SIGIL_SESSION_DIR`.
+Installed zsh bindings set `SIGIL_SESSION_ID` once when the shell starts
+and tie it to the terminal's pty, so separate terminal windows — including
+tmux panes, which inherit the server's environment — keep separate
+continuity, while subshells on the same terminal share it. Override the
+boundary with `SIGIL_SESSION_ID` or `SIGIL_SESSION_DIR`; an id you set
+yourself is respected as given. `sigil doctor` flags a session id that was
+created on a different terminal than the one it is used from.
 
 Inspect state without calling a model:
 
