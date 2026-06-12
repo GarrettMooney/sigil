@@ -126,6 +126,12 @@ class Store(Protocol):
     def objects(
         self, kind: str | tuple[str, ...] | None = None, limit: int | None = None
     ) -> list[tuple[ObjectId, Object]]: ...
+    def search_objects(
+        self,
+        pattern: str,
+        kind: str | tuple[str, ...] | None = None,
+        limit: int | None = None,
+    ) -> list[tuple[ObjectId, Object]]: ...
     def prompt_object_ids(self) -> list[ObjectId]: ...
     def stats(self) -> TraceStats: ...
 
@@ -246,6 +252,11 @@ def derivation_id(derivation: Derivation) -> str:
     return f"derivation:{digest}"
 
 
+def escape_like(text: str) -> str:
+    """Escape SQLite LIKE wildcards so they match literally."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def canonical_json(value: Any) -> str:
     """Serialize JSON data deterministically for content hashing."""
     return json.dumps(
@@ -328,6 +339,20 @@ class InMemoryStore(StoreBase):
             (object_id_value, obj)
             for object_id_value, obj in reversed(self._objects.items())
             if kinds is None or obj.kind in kinds
+        ]
+        return listed if limit is None else listed[:limit]
+
+    def search_objects(
+        self,
+        pattern: str,
+        kind: str | tuple[str, ...] | None = None,
+        limit: int | None = None,
+    ) -> list[tuple[ObjectId, Object]]:
+        needle = pattern.lower()
+        listed = [
+            (object_id_value, obj)
+            for object_id_value, obj in self.objects(kind=kind)
+            if needle in canonical_json(obj.data).lower()
         ]
         return listed if limit is None else listed[:limit]
 
@@ -535,10 +560,9 @@ class SqliteStore(StoreBase):
         return _object_from_row(row)
 
     def object_ids_with_prefix(self, prefix: str, limit: int = 16) -> list[ObjectId]:
-        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         rows = self.connection.execute(
             r"SELECT id FROM objects WHERE id LIKE ? ESCAPE '\' ORDER BY id LIMIT ?",
-            (f"{escaped}%", limit),
+            (f"{escape_like(prefix)}%", limit),
         ).fetchall()
         return [str(row["id"]) for row in rows]
 
@@ -622,13 +646,34 @@ class SqliteStore(StoreBase):
     def objects(
         self, kind: str | tuple[str, ...] | None = None, limit: int | None = None
     ) -> list[tuple[ObjectId, Object]]:
+        return self._list_objects(kind=kind, limit=limit)
+
+    def search_objects(
+        self,
+        pattern: str,
+        kind: str | tuple[str, ...] | None = None,
+        limit: int | None = None,
+    ) -> list[tuple[ObjectId, Object]]:
+        return self._list_objects(kind=kind, limit=limit, pattern=pattern)
+
+    def _list_objects(
+        self,
+        *,
+        kind: str | tuple[str, ...] | None,
+        limit: int | None,
+        pattern: str | None = None,
+    ) -> list[tuple[ObjectId, Object]]:
         kinds = (kind,) if isinstance(kind, str) else kind
-        kind_filter = ""
+        clauses: list[str] = []
         params: list[Any] = []
         if kinds is not None:
             placeholders = ", ".join("?" for _ in kinds)
-            kind_filter = f"WHERE objects.kind IN ({placeholders})"
+            clauses.append(f"objects.kind IN ({placeholders})")
             params.extend(kinds)
+        if pattern is not None:
+            clauses.append(r"objects.data_json LIKE ? ESCAPE '\'")
+            params.append(f"%{escape_like(pattern)}%")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         limit_clause = "LIMIT ?" if limit is not None else ""
         if limit is not None:
             params.append(limit)
@@ -638,7 +683,7 @@ class SqliteStore(StoreBase):
                    objects.data_json, objects.links_json
             FROM objects
             LEFT JOIN derivations ON derivations.output_id = objects.id
-            {kind_filter}
+            {where}
             GROUP BY objects.id
             ORDER BY COALESCE(MAX(derivations.created_at), 0) DESC, objects.id DESC
             {limit_clause}

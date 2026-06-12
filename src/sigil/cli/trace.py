@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+from collections.abc import Callable
 from typing import Any
 
 import click
@@ -118,12 +119,11 @@ def trace_log(
     widen the listing. Ids are usable with show/closure/tree.
     """
     selected = None if all_kinds else (tuple(kinds) or NARRATIVE_KINDS)
-    if all_sessions:
-        if trace_session_scope(ctx) is not None:
-            raise click.ClickException("--all-sessions conflicts with --session")
-        lines = all_session_log_lines(selected, limit)
-    else:
-        lines = store_log_lines(scoped_store(ctx), selected, limit)
+    lines = scope_listing_lines(
+        ctx,
+        all_sessions,
+        lambda store: object_listing_lines(store, store.objects(selected, limit)),
+    )
     if not lines:
         click.echo("no trace objects recorded", err=True)
         return 0
@@ -132,32 +132,87 @@ def trace_log(
     return 0
 
 
-def store_log_lines(
-    store: Store,
-    selected: tuple[str, ...] | None,
+@trace_group.command("grep")
+@click.argument("pattern")
+@click.option(
+    "--kind",
+    "kinds",
+    multiple=True,
+    help="Only search this object kind (repeatable).",
+)
+@click.option(
+    "--limit",
+    default=20,
+    show_default=True,
+    type=int,
+    help="Maximum number of matches.",
+)
+@click.option(
+    "--all-sessions",
+    "all_sessions",
+    is_flag=True,
+    help="Search every recorded session's store, grouped by session.",
+)
+@click.pass_context
+def trace_grep(
+    ctx: click.Context,
+    pattern: str,
+    kinds: tuple[str, ...],
     limit: int,
+    all_sessions: bool,
+) -> int:
+    """Search trace object data for a substring, newest first.
+
+    Matching is case-insensitive over the stored JSON data. LIKE
+    wildcards in PATTERN match literally.
+    """
+    selected = tuple(kinds) or None
+    lines = scope_listing_lines(
+        ctx,
+        all_sessions,
+        lambda store: object_listing_lines(
+            store, store.search_objects(pattern, kind=selected, limit=limit)
+        ),
+    )
+    if not lines:
+        click.echo("no trace objects match", err=True)
+        return 0
+    for line in lines:
+        click.echo(line)
+    return 0
+
+
+def object_listing_lines(
+    store: Store,
+    listed: list[tuple[ObjectId, Object]],
 ) -> list[str]:
-    """Render one store's recent objects as listing lines."""
+    """Render store objects as one-line listings."""
     lines = []
-    for object_id_value, obj in store.objects(kind=selected, limit=limit):
+    for object_id_value, obj in listed:
         summary = trace_object_summary(obj, get_object=store.get_object)
         lines.append(format_trace_line(object_id_value, obj.kind, summary))
     return lines
 
 
-def all_session_log_lines(
-    selected: tuple[str, ...] | None,
-    limit: int,
+def scope_listing_lines(
+    ctx: click.Context,
+    all_sessions: bool,
+    render: Callable[[Store], list[str]],
 ) -> list[str]:
-    """Render every session's recent objects, prefixed with the session id."""
+    """Render lines for the scoped store, or for every recorded session.
+
+    With all_sessions each line carries its session id as a prefix;
+    the flag conflicts with the group's --session option.
+    """
+    if not all_sessions:
+        return render(scoped_store(ctx))
+    if trace_session_scope(ctx) is not None:
+        raise click.ClickException("--all-sessions conflicts with --session")
     lines = []
     for session_id_value in available_session_ids():
         store = open_session_store(session_id_value)
         try:
-            lines.extend(
-                f"{session_id_value}  {line}"
-                for line in store_log_lines(store, selected, limit)
-            )
+            lines.extend(f"{session_id_value}  {line}" for line in render(store))
         finally:
             store.close()
     return lines

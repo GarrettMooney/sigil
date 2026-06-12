@@ -229,6 +229,102 @@ def test_sigil_zeta_trace_cli_log_all_sessions_prefixes_session_ids(
     assert any(line.startswith("beta") for line in lines)
 
 
+def test_zeta_trace_sqlite_search_matches_data_and_filters_kind(
+    tmp_path: Path,
+) -> None:
+    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    matching = store.put_object(
+        zeta_trace.Object(
+            kind="prompt", schema="v1", data={"text": "the Kubernetes incident"}
+        )
+    )
+    other_kind = store.put_object(
+        zeta_trace.Object(
+            kind="tool_result", schema="v1", data={"text": "kubernetes logs"}
+        )
+    )
+    store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"text": "unrelated"})
+    )
+
+    hits = store.search_objects("kubernetes")
+    prompt_hits = store.search_objects("kubernetes", kind="prompt")
+
+    assert {hit_id for hit_id, _ in hits} == {matching, other_kind}
+    assert [hit_id for hit_id, _ in prompt_hits] == [matching]
+    store.close()
+
+
+def test_zeta_trace_sqlite_search_treats_like_wildcards_literally(
+    tmp_path: Path,
+) -> None:
+    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    percent = store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"text": "100% done"})
+    )
+    store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"text": "100 done"})
+    )
+
+    hits = store.search_objects("100%")
+
+    assert [hit_id for hit_id, _ in hits] == [percent]
+    store.close()
+
+
+def test_zeta_trace_in_memory_search_matches_case_insensitively() -> None:
+    store = zeta_trace.InMemoryStore()
+    matching = store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"text": "Deploy Friday"})
+    )
+    store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"text": "other"})
+    )
+
+    hits = store.search_objects("deploy friday")
+
+    assert [hit_id for hit_id, _ in hits] == [matching]
+
+
+def test_sigil_zeta_trace_cli_grep_lists_matches(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
+    prompt_id = seed_session_store("current", "the missing deploy key")
+    seed_session_store("current", "unrelated")
+
+    result = CliRunner().invoke(sigil_cli, ["trace", "grep", "deploy key"])
+
+    assert result.exit_code == 0
+    short_id = prompt_id.split(":", 1)[1][:8]
+    assert short_id in result.output
+    assert len(result.output.strip().splitlines()) == 1
+
+
+def test_sigil_zeta_trace_cli_grep_all_sessions_names_the_session(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
+    seed_session_store("alpha", "asked about the rollback")
+    seed_session_store("beta", "something else")
+
+    result = CliRunner().invoke(
+        sigil_cli, ["trace", "grep", "rollback", "--all-sessions"]
+    )
+
+    assert result.exit_code == 0
+    lines = [line for line in result.output.splitlines() if line]
+    assert lines and all(line.startswith("alpha") for line in lines)
+
+
+def test_sigil_zeta_trace_cli_grep_reports_no_matches(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
+    seed_session_store("current", "recorded")
+
+    result = CliRunner().invoke(sigil_cli, ["trace", "grep", "absent-token"])
+
+    assert result.exit_code == 0
+    assert "no trace objects match" in result.output
+
+
 def test_zeta_close_default_stores_closes_connections_and_reopens() -> None:
     store = zeta_trace.default_store()
 
