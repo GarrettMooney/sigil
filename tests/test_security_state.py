@@ -25,6 +25,13 @@ from sigil.cli._base import (
     EXIT_USAGE,
 )
 from sigil.display.tty import should_color
+from sigil.events import (
+    DraftEvent,
+    EventCursor,
+    Filter,
+    SqliteEventStore,
+    event_store_path,
+)
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.session import (
     ingest_spooled_turns,
@@ -247,11 +254,11 @@ def test_main_rewrites_missing_executable_errors() -> None:
 
 def test_main_rewrites_permission_errors() -> None:
     stderr = StringIO()
-    denied = PermissionError(1, "Operation not permitted", "/nope/events.jsonl")
+    denied = PermissionError(1, "Operation not permitted", "/nope/events.sqlite3")
     with patch("sigil.cli.cli.main", side_effect=denied):
         with redirect_stderr(stderr):
             assert main(["ask", "hello"]) == EXIT_ERROR
-    assert "permission denied: /nope/events.jsonl" in stderr.getvalue()
+    assert "permission denied: /nope/events.sqlite3" in stderr.getvalue()
 
 
 APPEND_LARGE_EVENTS_SCRIPT = """
@@ -269,7 +276,7 @@ for _ in range(25):
 """
 
 
-def test_append_event_does_not_interleave_large_lines_across_processes() -> None:
+def test_event_store_records_large_events_across_processes() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         env = {**os.environ, "SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"}
         start_gate = Path(tmp) / "start"
@@ -295,38 +302,105 @@ def test_append_event_does_not_interleave_large_lines_across_processes() -> None
         start_gate.touch()
         for proc in procs:
             assert proc.wait(timeout=60) == 0
-        lines = (Path(tmp) / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        store = SqliteEventStore(Path(tmp) / "events.sqlite3")
+        events = store.list_events(Filter(event_type="big"))
 
-    assert len(lines) == 50
-    for line in lines:
-        payload = json.loads(line)["payload"]
+    assert len(events) == 50
+    for event in events:
+        payload = event.payload["payload"]
         assert set(payload) in ({"a"}, {"b"})
 
 
-def test_append_event_rotates_oversized_log(monkeypatch) -> None:
+def test_event_store_path_is_separate_from_trace_object_store() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
-            monkeypatch.setattr("sigil.state.EVENT_LOG_MAX_BYTES", 200)
-            append_event({"type": "first", "payload": "x" * 300})
-            append_event({"type": "second"})
+            path = event_store_path()
 
-        rotated = Path(tmp) / "events.jsonl.1"
-        assert rotated.exists()
-        rotated_types = [
-            json.loads(line)["type"]
-            for line in rotated.read_text(encoding="utf-8").splitlines()
-        ]
-        assert rotated_types == ["first"]
-        current_types = [
-            json.loads(line)["type"]
-            for line in (Path(tmp) / "events.jsonl")
-            .read_text(encoding="utf-8")
-            .splitlines()
-        ]
-        assert current_types == ["second"]
+    assert path == Path(tmp) / "events.sqlite3"
+
+
+def test_sqlite_event_store_deduplicates_idempotency_keys() -> None:
+    store = SqliteEventStore.in_memory()
+    draft = DraftEvent(
+        event_type="sigil.turn",
+        source="test",
+        payload={"turn_id": "turn-1"},
+        idempotency_key="turn:turn-1",
+        session_id="s1",
+    )
+
+    first = store.accept(draft)
+    second = store.accept(draft)
+
+    assert first.inserted is True
+    assert second.inserted is False
+    assert second.event == first.event
+    assert [event.id for event in store.list_events(Filter())] == [first.event.id]
+
+
+def test_sqlite_event_store_filters_and_cursors() -> None:
+    store = SqliteEventStore.in_memory()
+    first = store.accept(
+        DraftEvent(
+            event_type="zeta.run.assistant_message",
+            source="zeta",
+            payload={"content": "one"},
+            session_id="s1",
+        )
+    ).event
+    second = store.accept(
+        DraftEvent(
+            event_type="zeta.run.tool_result",
+            source="zeta",
+            payload={"content": "two"},
+            caused_by=first.id,
+            session_id="s1",
+        )
+    ).event
+    store.accept(
+        DraftEvent(
+            event_type="sigil.turn",
+            source="sigil",
+            payload={"turn_id": "turn-1"},
+            session_id="s2",
+        )
+    )
+
+    zeta_events = store.list_events(Filter(event_type_prefix="zeta.run."))
+    after_first = store.list_events(Filter(after=EventCursor.from_event(first)))
+
+    assert [event.id for event in zeta_events] == [first.id, second.id]
+    assert store.list_events(Filter(session_id="s1", caused_by=first.id)) == [second]
+    assert [event.id for event in after_first] == [
+        event.id for event in store.list_events(Filter()) if event.id != first.id
+    ]
+
+
+def test_sqlite_event_store_append_if_stream_version() -> None:
+    store = SqliteEventStore.in_memory()
+    event = DraftEvent(
+        event_type="sigil.command.accepted",
+        source="test",
+        payload={"command": "ls"},
+    ).enrich()
+
+    inserted = store.append_if_stream_version("session:s1", 0, event)
+
+    assert inserted.inserted is True
+    with pytest.raises(ValueError, match="expected version 0"):
+        store.append_if_stream_version(
+            "session:s1",
+            0,
+            DraftEvent(
+                event_type="sigil.command.accepted",
+                source="test",
+                payload={"command": "pwd"},
+            ).enrich(),
+        )
+    assert store.stream_version("session:s1") == 1
 
 
 def test_events_default_lists_recent_events() -> None:

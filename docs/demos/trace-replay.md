@@ -90,7 +90,7 @@ $ sigil trace tree 13b60e1a --down --depth 1
 ├─ RunEvent
 │  └─ 5526e09a  run_event           tool_result
 ├─ TurnRecord
-│  └─ 1dfb27c6  turn                sigil.turn.v1
+│  └─ 1dfb27c6  turn                sigil.turn
 └─ ModelReplay
    └─ 02e5a395  assistant_message   → bash
 ```

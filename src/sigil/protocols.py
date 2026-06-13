@@ -68,10 +68,10 @@ def is_shell_handoff_result(value: object) -> bool:
     return _has_schema(value, SHELL_HANDOFF_RESULT_SCHEMA)
 
 
-TURN_RECORD_TYPE = "turn"
-TURN_RECORD_SCHEMA = "sigil.turn.v1"
-EFFECT_RECORD_TYPE = "effect"
-EFFECT_RECORD_SCHEMA = "sigil.effect.v1"
+TURN_RECORD_TYPE = "sigil.turn"
+TURN_RECORD_SCHEMA = "sigil.turn"
+EFFECT_RECORD_TYPE = "sigil.effect"
+EFFECT_RECORD_SCHEMA = "sigil.effect"
 
 TURN_OUTCOME_ANSWERED = "answered"
 TURN_OUTCOME_STAGED = "staged"

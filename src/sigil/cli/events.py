@@ -34,7 +34,7 @@ def cmd_events(json_output: bool, raw: bool, limit: int) -> int:
     """Inspect Sigil's read-only event log.
 
     This is the raw view underneath `sigil log`: the most recent audit
-    and debug records from events.jsonl, one row per event.
+    and debug records from the event journal, one row per event.
     """
     if raw and not json_output:
         raise click.UsageError("--raw requires --json")

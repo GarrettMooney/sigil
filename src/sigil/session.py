@@ -33,7 +33,6 @@ from .protocols import (
 from .state import (
     append_jsonl_line,
     read_jsonl,
-    read_jsonl_path,
     session_dir,
     session_id,
     state_dir,
@@ -54,11 +53,13 @@ TURN_SKIP_PREFIXES = (",", "sigil ", "__sigil_")
 
 def session_paths() -> dict[str, str]:
     """Return the global and current-session paths users need for debugging."""
+    from .events import event_store_path
+
     return {
         "state": str(state_dir()),
         "session": str(session_dir()),
         "session_id": session_id(),
-        "events": str(state_dir() / "events.jsonl"),
+        "events": str(event_store_path()),
     }
 
 
@@ -127,8 +128,10 @@ def read_session_file(path: Path) -> Any:
 
 
 def read_event_log() -> list[dict[str, Any]]:
-    """Read the global event log, skipping malformed lines."""
-    return read_jsonl_path(state_dir() / "events.jsonl")
+    """Read the global event journal."""
+    from .events import Filter, event_record, event_store
+
+    return [event_record(event) for event in event_store().list_events(Filter())]
 
 
 def current_session_snapshot() -> dict[str, Any]:

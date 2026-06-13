@@ -12,8 +12,6 @@ import json
 import os
 import re
 import tempfile
-import time
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -87,12 +85,9 @@ def rotate_oversized_log(path: Path) -> None:
 
 
 def _with_envelope(event: dict[str, Any]) -> dict[str, Any]:
-    """Stamp the id/time/cwd/session envelope onto an event payload."""
+    """Stamp default cwd onto event domain data."""
     return {
-        "id": str(uuid.uuid4()),
-        "time": time.time(),
         "cwd": os.getcwd(),
-        "session": session_id(),
         **event,
     }
 
@@ -106,13 +101,37 @@ def _session_root() -> Path:
 
 def append_event(event: dict[str, Any]) -> dict[str, Any]:
     """Append a global audit/debug event with session metadata."""
-    root = state_dir()
-    root.mkdir(parents=True, exist_ok=True)
+    from .events import (
+        DraftEvent,
+        event_record,
+        publish_event,
+        timestamp_micros_from_time,
+    )
+
     payload = _with_envelope(event)
-    log_path = root / "events.jsonl"
-    rotate_oversized_log(log_path)
-    append_jsonl_line(log_path, payload)
-    return payload
+    event_id = payload.get("id") if isinstance(payload.get("id"), str) else None
+    event_type = str(payload.get("type") or "event")
+    domain_payload = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"id", "type", "time", "session", "source", "caused_by"}
+    }
+    outcome = publish_event(
+        DraftEvent(
+            event_type=event_type,
+            source=str(payload.get("source") or "sigil"),
+            payload=domain_payload,
+            caused_by=(
+                str(payload["caused_by"])
+                if isinstance(payload.get("caused_by"), str)
+                else None
+            ),
+            session_id=str(payload.get("session") or session_id()),
+            timestamp_micros=timestamp_micros_from_time(payload.get("time")),
+            event_id=event_id,
+        )
+    )
+    return event_record(outcome.event)
 
 
 def write_text_atomic(path: Path, text: str) -> None:

@@ -148,11 +148,9 @@ def test_ledger_append_survives_index_failure(monkeypatch) -> None:
     assert event == payload
 
 
-def test_ledger_reindex_reads_both_log_generations() -> None:
+def test_ledger_reindex_reads_event_store() -> None:
     append_event(sample_turn_record("turn-old", time=100.0))
     append_event(sample_effect_record("effect-old", turn_id="turn-old"))
-    log_path = state_dir() / "events.jsonl"
-    log_path.replace(log_path.with_name("events.jsonl.1"))
     append_event(sample_turn_record("turn-new", time=200.0))
     append_event({"type": "user_message", "content": "not a ledger record"})
 
@@ -597,7 +595,7 @@ def seed_bundle_state(monkeypatch) -> dict[str, str]:
     turn_object_id = store.put_object(
         zeta_trace.Object(
             kind="turn_record",
-            schema="sigil.turn.v1",
+            schema="sigil.turn",
             data={"turn_id": "turn-bundle-1"},
             links=(prompt_id,),
         )
@@ -766,5 +764,5 @@ def test_ledger_survives_session_clear() -> None:
 
     assert not root.exists()
     assert (state_dir() / "ledger.sqlite3").exists()
-    assert (state_dir() / "events.jsonl").exists()
+    assert (state_dir() / "events.sqlite3").exists()
     assert sigil_ledger.default_ledger_index().turn("turn-1") is not None

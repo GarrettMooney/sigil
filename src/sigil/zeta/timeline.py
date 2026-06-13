@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from ..events import DraftEvent, publish_event, timestamp_micros_from_time
 from ..protocols import is_shell_handoff_result, is_shell_prompt_handoff
 from ..state import session_id
 from .trace import (
@@ -37,6 +38,7 @@ class ChatMessageEntry:
 def record_event(event: dict[str, Any]) -> dict[str, Any]:
     """Record a Zeta event in the trace store and advance the run head."""
     payload = event_payload(event)
+    record_durable_event(payload)
     try:
         store = default_store()
         with store.batch():
@@ -70,6 +72,32 @@ def record_event(event: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         warn_trace_failure_once("record_event", exc)
     return payload
+
+
+def record_durable_event(event: dict[str, Any]) -> None:
+    event_type = str(event.get("type") or "event")
+    payload = {
+        key: value
+        for key, value in event.items()
+        if key not in {"id", "type", "time", "session", "source", "caused_by"}
+    }
+    try:
+        publish_event(
+            DraftEvent(
+                event_type=f"zeta.run.{event_type}",
+                source="zeta",
+                payload=payload,
+                caused_by=(
+                    str(event["caused_by"])
+                    if isinstance(event.get("caused_by"), str)
+                    else None
+                ),
+                session_id=str(event.get("session") or session_id()),
+                timestamp_micros=timestamp_micros_from_time(event.get("time")),
+            )
+        )
+    except Exception as exc:
+        warn_trace_failure_once("record_durable_event", exc)
 
 
 def current_timeline() -> list[dict[str, Any]]:

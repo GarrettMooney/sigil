@@ -13,6 +13,7 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
+from sigil.events import Filter, event_store
 from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import timeline as zeta_timeline
 from sigil.zeta import trace as zeta_trace
@@ -456,6 +457,9 @@ def test_zeta_timeline_record_and_project(tmp_path: Path, monkeypatch) -> None:
     refs = zeta_trace.default_store().refs()
     assert refs[zeta_timeline.run_head_ref("zeta-test")]
     assert refs[zeta_timeline.event_head_ref("zeta-test")]
+    durable_events = event_store().list_events(Filter(event_type="zeta.run.tool_call"))
+    assert durable_events[0].payload["name"] == "read"
+    assert durable_events[0].session_id == "zeta-test"
 
 
 def test_zeta_timeline_projects_from_ref_and_object(

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from sigil.events import close_event_stores
 from sigil.ledger import close_ledger_indexes
 from sigil.zeta.trace import close_default_stores
 
@@ -28,5 +29,6 @@ def isolate_sigil_state(
     monkeypatch.delenv("SIGIL_SESSION_DIR", raising=False)
     monkeypatch.delenv("SIGIL_SESSION_ID", raising=False)
     yield
+    close_event_stores()
     close_default_stores()
     close_ledger_indexes()

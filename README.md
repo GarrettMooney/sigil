@@ -426,24 +426,23 @@ handoff (hidden from `--help` because the binding is the primary surface).
 Sigil writes event-sourced state under `~/.sigil/` by default. Set
 `SIGIL_STATE_DIR` to move it.
 
-Every delegation leaves a ledger record in `events.jsonl`: one
-`sigil.turn.v1` event per turn — which workflow ran, the objective, the
+Every delegation leaves a ledger record in `events.sqlite3`: one
+`sigil.turn` event per turn — which workflow ran, the objective, the
 enforced tool contract, model cost, the outcome, and the ids of the exact
-prompts the model saw — plus one `sigil.effect.v1` event per side effect:
+prompts the model saw — plus one `sigil.effect` event per side effect:
 files written or edited (with before/after content hashes), commands
 executed (with exit status), and staged handoffs with how they resolved.
 Plain shell commands and `+` runs are recorded as `run` turns with a
-command effect. The log rotates at 10MB, keeping one generation.
+command effect.
 
-The ledger is also indexed into `ledger.sqlite3` next to the event log: a
+The ledger is also indexed into `ledger.sqlite3` next to the event store: a
 derived SQLite view (`turns` and `effects` tables) written as records are
-appended and rebuildable at any time with `sigil log reindex`, so a
-rotated event log loses no turn, effect, or cost answer. Agent turns are
+appended and rebuildable at any time with `sigil log reindex`. Agent turns are
 additionally bridged into the session's trace graph as `turn` objects
 linking the prompts the model saw and the tool results behind each
 effect; the `turn/<turn_id>` ref makes them addressable through `sigil
 trace show`. Clearing a session removes its continuity files and
-trace store; the ledger index and event log are global and survive
+trace store; the ledger index and event store are global and survive
 `sigil session clear`.
 
 Installed zsh bindings set `SIGIL_SESSION_ID` once when the shell starts

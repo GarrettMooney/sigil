@@ -1,20 +1,12 @@
-"""Portable ledger bundles.
-
-A bundle carries turn and effect records verbatim plus, per session,
-the trace-graph closure of each exported turn: objects, derivations
-with their original timestamps, and the `turn/<id>` refs. Importing
-appends the records to the event log (so `log reindex` replays them
-like native ones) and materializes per-session trace stores, so every
-ledger and explorer query works on the importing machine.
-"""
+"""Portable ledger bundles."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from .ledger import EVENT_LOG_NAME, LedgerIndex, default_ledger_index
+from .ledger import LedgerIndex, default_ledger_index
 from .protocols import is_effect_record, is_turn_record
-from .state import append_jsonl_line, rotate_oversized_log, state_dir
+from .state import append_event
 from .zeta.trace import (
     Derivation,
     Object,
@@ -116,17 +108,13 @@ def import_ledger_records(
     index: LedgerIndex,
     records: list[dict[str, Any]],
 ) -> int:
-    """Append new turn/effect records to the event log and index them."""
-    root = state_dir()
-    root.mkdir(parents=True, exist_ok=True)
-    log_path = root / EVENT_LOG_NAME
+    """Append new turn/effect records to the event store and index them."""
     imported = 0
     for record in records:
         if not isinstance(record, dict) or not new_ledger_record(index, record):
             continue
-        rotate_oversized_log(log_path)
-        append_jsonl_line(log_path, record)
-        index.index_record(record)
+        payload = append_event(record)
+        index.index_record(payload)
         imported += 1
     return imported
 

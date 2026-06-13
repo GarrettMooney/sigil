@@ -1853,8 +1853,8 @@ def test_turn_record_carries_schema_contract_and_optional_blocks() -> None:
         effect_ids=["effect-1"],
     )
 
-    assert record["type"] == "turn"
-    assert record["schema"] == "sigil.turn.v1"
+    assert record["type"] == "sigil.turn"
+    assert record["schema"] == "sigil.turn"
     assert record["turn_id"] == "turn-1"
     assert record["contract"] == {
         "workflow": "propose",
@@ -1894,8 +1894,8 @@ def test_effect_record_keeps_only_set_optionals() -> None:
         exit_status=0,
     )
 
-    assert record["type"] == "effect"
-    assert record["schema"] == "sigil.effect.v1"
+    assert record["type"] == "sigil.effect"
+    assert record["schema"] == "sigil.effect"
     assert record["effect_id"] == "effect-1"
     assert record["turn_id"] == "turn-1"
     assert record["command"] == "ls"
@@ -2076,8 +2076,8 @@ def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
     turn_object_id = zeta_trace.resolve_object_id(store, f"turn/{turn['turn_id']}")
     turn_object = store.get_object(turn_object_id)
     assert turn_object is not None
-    assert turn_object.kind == "turn"
-    assert turn_object.schema == "sigil.turn.v1"
+    assert turn_object.kind == "sigil.turn"
+    assert turn_object.schema == "sigil.turn"
     assert turn_object.data["turn_id"] == turn["turn_id"]
     assert turn_object.data["effects"] == ledger_effects()
     assert turn_object.links == (prompt_object_id, tool_result_object_id)

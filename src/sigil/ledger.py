@@ -1,11 +1,4 @@
-"""Delegation ledger index: derived SQLite state over the global event log.
-
-`events.jsonl` stays the append-only source of truth. The index keeps one
-row per turn/effect record, keyed on the record ids, so live writes and
-`sigil log reindex` replays converge on the same state and log rotation
-loses no turn, effect, or cost answer. Index failures degrade fail-open:
-the JSONL line is always written and a reindex heals the gap.
-"""
+"""Delegation ledger index: derived SQLite state over the global event store."""
 
 from __future__ import annotations
 
@@ -19,11 +12,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .events import Filter, event_record, event_store
 from .protocols import is_effect_record, is_turn_record
-from .state import append_event, read_jsonl_path, state_dir
+from .state import append_event, state_dir
 
 DEFAULT_LEDGER_NAME = "ledger.sqlite3"
-EVENT_LOG_NAME = "events.jsonl"
 LOGGER = logging.getLogger("sigil.ledger")
 _WARNED_FAILURES: set[str] = set()
 SINCE_PATTERN = re.compile(r"(\d+)([dhm])")
@@ -408,14 +401,14 @@ atexit.register(close_ledger_indexes)
 
 
 def append_turn_record(record: dict[str, Any]) -> dict[str, Any]:
-    """Append one turn record to the event log and index it."""
+    """Append one turn record to the event store and index it."""
     payload = append_event(record)
     index_payload("append_turn_record", payload)
     return payload
 
 
 def append_effect_record(record: dict[str, Any]) -> dict[str, Any]:
-    """Append one effect record to the event log and index it."""
+    """Append one effect record to the event store and index it."""
     payload = append_event(record)
     index_payload("append_effect_record", payload)
     return payload
@@ -429,17 +422,16 @@ def index_payload(operation: str, payload: dict[str, Any]) -> None:
 
 
 def reindex(index: LedgerIndex | None = None) -> tuple[int, int]:
-    """Rebuild the index from both event log generations, oldest first."""
+    """Rebuild the index from the event store."""
     target = index if index is not None else default_ledger_index()
-    log_path = state_dir() / EVENT_LOG_NAME
     turns = 0
     effects = 0
-    for path in (log_path.with_name(f"{EVENT_LOG_NAME}.1"), log_path):
-        for payload in read_jsonl_path(path):
-            if is_turn_record(payload):
-                target.index_turn_record(payload)
-                turns += 1
-            elif is_effect_record(payload):
-                target.index_effect_record(payload)
-                effects += 1
+    for event in event_store().list_events(Filter()):
+        payload = event_record(event)
+        if is_turn_record(payload):
+            target.index_turn_record(payload)
+            turns += 1
+        elif is_effect_record(payload):
+            target.index_effect_record(payload)
+            effects += 1
     return turns, effects
