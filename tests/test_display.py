@@ -109,6 +109,22 @@ def test_sigil_display_classifies_progress_events() -> None:
     assert event.line == "✓ listed src/sigil · 3 entries"
 
     event = display_render.progress_event_for_tool_result(
+        "ls",
+        {
+            "ok": True,
+            "metadata": {
+                "path": "src/sigil",
+                "entries": 30,
+                "recursive": True,
+                "limit": 50,
+            },
+        },
+        {"path": "src/sigil", "recursive": True, "limit": 50},
+    )
+    assert event is not None
+    assert event.line == "✓ listed src/sigil (recursive, limit 50) · 30 entries"
+
+    event = display_render.progress_event_for_tool_result(
         "write",
         {"ok": True, "metadata": {"mode": "direct", "path": "notes.md"}},
         {"path": "notes.md"},
