@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from io import StringIO
 from pathlib import Path
 
@@ -83,6 +85,250 @@ def test_sigil_display_summarizes_tool_results() -> None:
             "metadata": {"matches": 10, "files": 3, "truncated": True},
         },
     ) == ["10 matches · 3 files · truncated"]
+
+
+def test_sigil_display_classifies_progress_events() -> None:
+    event = display_render.progress_event_for_tool_result(
+        "read",
+        {"ok": True, "metadata": {"path": "src/sigil/agent_io.py"}},
+        {"path": "src/sigil/agent_io.py"},
+    )
+    assert event is not None
+    assert event.kind == "read"
+    assert event.phase == "Mapping repo"
+    assert event.line == "✓ read src/sigil/agent_io.py · ok"
+
+    event = display_render.progress_event_for_tool_result(
+        "write",
+        {"ok": True, "metadata": {"mode": "direct", "path": "notes.md"}},
+        {"path": "notes.md"},
+    )
+    assert event is not None
+    assert event.kind == "mutation"
+    assert event.phase == "Applying changes"
+    assert event.line == "+ notes.md"
+
+    event = display_render.progress_event_for_tool_result(
+        "bash",
+        {"ok": False, "metadata": {"mode": "direct", "status": 2}},
+        {"command": "uv run pytest"},
+    )
+    assert event is not None
+    assert event.kind == "failure"
+    assert event.phase == "Validating"
+    assert event.line == "✗ uv run pytest · failed · exit 2"
+
+
+def test_sigil_display_terminal_digest_keeps_short_turns_compact() -> None:
+    output = StringIO()
+    renderer = display_render.TerminalDigestRenderer(output, clock=lambda: 0.0)
+
+    renderer.observe_tool_call("read", {"path": "README.md"})
+    renderer.observe_tool_result(
+        "read",
+        {"ok": True, "content": [{"type": "text", "text": "one\n"}]},
+    )
+
+    assert output.getvalue() == "✓ read README.md · 1 lines\n"
+    assert renderer.status_detail() == "mapping repo · 1 events · last: README.md"
+
+
+def test_sigil_display_terminal_digest_switches_to_chapters() -> None:
+    output = StringIO()
+    now = 0.0
+    renderer = display_render.TerminalDigestRenderer(
+        output,
+        clock=lambda: now,
+        chapter_event_threshold=2,
+    )
+
+    renderer.observe_tool_call("read", {"path": "README.md"})
+    renderer.observe_tool_result("read", {"ok": True})
+    renderer.observe_tool_call("grep", {"pattern": "PromptBuilder"})
+    renderer.observe_tool_result("grep", {"ok": True})
+    now = 31.0
+    renderer.observe_tool_call("write", {"path": "slides/story.md"})
+    renderer.observe_tool_result(
+        "write",
+        {"ok": True, "metadata": {"mode": "direct", "path": "slides/story.md"}},
+    )
+
+    assert output.getvalue().splitlines() == [
+        "✓ read README.md · ok",
+        "✓ searched PromptBuilder · ok",
+        "",
+        "[00:31] Applying changes",
+        "  + slides/story.md",
+    ]
+
+
+def test_sigil_display_terminal_digest_bounds_repeated_chapter_lines() -> None:
+    output = StringIO()
+    renderer = display_render.TerminalDigestRenderer(
+        output,
+        clock=lambda: 0.0,
+        chapter_event_threshold=1,
+        max_chapter_lines=2,
+    )
+
+    for index in range(4):
+        path = f"src/file_{index}.py"
+        renderer.observe_tool_call("read", {"path": path})
+        renderer.observe_tool_result("read", {"ok": True})
+
+    assert output.getvalue().splitlines() == [
+        "✓ read src/file_0.py · ok",
+        "",
+        "[00:00] Mapping repo",
+        "  ✓ read src/file_1.py · ok",
+        "  ✓ read src/file_2.py · ok",
+    ]
+
+
+def test_sigil_display_terminal_digest_quiet_keeps_failures_and_final_digest() -> None:
+    output = StringIO()
+    renderer = display_render.TerminalDigestRenderer(output, mode="quiet")
+
+    renderer.observe_tool_call("read", {"path": "README.md"})
+    renderer.observe_tool_result("read", {"ok": True})
+    renderer.observe_tool_call("bash", {"command": "uv run pytest"})
+    renderer.observe_tool_result(
+        "bash",
+        {"ok": False, "metadata": {"mode": "direct", "status": 1}},
+    )
+    renderer.finalize(
+        {
+            "turn_id": "16717bb7-aaaa",
+            "cost": {"wall_ms": 1520},
+            "outcome": "failed",
+        }
+    )
+
+    assert output.getvalue().splitlines() == [
+        "✗ uv run pytest · failed · exit 1",
+        "",
+        "Done in 1s · 1 command · 1 failure · log 16717bb7",
+    ]
+
+
+def test_sigil_display_terminal_digest_final_receipt_summarizes_effects() -> None:
+    output = StringIO()
+    renderer = display_render.TerminalDigestRenderer(output, mode="compact")
+    renderer.observe_tool_call("bash", {"command": "uv run pytest"})
+    renderer.observe_tool_result(
+        "bash",
+        {"ok": True, "metadata": {"mode": "direct", "status": 0}},
+    )
+
+    renderer.finalize(
+        {
+            "turn_id": "16717bb7-aaaa",
+            "outcome": "executed",
+            "cost": {"wall_ms": 152_000},
+            "effects": [
+                {"kind": "file_write", "path": "notes.md"},
+                {"kind": "command", "command": "uv run pytest"},
+            ],
+        }
+    )
+
+    assert output.getvalue().splitlines()[-1] == (
+        "Done in 2m32s · 1 file · 1 command · log 16717bb7"
+    )
+
+
+def test_sigil_display_terminal_digest_uses_reasoning_for_phase() -> None:
+    output = StringIO()
+    renderer = display_render.TerminalDigestRenderer(
+        output,
+        clock=lambda: 12.0,
+        chapter_event_threshold=1,
+    )
+
+    renderer.observe_tool_call("read", {"path": "README.md"})
+    renderer.observe_tool_result("read", {"ok": True})
+    renderer.observe_reasoning_delta("Now I'll inspect prompt assembly before editing.")
+    renderer.observe_tool_call("read", {"path": "src/sigil/agent_io.py"})
+    renderer.observe_tool_result("read", {"ok": True})
+
+    assert renderer.current_phase == "Inspect prompt assembly before editing"
+    assert renderer.status_detail().startswith("inspect prompt assembly")
+    assert "[00:00] Inspect prompt assembly before editing" in output.getvalue()
+
+
+def test_sigil_display_thinking_status_forwards_reasoning_to_progress(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_THINKING_TRACE", "0")
+    seen: list[str] = []
+
+    with display_render.ThinkingStatus(
+        StringIO(),
+        enabled=False,
+        reasoning_observer=seen.append,
+    ) as status:
+        status.reasoning_delta("I need to understand the workflow path.")
+
+    assert seen == ["I need to understand the workflow path."]
+
+
+def test_sigil_display_async_narrator_updates_phase() -> None:
+    output = StringIO()
+    calls = []
+
+    def narrator(messages, *, schema, response_name, max_tokens, **options):
+        del messages, schema, response_name, max_tokens, options
+        calls.append("called")
+        return {
+            "phase": "Reading the code",
+            "summary_lines": ["inspected display and workflow seams"],
+        }
+
+    runner = display_render.AsyncNarrator(
+        narrator,
+        clock=time.monotonic,
+        timeout=1.0,
+    )
+    renderer = display_render.TerminalDigestRenderer(
+        output,
+        narrator=runner,
+        chapter_event_threshold=1,
+    )
+
+    renderer.observe_tool_call("read", {"path": "src/sigil/agent_io.py"})
+    renderer.observe_tool_result("read", {"ok": True})
+    runner.wait()
+    renderer.flush_narration()
+
+    assert calls == ["called"]
+    assert renderer.current_phase == "Reading the code"
+    assert renderer.status_detail().startswith("reading the code")
+
+
+def test_sigil_display_async_narrator_discards_stale_results() -> None:
+    output = StringIO()
+    releases: list[threading.Event] = []
+
+    def narrator(messages, *, schema, response_name, max_tokens, **options):
+        del messages, schema, response_name, max_tokens, options
+        release = threading.Event()
+        releases.append(release)
+        release.wait(1)
+        return {"phase": "Stale", "summary_lines": []}
+
+    runner = display_render.AsyncNarrator(narrator, timeout=1.0)
+    renderer = display_render.TerminalDigestRenderer(output, narrator=runner)
+
+    renderer.observe_tool_call("read", {"path": "README.md"})
+    renderer.observe_tool_result("read", {"ok": True})
+    renderer.observe_tool_call("read", {"path": "pyproject.toml"})
+    renderer.observe_tool_result("read", {"ok": True})
+    for release in releases:
+        release.set()
+    runner.wait()
+    renderer.flush_narration()
+
+    assert renderer.current_phase == "Mapping repo"
 
 
 def test_sigil_display_renders_tool_paths_relative_to_cwd(

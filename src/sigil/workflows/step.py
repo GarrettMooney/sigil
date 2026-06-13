@@ -6,8 +6,9 @@ CLI workflow steps on the same Zeta service layer without an external agent.
 
 from __future__ import annotations
 
+import os
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
@@ -23,7 +24,12 @@ from ..agent_io import (
     record_zeta_event,
     render_final_text,
 )
-from ..display.render import render_tool_result_summary, thinking_status_factory
+from ..display.render import (
+    PROGRESS_MODE_TRACE,
+    AsyncNarrator,
+    render_tool_result_summary,
+    thinking_status_factory,
+)
 from ..display.summarize import render_handoff_lines
 from ..protocols import (
     SHELL_HANDOFF_RESULT_SCHEMA,
@@ -35,7 +41,11 @@ from ..protocols import (
 )
 from ..zeta.agent import AgentConfig, registered_tools, run_agent_turn
 from ..zeta.context import load_project_context
-from ..zeta.models import active_model_selection, model_selection_event
+from ..zeta.models import (
+    active_model_selection,
+    chat_structured_output,
+    model_selection_event,
+)
 from ..zeta.prompt import system_prompt
 from ..zeta.skills import expand_skill_directive
 from ..zeta.timeline import current_timeline, record_event
@@ -124,7 +134,8 @@ def step(
         user_event["model"] = model_selection_event(selected_model)
     record_event(user_event)
     context = load_project_context()
-    renderer = build_turn_renderer(output)
+    narrator = build_progress_narrator(selected_model)
+    renderer = build_turn_renderer(output, objective=objective, narrator=narrator)
     recorder = AgentStepEventRecorder(
         renderer,
         workflow=workflow,
@@ -161,15 +172,15 @@ def step(
                 before_start=(
                     context_footer.clear if context_footer is not None else None
                 ),
-                detail=(
-                    context_footer.current_line if context_footer is not None else None
-                ),
+                detail=turn_status_detail(renderer),
+                reasoning_observer=progress_reasoning_observer(renderer),
             ),
             stream_sink=renderer.stream_renderer,
         )
     except RuntimeError as error:
         record_turn_abort(error, workflow=workflow)
-        ledger.finish(TURN_OUTCOME_ABORTED)
+        turn = ledger.finish(TURN_OUTCOME_ABORTED)
+        finalize_progress(renderer, turn)
         raise
     recorder.replay(result)
     ledger.add_model_calls(result.model_telemetry_calls)
@@ -180,17 +191,20 @@ def step(
             workflow=workflow,
             prompt_traces=result.prompt_traces,
         )
-        ledger.finish(TURN_OUTCOME_STAGED, prompt_traces=result.prompt_traces)
+        turn = ledger.finish(TURN_OUTCOME_STAGED, prompt_traces=result.prompt_traces)
         if context_footer is not None:
             context_footer.finalize(result.model_telemetry)
+        finalize_progress(renderer, turn)
         return status
     if result.final_text:
+        if renderer.stream_renderer is not None:
+            renderer.stream_renderer.ensure_trace_boundary()
         record_agent_model_telemetry(
             result.model_telemetry,
             workflow=workflow,
             prompt_traces=result.prompt_traces,
         )
-        ledger.finish(
+        turn = ledger.finish(
             TURN_OUTCOME_EXECUTED if ledger.effect_ids else TURN_OUTCOME_ANSWERED,
             prompt_traces=result.prompt_traces,
         )
@@ -203,8 +217,10 @@ def step(
         )
         if context_footer is not None:
             context_footer.finalize(result.model_telemetry)
+        finalize_progress(renderer, turn)
         return 0
-    ledger.finish(TURN_OUTCOME_FAILED, prompt_traces=result.prompt_traces)
+    turn = ledger.finish(TURN_OUTCOME_FAILED, prompt_traces=result.prompt_traces)
+    finalize_progress(renderer, turn)
     print("Zeta stopped without a final answer.", file=sys.stderr)
     return 1
 
@@ -236,12 +252,23 @@ class AgentStepEventRecorder(TurnEventRecorder):
             print(file=self.render_output)
             self.renderer.trace_state.mark_trace_finished()
             return None
-        render_tool_result_summary(
-            name,
-            result_payload,
-            output=self.render_output,
-            mark_text_separator=self.renderer.trace_state,
-        )
+        if (
+            self.renderer.progress_renderer is not None
+            and self.renderer.progress_renderer.mode != PROGRESS_MODE_TRACE
+        ):
+            if self.renderer.context_footer is not None:
+                self.renderer.context_footer.clear()
+            if self.renderer.stream_renderer is not None:
+                self.renderer.stream_renderer.ensure_trace_boundary()
+            self.renderer.progress_renderer.observe_tool_result(name, result_payload)
+            self.renderer.trace_state.mark_trace_finished()
+        else:
+            render_tool_result_summary(
+                name,
+                result_payload,
+                output=self.render_output,
+                mark_text_separator=self.renderer.trace_state,
+            )
         handoff = result_payload.get("handoff")
         status = None
         if isinstance(handoff, dict):
@@ -254,6 +281,49 @@ class AgentStepEventRecorder(TurnEventRecorder):
                 result_payload,
             )
         return status
+
+
+def build_progress_narrator(selected_model: Any) -> AsyncNarrator | None:
+    """Return the optional async narrator configured for terminal progress."""
+    mode = os.environ.get("SIGIL_NARRATE", "0").lower()
+    if mode not in {"auto", "model"}:
+        return None
+    return AsyncNarrator(
+        chat_structured_output,
+        selected_model=selected_model.model if selected_model is not None else None,
+        selected_url=selected_model.url if selected_model is not None else None,
+        api=selected_model.api if selected_model is not None else None,
+    )
+
+
+def turn_status_detail(renderer: TurnRenderer) -> Callable[[], str]:
+    def detail() -> str:
+        if renderer.progress_renderer is not None:
+            progress = renderer.progress_renderer.status_detail()
+            if progress:
+                return progress
+        if renderer.context_footer is not None:
+            return renderer.context_footer.current_line()
+        return ""
+
+    return detail
+
+
+def progress_reasoning_observer(renderer: TurnRenderer) -> Callable[[str], None] | None:
+    if (
+        renderer.progress_renderer is None
+        or renderer.progress_renderer.mode == PROGRESS_MODE_TRACE
+    ):
+        return None
+    return renderer.progress_renderer.observe_reasoning_delta
+
+
+def finalize_progress(renderer: TurnRenderer, turn: dict[str, Any]) -> None:
+    if (
+        renderer.progress_renderer is not None
+        and renderer.progress_renderer.mode != PROGRESS_MODE_TRACE
+    ):
+        renderer.progress_renderer.finalize(turn)
 
 
 def write_handoff(path: str | Path | None, handoff: dict[str, Any]) -> None:

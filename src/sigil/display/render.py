@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Protocol, TextIO
 
@@ -31,6 +33,570 @@ THINKING_TRACE_LINES = 6
 CONTEXT_USAGE_BAR_WIDTH = 20
 CONTEXT_USAGE_BAR_FILLED = "█"
 CONTEXT_USAGE_BAR_EMPTY = "░"
+PROGRESS_MODE_COMPACT = "compact"
+PROGRESS_MODE_TRACE = "trace"
+PROGRESS_MODE_QUIET = "quiet"
+PROGRESS_MODES = frozenset(
+    {PROGRESS_MODE_COMPACT, PROGRESS_MODE_TRACE, PROGRESS_MODE_QUIET}
+)
+TERMINAL_DIGEST_EVENT_THRESHOLD = 6
+TERMINAL_DIGEST_SECONDS_THRESHOLD = 10.0
+TERMINAL_DIGEST_CHAPTER_LINES = 2
+NARRATOR_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["phase", "summary_lines"],
+    "properties": {
+        "phase": {"type": "string", "maxLength": 48},
+        "summary_lines": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {"type": "string", "maxLength": 96},
+        },
+    },
+}
+
+REASONING_PHASE_PATTERNS = (
+    re.compile(
+        r"\b(?:i am|i'm|i will|i'll|now i(?:'ll| will)?|next i(?:'ll| will)?)\s+([^.!?\n]{4,80})",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:need to|going to)\s+([^.!?\n]{4,80})", re.IGNORECASE),
+)
+REASONING_PHASE_PREFIXES = (
+    "checking",
+    "inspecting",
+    "mapping",
+    "understanding",
+    "validating",
+    "fixing",
+)
+
+
+@dataclass(frozen=True)
+class ProgressEvent:
+    """One lossy display event for terminal progress rendering."""
+
+    kind: str
+    phase: str
+    subject: str
+    line: str
+    failed: bool = False
+    exact: bool = False
+
+
+class AsyncNarrator:
+    """Run optional structured narration in one background request."""
+
+    def __init__(
+        self,
+        structured_output: Callable[..., dict[str, Any]],
+        *,
+        selected_model: str | None = None,
+        selected_url: str | None = None,
+        api: str | None = None,
+        timeout: float = 2.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.structured_output = structured_output
+        self.selected_model = selected_model
+        self.selected_url = selected_url
+        self.api = api
+        self.timeout = timeout
+        self.clock = clock
+        self.generation = 0
+        self.result: dict[str, Any] | None = None
+        self.thread: threading.Thread | None = None
+        self.lock = threading.Lock()
+
+    def submit(
+        self,
+        *,
+        objective: str,
+        events: list[ProgressEvent],
+        previous_phase: str,
+    ) -> None:
+        """Start one narration request if none is already running."""
+        with self.lock:
+            if self.thread is not None and self.thread.is_alive():
+                self.generation += 1
+                return
+            self.generation += 1
+            generation = self.generation
+            self.result = None
+            self.thread = threading.Thread(
+                target=self.run,
+                args=(generation, objective, tuple(events[-8:]), previous_phase),
+                daemon=True,
+            )
+            self.thread.start()
+
+    def run(
+        self,
+        generation: int,
+        objective: str,
+        events: tuple[ProgressEvent, ...],
+        previous_phase: str,
+    ) -> None:
+        started = self.clock()
+        try:
+            data = self.structured_output(
+                narrator_messages(objective, events, previous_phase),
+                schema=NARRATOR_RESPONSE_SCHEMA,
+                response_name="terminal_progress_narration",
+                max_tokens=160,
+                selected_model=self.selected_model,
+                selected_url=self.selected_url,
+                api=self.api,
+            )
+        except Exception:
+            return
+        if self.clock() - started > self.timeout:
+            return
+        if not valid_narrator_result(data):
+            return
+        with self.lock:
+            if generation == self.generation:
+                self.result = data
+
+    def consume(self) -> dict[str, Any] | None:
+        with self.lock:
+            result = self.result
+            self.result = None
+            return result
+
+    def wait(self) -> None:
+        thread = self.thread
+        if thread is not None:
+            thread.join()
+
+
+def narrator_messages(
+    objective: str,
+    events: tuple[ProgressEvent, ...],
+    previous_phase: str,
+) -> list[dict[str, Any]]:
+    lines = "\n".join(f"- {event.line}" for event in events)
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You narrate an AI terminal agent's progress.\n"
+                "Rules:\n"
+                "- One short phase title and up to two summary lines.\n"
+                "- No speculation beyond the events.\n"
+                "- Do not mention internal JSON/tool schemas.\n"
+                "- If nothing meaningful changed, use an empty phase."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Objective:\n{objective}\n\n"
+                f"Recent events:\n{lines}\n\n"
+                f"Previous phase:\n{previous_phase}"
+            ),
+        },
+    ]
+
+
+def valid_narrator_result(data: dict[str, Any]) -> bool:
+    phase = data.get("phase")
+    summary_lines = data.get("summary_lines")
+    if not isinstance(phase, str):
+        return False
+    if not isinstance(summary_lines, list):
+        return False
+    return all(isinstance(line, str) for line in summary_lines)
+
+
+class TerminalDigestRenderer:
+    """Render terminal progress as compact lines and bounded chapters."""
+
+    def __init__(
+        self,
+        output: TextIO,
+        *,
+        mode: str = PROGRESS_MODE_COMPACT,
+        objective: str = "",
+        clock: Callable[[], float] = time.monotonic,
+        chapter_event_threshold: int = TERMINAL_DIGEST_EVENT_THRESHOLD,
+        chapter_seconds_threshold: float = TERMINAL_DIGEST_SECONDS_THRESHOLD,
+        max_chapter_lines: int = TERMINAL_DIGEST_CHAPTER_LINES,
+        narrator: AsyncNarrator | None = None,
+    ) -> None:
+        self.output = output
+        self.mode = mode if mode in PROGRESS_MODES else PROGRESS_MODE_COMPACT
+        self.objective = objective
+        self.clock = clock
+        self.started_at = clock()
+        self.chapter_event_threshold = chapter_event_threshold
+        self.chapter_seconds_threshold = chapter_seconds_threshold
+        self.max_chapter_lines = max_chapter_lines
+        self.narrator = narrator
+        self.current_phase = ""
+        self.intent_phase = ""
+        self.current_chapter_phase = ""
+        self.current_chapter_lines = 0
+        self.event_count = 0
+        self.chapter_mode = False
+        self.pending_args: dict[str, list[dict[str, Any]]] = {}
+        self.events: list[ProgressEvent] = []
+        self.files_touched: set[str] = set()
+        self.commands_run: list[str] = []
+        self.failures = 0
+        self.artifacts: set[str] = set()
+        self.last_action = ""
+
+    def observe_tool_call(self, name: str, args: dict[str, Any]) -> None:
+        self.pending_args.setdefault(name, []).append(dict(args))
+        summary = summarize(name, args)
+        if summary:
+            self.last_action = summary
+
+    def observe_tool_result(self, name: str, result: dict[str, Any]) -> None:
+        args = self.pop_args(name)
+        event = progress_event_for_tool_result(name, result, args)
+        if event is None:
+            return
+        self.observe_event(event)
+
+    def observe_event(self, event: ProgressEvent) -> None:
+        self.flush_narration()
+        self.events.append(event)
+        self.event_count += 1
+        self.current_phase = self.intent_phase or event.phase
+        self.last_action = event.subject
+        if event.kind == "mutation" and event.subject:
+            self.files_touched.add(event.subject)
+        if event.kind in {"command", "failure"} and event.subject:
+            self.commands_run.append(event.subject)
+        if event.failed:
+            self.failures += 1
+        self.maybe_submit_narration()
+        self.render_event(event)
+
+    def pop_args(self, name: str) -> dict[str, Any]:
+        args = self.pending_args.get(name)
+        if not args:
+            return {}
+        value = args.pop(0)
+        if not args:
+            self.pending_args.pop(name, None)
+        return value
+
+    def render_event(self, event: ProgressEvent) -> None:
+        if self.mode == PROGRESS_MODE_TRACE:
+            return
+        if self.mode == PROGRESS_MODE_QUIET:
+            if event.failed or event.exact:
+                print(event.line, file=self.output)
+            return
+        if self.should_enter_chapter_mode():
+            self.chapter_mode = True
+        if not self.chapter_mode:
+            print(event.line, file=self.output)
+            return
+        phase = self.current_phase or event.phase
+        if phase != self.current_chapter_phase:
+            self.start_chapter(phase)
+        if event.exact or self.current_chapter_lines < self.max_chapter_lines:
+            print(f"  {event.line}", file=self.output)
+            self.current_chapter_lines += 1
+
+    def should_enter_chapter_mode(self) -> bool:
+        if self.chapter_mode:
+            return True
+        if self.event_count > self.chapter_event_threshold:
+            return True
+        return self.clock() - self.started_at >= self.chapter_seconds_threshold
+
+    def start_chapter(self, phase: str) -> None:
+        if self.current_chapter_phase:
+            print(file=self.output)
+        else:
+            print(file=self.output)
+        self.current_chapter_phase = phase
+        self.current_chapter_lines = 0
+        print(
+            f"[{format_elapsed(self.clock() - self.started_at)}] {phase}",
+            file=self.output,
+        )
+
+    def maybe_submit_narration(self) -> None:
+        if self.narrator is None:
+            return
+        self.narrator.submit(
+            objective=self.objective,
+            events=self.events,
+            previous_phase=self.current_phase,
+        )
+
+    def flush_narration(self) -> None:
+        if self.narrator is None:
+            return
+        data = self.narrator.consume()
+        if data is None:
+            return
+        phase = str(data.get("phase") or "").strip()
+        if phase:
+            self.current_phase = phase
+
+    def status_detail(self) -> str:
+        self.flush_narration()
+        parts = []
+        if self.current_phase:
+            parts.append(self.current_phase[:1].lower() + self.current_phase[1:])
+        parts.append(f"{self.event_count} events")
+        if self.last_action:
+            parts.append(f"last: {self.last_action}")
+        return " · ".join(parts)
+
+    def observe_reasoning_delta(self, text: str) -> None:
+        phase = reasoning_phase(text)
+        if phase:
+            self.intent_phase = phase
+            self.current_phase = phase
+
+    def finalize(self, turn: dict[str, Any]) -> None:
+        self.flush_narration()
+        line = final_digest_line(turn, self)
+        if line:
+            print(file=self.output)
+            print(line, file=self.output)
+
+
+def reasoning_phase(text: str) -> str:
+    normalized = " ".join(text.strip().split())
+    if not normalized:
+        return ""
+    for pattern in REASONING_PHASE_PATTERNS:
+        match = pattern.search(normalized)
+        if match is None:
+            continue
+        return phase_title(match.group(1))
+    lower = normalized.lower()
+    for prefix in REASONING_PHASE_PREFIXES:
+        if lower.startswith(prefix):
+            return phase_title(normalized)
+    return ""
+
+
+def phase_title(text: str) -> str:
+    words = []
+    for word in text.strip(" .:;-—").split():
+        cleaned = word.strip(",;:()[]{}")
+        if cleaned:
+            words.append(cleaned)
+        if len(words) >= 5:
+            break
+    if not words:
+        return ""
+    phrase = " ".join(words)
+    return phrase[:1].upper() + phrase[1:]
+
+
+def progress_event_for_tool_result(
+    name: str,
+    result: dict[str, Any],
+    args: dict[str, Any] | None = None,
+) -> ProgressEvent | None:
+    args = {} if args is None else args
+    failed = result.get("ok") is False
+    summary = progress_result_summary(name, result)
+    subject = progress_subject(name, result, args)
+    if name in {"read", "ls"}:
+        return ProgressEvent(
+            "read",
+            "Mapping repo",
+            subject,
+            success_line("read", subject, summary, failed),
+            failed=failed,
+        )
+    if name in {"grep", "find"}:
+        return ProgressEvent(
+            "search",
+            "Mapping repo",
+            subject,
+            success_line("searched", subject, summary, failed),
+            failed=failed,
+        )
+    if name in {"write", "edit"}:
+        return mutation_progress_event(name, result, subject, summary, failed)
+    if name == "bash":
+        return command_progress_event(subject, summary, failed)
+    return ProgressEvent(
+        "tool",
+        "Working",
+        subject or name,
+        success_line(name, subject, summary, failed),
+        failed=failed,
+    )
+
+
+def progress_result_summary(name: str, result: dict[str, Any]) -> str:
+    lines = tool_result_summary(name, result)
+    if (
+        result.get("ok") is True
+        and name in {"read", "ls", "grep", "find"}
+        and lines
+        in (
+            ["0 lines"],
+            ["0 entries"],
+            ["0 matches"],
+        )
+    ):
+        return "ok"
+    return " · ".join(lines) or "ok"
+
+
+def mutation_progress_event(
+    name: str,
+    result: dict[str, Any],
+    subject: str,
+    summary: str,
+    failed: bool,
+) -> ProgressEvent:
+    handoff = result.get("handoff")
+    staged = isinstance(handoff, dict)
+    if failed:
+        line = success_line(name, subject, summary, failed=True)
+    elif subject:
+        line = f"+ {subject}"
+    else:
+        line = f"+ {summary}"
+    return ProgressEvent(
+        "mutation",
+        "Applying changes",
+        subject,
+        line,
+        failed=failed,
+        exact=True if staged or failed else False,
+    )
+
+
+def command_progress_event(
+    subject: str,
+    summary: str,
+    failed: bool,
+) -> ProgressEvent:
+    return ProgressEvent(
+        "failure" if failed else "command",
+        "Validating",
+        subject,
+        success_line("", subject, summary, failed),
+        failed=failed,
+        exact=True,
+    )
+
+
+def success_line(verb: str, subject: str, summary: str, failed: bool) -> str:
+    prefix = "✗" if failed else "✓"
+    action = " ".join(part for part in (verb, subject) if part).strip()
+    if not action:
+        action = summary
+        summary = ""
+    suffix = f" · {summary}" if summary else ""
+    return f"{prefix} {action}{suffix}"
+
+
+def progress_subject(
+    name: str,
+    result: dict[str, Any],
+    args: dict[str, Any],
+) -> str:
+    metadata = result.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    handoff = result.get("handoff")
+    handoff = handoff if isinstance(handoff, dict) else {}
+    for source in (metadata, handoff, args):
+        for key in progress_subject_fields(name):
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                return text_content_path(value)
+    return summarize(name, args)
+
+
+def progress_subject_fields(name: str) -> tuple[str, ...]:
+    if name == "bash":
+        return ("command", "cmd")
+    if name in {"write", "edit", "read"}:
+        return ("path", "location", "file_path", "artifact")
+    return ("pattern", "query", "path", "glob")
+
+
+def text_content_path(value: str) -> str:
+    return value if "\n" not in value else value.splitlines()[0]
+
+
+def progress_mode_from_env(env: Mapping[str, str] | None = None) -> str:
+    values = os.environ if env is None else env
+    mode = values.get("SIGIL_PROGRESS", PROGRESS_MODE_COMPACT).lower()
+    if mode in PROGRESS_MODES:
+        return mode
+    return PROGRESS_MODE_COMPACT
+
+
+def final_digest_line(
+    turn: dict[str, Any],
+    renderer: TerminalDigestRenderer,
+) -> str:
+    cost = turn.get("cost")
+    cost = cost if isinstance(cost, dict) else {}
+    effects = turn.get("effects")
+    effects = effects if isinstance(effects, list) else []
+    files = effect_file_count(effects) or len(renderer.files_touched)
+    commands = effect_command_count(effects) or len(renderer.commands_run)
+    failures = renderer.failures
+    parts = [f"Done in {format_duration(int(cost.get('wall_ms') or 0))}"]
+    if files:
+        parts.append(plural(files, "file"))
+    if commands:
+        parts.append(plural(commands, "command"))
+    if failures:
+        parts.append(plural(failures, "failure"))
+    turn_id = str(turn.get("turn_id") or "")
+    if turn_id:
+        parts.append(f"log {short_trace_id(turn_id)}")
+    return " · ".join(parts)
+
+
+def effect_file_count(effects: list[Any]) -> int:
+    paths = {
+        effect.get("path")
+        for effect in effects
+        if isinstance(effect, dict)
+        and str(effect.get("kind") or "").startswith("file_")
+        and isinstance(effect.get("path"), str)
+    }
+    return len(paths)
+
+
+def effect_command_count(effects: list[Any]) -> int:
+    return sum(
+        1
+        for effect in effects
+        if isinstance(effect, dict) and effect.get("kind") == "command"
+    )
+
+
+def plural(count: int, noun: str) -> str:
+    suffix = "" if count == 1 else "s"
+    return f"{count} {noun}{suffix}"
+
+
+def format_duration(wall_ms: int) -> str:
+    seconds = max(int(wall_ms / 1000), 0)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, remainder = divmod(seconds, 60)
+    return f"{minutes}m{remainder:02d}s"
+
+
+def format_elapsed(seconds: float) -> str:
+    total = max(int(seconds), 0)
+    minutes, remainder = divmod(total, 60)
+    return f"{minutes:02d}:{remainder:02d}"
 
 
 class StreamRenderer(Protocol):
@@ -490,6 +1056,7 @@ class ThinkingStatus:
         clock: Callable[[], float] = time.monotonic,
         before_start: Callable[[], None] | None = None,
         detail: Callable[[], str] | None = None,
+        reasoning_observer: Callable[[str], None] | None = None,
         reasoning_lines: int = THINKING_TRACE_LINES,
         width: int | None = None,
     ) -> None:
@@ -500,6 +1067,7 @@ class ThinkingStatus:
         self.clock = clock
         self.before_start = before_start
         self.detail = detail
+        self.reasoning_observer = reasoning_observer
         self.reasoning_lines = reasoning_lines
         self.width = width
         self.trace_enabled = thinking_trace_enabled()
@@ -548,6 +1116,8 @@ class ThinkingStatus:
 
     def reasoning_delta(self, text: str) -> None:
         """Stream one reasoning delta into the rolling tail."""
+        if text and self.reasoning_observer is not None:
+            self.reasoning_observer(text)
         if not text or not self.enabled or not self.trace_enabled:
             return
         with self.lock:
@@ -659,12 +1229,14 @@ def thinking_status_factory(
     enabled: bool | None = None,
     before_start: Callable[[], None] | None = None,
     detail: Callable[[], str] | None = None,
+    reasoning_observer: Callable[[str], None] | None = None,
 ) -> Callable[[], ThinkingStatus]:
     return lambda: ThinkingStatus(
         output,
         enabled=enabled,
         before_start=before_start,
         detail=detail,
+        reasoning_observer=reasoning_observer,
     )
 
 

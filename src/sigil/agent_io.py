@@ -16,10 +16,14 @@ from dataclasses import dataclass
 from typing import Any, TextIO
 
 from .display.render import (
+    PROGRESS_MODE_TRACE,
+    AsyncNarrator,
     ContextUsageFooter,
+    TerminalDigestRenderer,
     TraceAwareStreamRenderer,
     TraceRenderState,
     create_stream_renderer,
+    progress_mode_from_env,
     render_tool_start,
 )
 from .ledger import append_effect_record, append_turn_record
@@ -65,12 +69,25 @@ class TurnRenderer:
     trace_state: TraceRenderState
     context_footer: ContextUsageFooter | None
     stream_renderer: TraceAwareStreamRenderer | None
+    progress_renderer: TerminalDigestRenderer | None
 
 
-def build_turn_renderer(footer_output: TextIO) -> TurnRenderer:
+def build_turn_renderer(
+    footer_output: TextIO,
+    *,
+    objective: str = "",
+    narrator: AsyncNarrator | None = None,
+) -> TurnRenderer:
     """Build the trace state, context footer, and stream renderer for a turn."""
     trace_state = TraceRenderState()
     context_footer = ContextUsageFooter(footer_output)
+    progress_mode = progress_mode_from_env()
+    progress_renderer = TerminalDigestRenderer(
+        footer_output,
+        mode=progress_mode,
+        objective=objective,
+        narrator=narrator,
+    )
     base_stream_renderer = create_stream_renderer(sys.stdout)
     stream_renderer = TraceAwareStreamRenderer(
         base_stream_renderer,
@@ -78,7 +95,7 @@ def build_turn_renderer(footer_output: TextIO) -> TurnRenderer:
         sys.stdout,
         before_output=context_footer.clear,
     )
-    return TurnRenderer(trace_state, context_footer, stream_renderer)
+    return TurnRenderer(trace_state, context_footer, stream_renderer, progress_renderer)
 
 
 class TurnLedger:
@@ -367,6 +384,12 @@ class TurnEventRecorder:
         self.render_tool_call(name, args)
 
     def render_tool_call(self, name: str, args: dict[str, Any]) -> None:
+        if (
+            self.renderer.progress_renderer is not None
+            and self.renderer.progress_renderer.mode != PROGRESS_MODE_TRACE
+        ):
+            self.renderer.progress_renderer.observe_tool_call(name, args)
+            return
         if self.renderer.context_footer is not None:
             self.renderer.context_footer.clear()
         if self.renderer.stream_renderer is not None:

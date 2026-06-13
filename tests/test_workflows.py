@@ -106,7 +106,7 @@ def test_sigil_step_writes_handoff_file(
     )
 
     assert result.exit_code == 0
-    assert "❯ bash   uv run pytest  (staged)" in result.output
+    assert "✓ uv run pytest · staged" in result.output
     assert handoff_file.read_text(encoding="utf-8") == "uv run pytest\n"
 
 
@@ -144,8 +144,8 @@ def test_sigil_step_keeps_trace_off_stdout(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert result.stdout == "\nsummary\n\n"
-    assert "❯ read" in result.stderr
-    assert "❯ read" not in result.stdout
+    assert "✓ read" in result.stderr
+    assert "✓ read" not in result.stdout
 
 
 def test_zeta_agent_step_separates_trace_from_final_answer(
@@ -194,7 +194,7 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
     output = capsys.readouterr()
     assert output.out.count("The answer.") == 1
     assert "❯" not in output.out
-    assert "❯ read" in output.err
+    assert "✓ read" in output.err
     assert captured["context"] == "ctx"
 
 
@@ -341,7 +341,7 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
 
     assert code == 0
     output = capsys.readouterr().out
-    assert ("❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)") in output
+    assert ("✓ read a.md · 1 lines\n✓ read b.md · 1 lines") in output
     assert output.count("context  [") == 1
     assert "123 / 262,144 tokens" not in output
     assert output.index("done") < output.index("context  [░░░░░░░░░░░░░░░░░░░░] 0%")
@@ -499,7 +499,7 @@ def test_zeta_agent_step_double_comma_stages_bash_handoff(
 
     assert code == 0
     output = capsys.readouterr()
-    assert "(staged)" in output.err
+    assert "· staged" in output.err
     assert "exit 0" not in output.err
     assert "Review complete" not in output.out
     assert handoff_file.read_text(encoding="utf-8") == "echo Review complete\n"
@@ -526,7 +526,7 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
             "input": {"path": "README.md"},
         }
         event_sink(tool_call)
-        assert "❯ read   README.md" in capsys.readouterr().err
+        assert capsys.readouterr().err == ""
         tool_result = {
             "type": "tool_result",
             "tool_call_id": "call-1",
@@ -588,7 +588,7 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
     output = capsys.readouterr()
     assert output.out.startswith("\nI'll inspect README.\n\n")
     assert "\nIt is a README.\n" in output.out
-    assert "❯ read   README.md" in output.err
+    assert "Done in" in output.err
 
 
 @pytest.mark.parametrize("workflow", ["propose", "do"])
@@ -643,8 +643,8 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
 
     assert code == 0
     output = capsys.readouterr().out
-    assert output.index("I'll inspect README.") < output.index("❯ read   README.md")
-    assert output.index("❯ read   README.md") < output.index("It is a README.")
+    assert output.index("I'll inspect README.") < output.index("✓ read README.md")
+    assert output.index("✓ read README.md") < output.index("It is a README.")
 
 
 def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
@@ -708,7 +708,7 @@ def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
 
     assert code == 0
     output = capsys.readouterr().out
-    assert "❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)" in output
+    assert "✓ read a.md · 1 lines\n✓ read b.md · 1 lines" in output
     assert output.count("Done.") == 1
 
 
@@ -763,7 +763,9 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
     assert out_text.count("Done.") == 1
     assert "❯" not in out_text
     trace_text = visible_terminal_text(output.getvalue())
-    assert "❯ read   README.md  (1 lines)\n\n  thinking 0s" in trace_text
+    assert "✓ read README.md · 1 lines" in trace_text
+    assert "mapping repo · 1 events · last: README.md" in trace_text
+    assert "thinking 0s" in trace_text
 
 
 def test_zeta_agent_step_prints_final_answer_after_direct_edit(
@@ -804,7 +806,7 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
     output = capsys.readouterr()
     assert output.out.count("edited and verified") == 1
     assert "❯" not in output.out
-    assert "❯ edit   a.txt  (applied · a.txt)" in output.err
+    assert "+ a.txt" in output.err
 
 
 def test_zeta_step_only_the_do_workflow_executes_directly() -> None:
@@ -1340,7 +1342,7 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
 
     assert code == 0
     output = capsys.readouterr()
-    assert "❯ read   pyproject.toml" in output.err
+    assert "✓ read pyproject.toml" in output.err
     assert "It contains project metadata." in output.out
     assert "❯" not in output.out
     assert len(transcripts) == 1
@@ -1503,7 +1505,7 @@ def test_zeta_ask_workflow_streams_text_before_tool_trace(
     output = capsys.readouterr()
     assert "I'll inspect README." in output.out
     assert "It is a README." in output.out
-    assert "❯ read   README.md  (1 lines)" in output.err
+    assert "✓ read README.md · 1 lines" in output.err
     assert "❯" not in output.out
     assert '{"path"' not in output.out
     assert '{"path"' not in output.err
@@ -1579,11 +1581,11 @@ def test_zeta_ask_workflow_renders_context_usage_at_bottom_after_tools(
 
     assert code == 0
     output = capsys.readouterr()
-    assert ("❯ read   a.md  (1 lines)\n❯ read   b.md  (1 lines)") in output.err
+    assert ("✓ read a.md · 1 lines\n✓ read b.md · 1 lines") in output.err
     assert output.err.count("context  [") == 1
     assert "It is a README." in output.out
     assert "context  [" not in output.out
-    assert output.err.index("❯ read   b.md") < output.err.index("context  [")
+    assert output.err.index("✓ read b.md") < output.err.index("context  [")
 
 
 def test_zeta_question_loop_prints_tool_start_while_agent_runs(
@@ -1607,7 +1609,7 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
             "input": {"path": "README.md"},
         }
         event_sink(tool_call)
-        assert "❯ read   README.md" in capsys.readouterr().err
+        assert capsys.readouterr().err == ""
         tool_result = {
             "type": "tool_result",
             "tool_call_id": "call-1",
