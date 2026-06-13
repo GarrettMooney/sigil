@@ -1404,9 +1404,7 @@ def test_fresh_ask_only_includes_shell_activity_since_last_response() -> None:
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
             record_turn("ls -la", 0, "/repo")
-            zeta_timeline.record_event(
-                {"type": "assistant_message", "content": "95 files."}
-            )
+            zeta_timeline.record_event({"type": "model", "content": "95 files."})
             record_turn("git status --short", 0, "/repo")
             captured: dict[str, str] = {}
 
@@ -1438,7 +1436,7 @@ def test_fresh_ask_omits_failure_context_already_seen_by_the_model() -> None:
                 stderr_snippet="AssertionError: no",
             )
             zeta_timeline.record_event(
-                {"type": "assistant_message", "content": "The fixture is wrong."}
+                {"type": "model", "content": "The fixture is wrong."}
             )
             captured: dict[str, str] = {}
 
@@ -1554,7 +1552,7 @@ def test_session_transcript_renders_conversation() -> None:
                 {"type": "user_message", "content": "what is sigil?"}
             )
             zeta_timeline.record_event(
-                {"type": "assistant_message", "content": "A shell assistant."}
+                {"type": "model", "content": "A shell assistant."}
             )
 
             result = CliRunner().invoke(cli, ["session", "transcript"])
@@ -1573,9 +1571,7 @@ def test_session_transcript_limits_and_dumps_json() -> None:
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
             zeta_timeline.record_event({"type": "user_message", "content": "first"})
-            zeta_timeline.record_event(
-                {"type": "assistant_message", "content": "second"}
-            )
+            zeta_timeline.record_event({"type": "model", "content": "second"})
 
             result = CliRunner().invoke(
                 cli, ["session", "transcript", "--limit", "1", "--json"]

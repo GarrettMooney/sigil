@@ -749,7 +749,7 @@ def test_transcript_renders_conversation_blocks() -> None:
     events = [
         {"type": "user_message", "content": "what is sigil?"},
         {
-            "type": "assistant_message",
+            "type": "model",
             "content": "It is a **shell assistant**.",
             "prompt_trace": {"prompt_object_id": "sha256:abcdef1234567890"},
         },
@@ -894,7 +894,7 @@ def test_transcript_keeps_tool_exchanges_contiguous() -> None:
             "tool_call_id": "call-2",
             "result": {"ok": True, "metadata": {"entries": 4}},
         },
-        {"type": "assistant_message", "content": "done"},
+        {"type": "model", "content": "done"},
     ]
 
     display_render.render_transcript(events, console=console)
@@ -926,7 +926,7 @@ def test_transcript_renders_tool_calls_embedded_in_assistant_messages() -> None:
     output, console = transcript_console()
     events = [
         {
-            "type": "assistant_message",
+            "type": "model",
             "tool_calls": [
                 {
                     "id": "call-1",
@@ -963,7 +963,7 @@ def test_transcript_skips_noise_and_empty_events() -> None:
     output, console = transcript_console()
     events = [
         {"type": "model_usage", "usage": {"total_tokens": 999}},
-        {"type": "assistant_message", "content": ""},
+        {"type": "model", "content": ""},
         {"role": "user", "content": "prior question"},
     ]
 
@@ -978,7 +978,7 @@ def test_transcript_renders_assistant_without_prompt_trace() -> None:
     output, console = transcript_console()
 
     display_render.render_transcript(
-        [{"type": "assistant_message", "content": "plain answer"}],
+        [{"type": "model", "content": "plain answer"}],
         console=console,
     )
 
@@ -991,7 +991,7 @@ def test_transcript_renders_reasoning_before_answer() -> None:
     display_render.render_transcript(
         [
             {
-                "type": "assistant_message",
+                "type": "model",
                 "reasoning": "the user wants the short version",
                 "content": "Here it is.",
             }
@@ -1007,7 +1007,7 @@ def test_transcript_renders_reasoning_before_answer() -> None:
 def test_transcript_reasoning_renders_markdown_in_italic_magenta() -> None:
     blocks = display_render.transcript_assistant_block(
         {
-            "type": "assistant_message",
+            "type": "model",
             "reasoning": "weighing **options**",
             "content": "done",
         },
@@ -1053,7 +1053,7 @@ def test_transcript_keeps_plain_user_message_undimmed() -> None:
 
 def test_transcript_skips_empty_reasoning_panel() -> None:
     blocks = display_render.transcript_assistant_block(
-        {"type": "assistant_message", "reasoning": "", "content": "done"},
+        {"type": "model", "reasoning": "", "content": "done"},
         set(),
         {},
     )

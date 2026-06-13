@@ -32,7 +32,7 @@ def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:
     store = zeta_trace.InMemoryStore()
     tools = model_tool_descriptors(())
     transcript = [{"role": "user", "content": "prior"}]
-    current_events = [{"type": "assistant_message", "content": "current"}]
+    current_events = [{"type": "model", "content": "current"}]
 
     prepared = zeta_prompt.PromptBuilder(store=store).build(
         "inspect",
@@ -71,7 +71,7 @@ def test_zeta_prompt_builder_links_prompt_components() -> None:
         allowed_tools=("read",),
         context="Project context",
         current_events=[
-            {"type": "assistant_message", "tool_calls": tool_call_fixture("call-1")},
+            {"type": "model", "tool_calls": tool_call_fixture("call-1")},
             {"type": "tool_result", "tool_call_id": "call-1", "result": {"ok": True}},
         ],
         tools=model_tool_descriptors(("read",)),
@@ -288,7 +288,7 @@ def test_zeta_prompt_components_prefix_order(
         [{"role": "user", "content": "prior"}],
         allowed_tools=("read",),
         context="Project context",
-        current_events=[{"type": "assistant_message", "content": "current"}],
+        current_events=[{"type": "model", "content": "current"}],
         tools=model_tool_descriptors(("read",)),
     )
 
@@ -396,7 +396,7 @@ def test_zeta_task_state_transform_replaces_transcript_with_structured_state() -
             {"role": "user", "content": "Keep going"},
         ],
         allowed_tools=(),
-        current_events=[{"type": "assistant_message", "content": "Fresh evidence"}],
+        current_events=[{"type": "model", "content": "Fresh evidence"}],
         tools=[],
     )
 
@@ -455,7 +455,7 @@ def test_zeta_task_state_transform_fails_open() -> None:
 
 def test_zeta_prompt_components_keep_source_events() -> None:
     transcript = [
-        {"type": "assistant_message", "tool_calls": tool_call_fixture()},
+        {"type": "model", "tool_calls": tool_call_fixture()},
         tool_result_event(
             "call-read",
             "raw result",
@@ -636,7 +636,7 @@ def test_zeta_structural_trim_preserves_current_tool_results_by_default() -> Non
         allowed_tools=(),
         current_events=[
             {
-                "type": "assistant_message",
+                "type": "model",
                 "tool_calls": tool_call_fixture("call-fresh", path="fresh.txt"),
             },
             tool_result_event(
@@ -1262,7 +1262,7 @@ def test_zeta_drop_oldest_removes_historical_messages_until_budget() -> None:
 def test_zeta_drop_oldest_drops_tool_results_with_their_call() -> None:
     timeline = [
         {
-            "type": "assistant_message",
+            "type": "model",
             "tool_calls": tool_call_fixture("call-old"),
         },
         tool_result_event("call-old", "old result " + "x" * 400, metadata={}),
@@ -1321,7 +1321,7 @@ def test_zeta_prompt_components_start_prior_timeline_at_message_boundary() -> No
             "name": "read",
             "result": {"ok": True, "content": [{"type": "text", "text": "orphan"}]},
         },
-        {"type": "assistant_message", "content": "the answer"},
+        {"type": "model", "content": "the answer"},
     ]
 
     components = zeta_prompt.prompt_components("continue", timeline, allowed_tools=())

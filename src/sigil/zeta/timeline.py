@@ -22,14 +22,14 @@ from .trace import (
 )
 
 RUN_EVENT_KIND = "run_event"
-RUN_HEAD_EVENT_TYPES = {"assistant_message", "tool_call", "tool_result"}
+RUN_HEAD_EVENT_TYPES = {"model", "tool_call", "tool_result"}
 NON_HEAD_EVENT_TYPES = {"model_usage"}
 DURABLE_RUN_EVENT_TYPES = {
-    "assistant_message": "model",
-    "model_usage": "model_usage",
-    "tool_call": "tool_call",
-    "turn_aborted": "turn_aborted",
-    "user_message": "user_message",
+    "model",
+    "model_usage",
+    "tool_call",
+    "turn_aborted",
+    "user_message",
 }
 
 
@@ -83,8 +83,7 @@ def record_event(event: dict[str, Any]) -> dict[str, Any]:
 
 def record_durable_event(event: dict[str, Any]) -> None:
     event_type = str(event.get("type") or "event")
-    durable_type = DURABLE_RUN_EVENT_TYPES.get(event_type)
-    if durable_type is None:
+    if event_type not in DURABLE_RUN_EVENT_TYPES:
         return
     payload = {
         key: value
@@ -94,7 +93,7 @@ def record_durable_event(event: dict[str, Any]) -> None:
     try:
         publish_event(
             DraftEvent(
-                event_type=f"zeta.run.{durable_type}",
+                event_type=f"zeta.run.{event_type}",
                 source="zeta",
                 payload=payload,
                 caused_by=(
@@ -275,7 +274,7 @@ def stored_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
         for key, value in prompt_trace.items()
         if key != "component_object_ids"
     }
-    if str(stored.get("type") or "") == "assistant_message" and trace_object_id(
+    if str(stored.get("type") or "") == "model" and trace_object_id(
         stored["prompt_trace"], "assistant_message_object_id"
     ):
         stored.pop("content", None)
@@ -291,7 +290,7 @@ def event_domain_object_id(event: dict[str, Any]) -> ObjectId | None:
     if event_type == "tool_call":
         return trace_object_id(event, "tool_call_object_id")
     prompt_trace = event.get("prompt_trace")
-    if event_type == "assistant_message" and isinstance(prompt_trace, dict):
+    if event_type == "model" and isinstance(prompt_trace, dict):
         return trace_object_id(prompt_trace, "assistant_message_object_id")
     return None
 
@@ -350,14 +349,14 @@ def timeline_node(
         previous_id = str(obj.data.get("previous_event_object_id") or "")
         event = object_event(obj)
         if event:
-            event = rehydrated_assistant_event(store, event)
+            event = rehydrated_model_event(store, event)
         return previous_id or None, [event] if event else []
     if obj.kind == "assistant_message":
         prompt_id = obj.links[0] if obj.links else ""
         events = prompt_component_events(store, prompt_id) if prompt_id else []
-        assistant_event = assistant_event_from_object(object_id, obj, prompt_id)
-        if assistant_event:
-            events.append(assistant_event)
+        event = model_event_from_object(object_id, obj, prompt_id)
+        if event:
+            events.append(event)
         return None, events
     if obj.kind == "tool_call":
         assistant_id = obj.links[0] if obj.links else ""
@@ -375,12 +374,12 @@ def object_event(obj: Object) -> dict[str, Any]:
     return dict(event) if isinstance(event, dict) else {}
 
 
-def rehydrated_assistant_event(
+def rehydrated_model_event(
     store: Store,
     event: dict[str, Any],
 ) -> dict[str, Any]:
     """Merge a linked assistant message body back into a projected event."""
-    if str(event.get("type") or "") != "assistant_message" or "content" in event:
+    if str(event.get("type") or "") != "model" or "content" in event:
         return event
     prompt_trace = event.get("prompt_trace")
     if not isinstance(prompt_trace, dict):
@@ -461,7 +460,7 @@ def normalize_source_event(event: dict[str, Any]) -> None:
 def chat_message_event(message: dict[str, Any]) -> dict[str, Any]:
     role = str(message.get("role") or "")
     if role == "assistant":
-        event: dict[str, Any] = {"type": "assistant_message"}
+        event: dict[str, Any] = {"type": "model"}
         content = message.get("content")
         if isinstance(content, str) and content:
             event["content"] = content
@@ -477,7 +476,7 @@ def chat_message_event(message: dict[str, Any]) -> dict[str, Any]:
     return {"role": role, "content": str(message.get("content") or "")}
 
 
-def assistant_event_from_object(
+def model_event_from_object(
     object_id: ObjectId,
     obj: Object,
     prompt_id: ObjectId,
@@ -486,7 +485,7 @@ def assistant_event_from_object(
     if not isinstance(message, dict):
         return {}
     event = chat_message_event({"role": "assistant", **message})
-    event["type"] = "assistant_message"
+    event["type"] = "model"
     if prompt_id:
         event["prompt_trace"] = {
             "prompt_object_id": prompt_id,
@@ -633,7 +632,7 @@ def event_chat_message(
 ) -> dict[str, Any] | None:
     role_by_type = {
         "user_message": "user",
-        "assistant_message": "assistant",
+        "model": "assistant",
         "turn_aborted": "assistant",
     }
     role = role_by_type.get(event_type)

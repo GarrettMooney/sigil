@@ -1128,7 +1128,7 @@ def transcript_block_kind(event: dict[str, Any]) -> str:
     event_type = str(event.get("type") or "")
     if event_type in {"tool_call", "tool_result"}:
         return "tool"
-    if event_type == "assistant_message" and not str(event.get("content") or ""):
+    if event_type == "model" and not str(event.get("content") or ""):
         return "tool"
     return "message"
 
@@ -1164,7 +1164,7 @@ def transcript_event_renderables(
         return []
     if event_type == "user_message":
         return transcript_message_panel("you", "cyan", event)
-    if event_type == "assistant_message":
+    if event_type == "model":
         return transcript_assistant_block(event, seen_call_ids, pending_results)
     if event_type == "tool_call":
         call_id = str(event.get("id") or event.get("tool_call_id") or "")

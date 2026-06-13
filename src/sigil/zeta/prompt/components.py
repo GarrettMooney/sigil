@@ -223,8 +223,8 @@ def structured_source_event(
         return structured_tool_result_event(event, tool_name=tool_name)
     if event_type == "tool_call":
         return structured_tool_call_event(event)
-    if event_type == "assistant_message" and isinstance(event.get("tool_calls"), list):
-        return structured_assistant_message_event(event)
+    if event_type == "model" and isinstance(event.get("tool_calls"), list):
+        return structured_model_event(event)
     return {}
 
 
@@ -259,9 +259,9 @@ def structured_tool_call_event(event: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def structured_assistant_message_event(event: dict[str, Any]) -> dict[str, Any]:
+def structured_model_event(event: dict[str, Any]) -> dict[str, Any]:
     data = {
-        "type": "assistant_message",
+        "type": "model",
         "tool_calls": event.get("tool_calls") or [],
     }
     object_id = assistant_message_object_id(event)

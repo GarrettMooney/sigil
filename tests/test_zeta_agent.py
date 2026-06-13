@@ -73,9 +73,7 @@ def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:
 
 
 def test_zeta_agent_event_omits_empty_reasoning() -> None:
-    event = zeta_agent.assistant_message_event(
-        {"content": "done", "reasoning_content": ""}
-    )
+    event = zeta_agent.model_event({"content": "done", "reasoning_content": ""})
 
     assert "reasoning" not in event
 
@@ -116,7 +114,7 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
         zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
     )
 
-    assistant = event_by_type(result.events, "assistant_message")
+    assistant = event_by_type(result.events, "model")
     tool_call = event_by_type(result.events, "tool_call")
     assert assistant["id"]
     assert tool_call["caused_by"] == assistant["id"]
@@ -145,7 +143,7 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     )
 
     assert result.final_text == "done"
-    assert result.events[0]["type"] == "assistant_message"
+    assert result.events[0]["type"] == "model"
     assert result.events[0]["content"] == "done"
     assert result.events[0]["prompt_trace"]["prompt_object_id"]
     assert len(result.prompt_traces) == 1
@@ -899,7 +897,7 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
     ) -> dict[str, Any]:
         del name, params, kwargs
         assert [event.get("type") for event in streamed] == [
-            "assistant_message",
+            "model",
             "tool_call",
         ]
         return {"ok": True, "content": [{"type": "text", "text": "README"}]}
@@ -915,7 +913,7 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
 
     assert result.events == streamed
     assert [event.get("type") for event in streamed] == [
-        "assistant_message",
+        "model",
         "tool_call",
         "tool_result",
     ]

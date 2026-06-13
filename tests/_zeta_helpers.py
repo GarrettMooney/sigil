@@ -127,7 +127,7 @@ def tool_result_transcript(
 ) -> list[dict[str, Any]]:
     return [
         {
-            "type": "assistant_message",
+            "type": "model",
             "tool_calls": tool_call_fixture(call_id, name=tool_name),
         },
         tool_result_event(call_id, text, metadata=metadata),

@@ -106,7 +106,7 @@ def run_agent_turn(
         if model_telemetry:
             latest_model_telemetry = model_telemetry
             model_telemetry_calls.append(model_telemetry)
-        message_event = assistant_message_event(assistant)
+        message_event = model_event(assistant)
         if prompt_trace is not None:
             attach_prompt_trace(message_event, prompt_trace)
         assistant_event_id = ensure_event_id(message_event) if message_event else None
@@ -301,11 +301,11 @@ class ToolCallResult:
     stop: bool = False
 
 
-def assistant_message_event(assistant: dict[str, Any]) -> dict[str, Any]:
+def model_event(assistant: dict[str, Any]) -> dict[str, Any]:
     content = assistant.get("content")
     reasoning = assistant.get("reasoning_content")
     tool_calls = assistant_tool_calls(assistant)
-    event: dict[str, Any] = {"type": "assistant_message"}
+    event: dict[str, Any] = {"type": "model"}
     if isinstance(reasoning, str) and reasoning:
         event["reasoning"] = reasoning
     if isinstance(content, str) and content:

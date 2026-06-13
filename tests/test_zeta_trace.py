@@ -402,8 +402,7 @@ def test_sigil_zeta_trace_cli_smoke_with_sqlite_store(
 def test_zeta_chat_messages_keeps_full_history_and_current_events() -> None:
     transcript = [{"role": "user", "content": f"prior-{index}"} for index in range(25)]
     current_events = [
-        {"type": "assistant_message", "content": f"current-{index}"}
-        for index in range(25)
+        {"type": "model", "content": f"current-{index}"} for index in range(25)
     ]
 
     messages = zeta_prompt.component_messages(
@@ -493,7 +492,7 @@ def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
 
     zeta_timeline.record_event(
         {
-            "type": "assistant_message",
+            "type": "model",
             "id": "assistant-event-1",
             "tool_calls": [
                 {
@@ -535,7 +534,7 @@ def test_zeta_timeline_projects_from_ref_and_object(
     assert first_head is not None
     store.set_ref("run/custom/head", first_head)
 
-    zeta_timeline.record_event({"type": "assistant_message", "content": "second"})
+    zeta_timeline.record_event({"type": "model", "content": "second"})
 
     assert [
         event["content"] for event in zeta_timeline.timeline_from_ref("run/custom/head")
@@ -586,7 +585,7 @@ def test_zeta_record_event_stores_prompt_link_not_components(
 
     zeta_timeline.record_event(
         {
-            "type": "assistant_message",
+            "type": "model",
             "content": "the answer",
             "prompt_trace": {
                 "prompt_object_id": prompt_id,
@@ -646,7 +645,7 @@ def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
 
     zeta_timeline.record_event(
         {
-            "type": "assistant_message",
+            "type": "model",
             "content": "the answer",
             "tool_calls": tool_calls,
             "prompt_trace": {
@@ -657,7 +656,7 @@ def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
     )
 
     events = zeta_timeline.current_timeline()
-    assert events[-1]["type"] == "assistant_message"
+    assert events[-1]["type"] == "model"
     assert events[-1]["content"] == "the answer"
     assert events[-1]["tool_calls"] == tool_calls
 
@@ -693,7 +692,7 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
 
     zeta_timeline.record_event(
         {
-            "type": "assistant_message",
+            "type": "model",
             "content": "the answer",
             "reasoning": "weighing the options",
             "prompt_trace": {
@@ -730,7 +729,7 @@ def test_zeta_timeline_keeps_untraced_assistant_content_inline(
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
 
-    zeta_timeline.record_event({"type": "assistant_message", "content": "fallback"})
+    zeta_timeline.record_event({"type": "model", "content": "fallback"})
 
     store = zeta_trace.default_store()
     event_id = store.get_ref(zeta_timeline.event_head_ref("zeta-test"))
@@ -753,7 +752,7 @@ def test_zeta_timeline_last_event_time_tracks_the_newest_event(
     first = zeta_timeline.record_event({"type": "user_message", "content": "hi"})
     assert zeta_timeline.last_event_time() == first["time"]
 
-    second = zeta_timeline.record_event({"type": "assistant_message", "content": "yo"})
+    second = zeta_timeline.record_event({"type": "model", "content": "yo"})
     assert zeta_timeline.last_event_time() == second["time"]
 
 
@@ -820,7 +819,7 @@ def test_zeta_orphan_tool_result_rendering_strips_trace_fields() -> None:
 
 def test_zeta_chat_messages_repairs_truncated_tool_call_arguments() -> None:
     event = {
-        "type": "assistant_message",
+        "type": "model",
         "content": "",
         "tool_calls": [
             {
@@ -846,7 +845,7 @@ def test_zeta_chat_messages_repairs_truncated_tool_call_arguments() -> None:
 
 def test_zeta_chat_messages_keeps_valid_tool_call_arguments() -> None:
     event = {
-        "type": "assistant_message",
+        "type": "model",
         "content": "",
         "tool_calls": [
             {

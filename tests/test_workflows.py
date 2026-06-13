@@ -134,7 +134,7 @@ def test_sigil_step_keeps_trace_off_stdout(monkeypatch) -> None:
                         "content": [{"type": "text", "text": "a\n"}],
                     },
                 },
-                {"type": "assistant_message", "content": "summary"},
+                {"type": "model", "content": "summary"},
             ],
         ),
     )
@@ -181,7 +181,7 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
                         "content": [{"type": "text", "text": "a\n"}],
                     },
                 },
-                {"type": "assistant_message", "content": "The answer."},
+                {"type": "model", "content": "The answer."},
             ],
         )
 
@@ -797,7 +797,7 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
                         "metadata": {"mode": "direct_replace", "location": "a.txt"},
                     },
                 },
-                {"type": "assistant_message", "content": "edited and verified"},
+                {"type": "model", "content": "edited and verified"},
             ],
         ),
     )
@@ -1059,7 +1059,7 @@ def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
     zeta_timeline.record_event(
         {
-            "type": "assistant_message",
+            "type": "model",
             "tool_calls": [
                 {
                     "id": "call-1",
@@ -1300,7 +1300,7 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
             final_text="It contains project metadata.",
             events=[
                 {
-                    "type": "assistant_message",
+                    "type": "model",
                     "tool_calls": [
                         {
                             "id": "call-1",
@@ -1331,7 +1331,7 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
                     },
                 },
                 {
-                    "type": "assistant_message",
+                    "type": "model",
                     "content": "It contains project metadata.",
                 },
             ],
@@ -1411,7 +1411,7 @@ def test_zeta_ask_workflow_streams_final_text_without_duplicate(
         stream_sink.content_delta("streamed answer")
         return zeta_agent.AgentTurnResult(
             final_text="streamed answer",
-            events=[{"type": "assistant_message", "content": "streamed answer"}],
+            events=[{"type": "model", "content": "streamed answer"}],
             final_text_streamed=True,
         )
 
@@ -1442,7 +1442,7 @@ def test_zeta_ask_workflow_streams_markdown_with_rich_for_tty(
         stream_sink.content_delta("**streamed** answer")
         return zeta_agent.AgentTurnResult(
             final_text="streamed answer",
-            events=[{"type": "assistant_message", "content": "streamed answer"}],
+            events=[{"type": "model", "content": "streamed answer"}],
             final_text_streamed=True,
         )
 
@@ -1455,7 +1455,7 @@ def test_zeta_ask_workflow_streams_markdown_with_rich_for_tty(
     assert code == 0
     assert "streamed answer" in visible_terminal_text(output.getvalue())
     timeline = zeta_timeline.current_timeline()
-    assert timeline[-1]["type"] == "assistant_message"
+    assert timeline[-1]["type"] == "model"
     assert timeline[-1]["content"] == "streamed answer"
 
 
@@ -1653,7 +1653,7 @@ def test_zeta_question_loop_passes_prior_timeline_as_turns(
         captured["context"] = kwargs.get("context")
         return zeta_agent.AgentTurnResult(
             final_text="follow-up answer",
-            events=[{"type": "assistant_message", "content": "follow-up answer"}],
+            events=[{"type": "model", "content": "follow-up answer"}],
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -1661,9 +1661,7 @@ def test_zeta_question_loop_passes_prior_timeline_as_turns(
     monkeypatch.setattr(zeta_runner, "load_project_context", lambda: "ctx")
 
     zeta_timeline.record_event({"type": "user_message", "content": "summarize README"})
-    zeta_timeline.record_event(
-        {"type": "assistant_message", "content": "It is a Sigil README."}
-    )
+    zeta_timeline.record_event({"type": "model", "content": "It is a Sigil README."})
 
     code = ask_runner.ask("and why?")
 
@@ -2110,7 +2108,7 @@ def test_turn_bridge_failure_does_not_break_the_step(monkeypatch) -> None:
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
             final_text="done",
-            events=[{"type": "assistant_message", "content": "done"}],
+            events=[{"type": "model", "content": "done"}],
         ),
     )
 
@@ -2128,7 +2126,7 @@ def test_zeta_step_tags_timeline_events_with_turn_id(monkeypatch) -> None:
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
             final_text="done",
-            events=[{"type": "assistant_message", "content": "done"}],
+            events=[{"type": "model", "content": "done"}],
         ),
     )
 
@@ -2182,7 +2180,7 @@ def test_ask_records_answered_turn_record(monkeypatch, capsys) -> None:
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
             final_text="the answer",
-            events=[{"type": "assistant_message", "content": "the answer"}],
+            events=[{"type": "model", "content": "the answer"}],
             model_telemetry_calls=[
                 {"usage": {"prompt_tokens": 21, "completion_tokens": 6}}
             ],
