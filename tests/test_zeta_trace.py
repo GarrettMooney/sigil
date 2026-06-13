@@ -605,6 +605,23 @@ def test_zeta_tool_called_links_used_and_returned_objects(
     ]
 
 
+def test_zeta_message_and_abort_are_durable_but_usage_is_not(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+
+    zeta_timeline.record_event({"type": "user_message", "content": "hello"})
+    zeta_timeline.record_event({"type": "model_usage", "usage": {"tokens": 1}})
+    zeta_timeline.record_event({"type": "turn_aborted", "content": "stopped"})
+
+    assert [event.event_type for event in event_store().list_events(Filter())] == [
+        "zeta.message.sent",
+        "zeta.turn.aborted",
+    ]
+
+
 def test_zeta_timeline_projects_from_ref_and_object(
     tmp_path: Path,
     monkeypatch,
