@@ -96,7 +96,7 @@ def session_clear(json_output: bool) -> int:
     """Remove the current session's state directory.
 
     Deletes the session's continuity files, trace store, and bridged turn
-    objects. The global ledger index and event log survive.
+    objects. The global ledger index and event journal survive.
     """
     return print_session_clear(json_output)
 

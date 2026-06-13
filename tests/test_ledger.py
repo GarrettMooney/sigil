@@ -730,7 +730,11 @@ def test_bundle_import_survives_reindex(monkeypatch, tmp_path) -> None:
     fresh_state_dir(monkeypatch, tmp_path)
     import_bundle(bundle)
     sigil_ledger.close_ledger_indexes()
-    (state_dir() / sigil_ledger.DEFAULT_LEDGER_NAME).unlink()
+    connection = sqlite3.connect(state_dir() / "events.sqlite3")
+    try:
+        connection.executescript("DROP TABLE effects; DROP TABLE turns;")
+    finally:
+        connection.close()
 
     result = CliRunner().invoke(sigil_cli, ["log", "reindex"])
 
@@ -765,6 +769,5 @@ def test_ledger_survives_session_clear() -> None:
     clear_current_session()
 
     assert not root.exists()
-    assert (state_dir() / "ledger.sqlite3").exists()
     assert (state_dir() / "events.sqlite3").exists()
     assert sigil_ledger.ledger_index().turn("turn-1") is not None

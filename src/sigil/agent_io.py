@@ -98,7 +98,7 @@ def build_turn_renderer(
 class TurnLedger:
     """Accumulate one agent turn's ledger facts and append its records.
 
-    Effects are appended to the global event log as the recorder sees the
+    Effects are appended to the global event journal as the recorder sees the
     matching tool results; ``finish`` appends the turn record referencing
     them.
     """

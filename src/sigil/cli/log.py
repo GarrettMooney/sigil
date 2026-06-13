@@ -166,7 +166,7 @@ def cmd_log_export(
 def cmd_log_import(bundle_file: str) -> int:
     """Import a bundle produced by `sigil log export`.
 
-    Records land in the global event log and index; trace objects land
+    Records land in the global event journal and index; trace objects land
     in per-session stores, so log/blame/trace queries answer here too.
     Re-importing a bundle is a no-op, and imported turns survive
     `sigil log reindex`.
@@ -198,11 +198,7 @@ def cmd_log_import(bundle_file: str) -> int:
     epilog=examples("sigil log reindex"),
 )
 def cmd_log_reindex() -> int:
-    """Rebuild the derived ledger.sqlite3 index from the event log.
-
-    Safe to run at any time. The index persists on its own, so rotating
-    the event log loses no turn, effect, or cost answer.
-    """
+    """Rebuild the derived ledger projection from the event store."""
     # Imported lazily: `sigil.cli` must stay light at import time.
     from ..ledger import ledger_index, reindex
 

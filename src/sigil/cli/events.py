@@ -32,7 +32,7 @@ WORKFLOW_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})
     help="Number of recent events to show.",
 )
 def cmd_events(json_output: bool, raw: bool, limit: int) -> int:
-    """Inspect Sigil's read-only event log.
+    """Inspect Sigil's read-only event journal.
 
     This is the raw view underneath `sigil log`: the most recent audit
     and debug records from the event journal, one row per event.
@@ -43,7 +43,7 @@ def cmd_events(json_output: bool, raw: bool, limit: int) -> int:
 
 
 def print_events_list(*, json_output: bool, raw: bool, limit: int) -> int:
-    """Print a bounded recent view of the global event log."""
+    """Print a bounded recent view of the global event journal."""
     if raw:
         events = event_store().list_events(Filter())
         pretty_print_json([normalized_event(event) for event in events[-limit:]])
@@ -107,7 +107,7 @@ def print_events_table(summaries: list[dict[str, object]]) -> None:
 
 
 def event_summary(event: dict[str, object]) -> dict[str, object]:
-    """Return a user-facing summary for one raw event log entry."""
+    """Return a user-facing summary for one raw event journal entry."""
     event_id = str(event.get("id") or "")
     session = str(event.get("session") or "")
     event_type = str(event.get("type") or "event")

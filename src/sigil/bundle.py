@@ -90,7 +90,7 @@ def import_bundle(payload: dict[str, Any]) -> dict[str, int]:
     """Import a bundle, returning records/objects/sessions counts.
 
     Already-indexed records are skipped, so re-importing the same
-    bundle neither bloats the event log nor changes any answer.
+    bundle neither bloats the event journal nor changes any answer.
     """
     if payload.get("sigil_bundle") != BUNDLE_VERSION:
         raise ValueError(f"not a sigil bundle (expected version {BUNDLE_VERSION})")

@@ -371,7 +371,7 @@ a sandbox: [bubblewrap](https://github.com/containers/bubblewrap) on Linux,
 or the built-in `sandbox-exec(1)` on macOS.
 
 Sigil stores audit/debug events and per-shell continuity under `~/.sigil/`.
-Inspect the global event log with:
+Inspect the global event journal with:
 
 ```sh
 sigil events
@@ -435,9 +435,9 @@ executed (with exit status), and staged handoffs with how they resolved.
 Plain shell commands and `+` runs are recorded as `run` turns with a
 command effect.
 
-The ledger is also indexed into `ledger.sqlite3` next to the event store: a
-derived SQLite view (`turns` and `effects` tables) written as records are
-appended and rebuildable at any time with `sigil log reindex`. Agent turns are
+The ledger is also indexed into projection tables inside `events.sqlite3`: a
+derived SQLite view (`turns` and `effects`) written as records are appended and
+rebuildable at any time with `sigil log reindex`. Agent turns are
 additionally bridged into the session's trace graph as `turn` objects
 linking the prompts the model saw and the tool results behind each
 effect; the `turn/<turn_id>` ref makes them addressable through `sigil
@@ -489,7 +489,7 @@ The ledger is also the unit of exchange. `sigil log export` writes a
 self-contained JSON bundle — the matching turn and effect records plus
 each turn's full trace closure (prompts, components, tool results,
 with their derivations and `turn/<id>` refs) — and `sigil log import`
-restores it on another machine: records join the global event log (so
+restores it on another machine: records join the global event journal (so
 they survive `log reindex`), objects land in per-session trace stores,
 and every query above answers there too. Re-importing is a no-op.
 

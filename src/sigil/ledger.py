@@ -12,11 +12,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .events import Filter, event_record, event_store
+from .events import Filter, event_record, event_store, event_store_path
 from .protocols import is_effect_record, is_turn_record
-from .state import append_event, state_dir
+from .state import append_event
 
-DEFAULT_LEDGER_NAME = "ledger.sqlite3"
 LOGGER = logging.getLogger("sigil.ledger")
 _WARNED_FAILURES: set[str] = set()
 SINCE_PATTERN = re.compile(r"(\d+)([dhm])")
@@ -382,28 +381,23 @@ def record_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def default_ledger_path() -> Path:
-    """Return the global ledger index path next to the event store."""
-    return state_dir() / DEFAULT_LEDGER_NAME
-
-
-_DEFAULT_INDEXES: dict[Path, LedgerIndex] = {}
+_LEDGER_INDEXES: dict[Path, LedgerIndex] = {}
 
 
 def ledger_index() -> LedgerIndex:
     """Return the process-wide ledger index for the current state dir."""
-    path = default_ledger_path()
-    index = _DEFAULT_INDEXES.get(path)
+    path = event_store_path()
+    index = _LEDGER_INDEXES.get(path)
     if index is None:
         index = LedgerIndex(path)
-        _DEFAULT_INDEXES[path] = index
+        _LEDGER_INDEXES[path] = index
     return index
 
 
 def close_ledger_indexes() -> None:
     """Close every cached ledger index; the next call reopens."""
-    while _DEFAULT_INDEXES:
-        _, index = _DEFAULT_INDEXES.popitem()
+    while _LEDGER_INDEXES:
+        _, index = _LEDGER_INDEXES.popitem()
         index.close()
 
 
