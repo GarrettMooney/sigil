@@ -114,12 +114,14 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
         [],
         zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
         prompt_builder=zeta_prompt.PromptBuilder(store=store),
+        caused_by="prompt-event",
     )
 
     assistant = event_by_type(result.events, "model")
     tool_call = event_by_type(result.events, "tool_call")
     tool_result = event_by_type(result.events, "tool_result")
     assert assistant["id"]
+    assert assistant["caused_by"] == "prompt-event"
     assert tool_call["caused_by"] == assistant["id"]
     assert tool_result["caused_by"] == assistant["id"]
     assert assistant["tool_call_object_ids"] == [tool_call["tool_call_object_id"]]
@@ -696,6 +698,7 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_tools=("read", "ls"), max_turns=2),
+        caused_by="prompt-event",
     )
 
     assert ran == [
@@ -706,6 +709,14 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
     assert [
         event["name"] for event in result.events if event.get("type") == "tool_call"
     ] == ["read", "ls"]
+    model_events = [event for event in result.events if event.get("type") == "model"]
+    tool_results = [
+        event for event in result.events if event.get("type") == "tool_result"
+    ]
+    assert model_events[0]["caused_by"] == "prompt-event"
+    assert tool_results[0]["caused_by"] == model_events[0]["id"]
+    assert tool_results[1]["caused_by"] == model_events[0]["id"]
+    assert model_events[1]["caused_by"] == tool_results[1]["id"]
 
 
 def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:

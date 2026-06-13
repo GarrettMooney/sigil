@@ -129,7 +129,8 @@ def step(
     }
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
-    record_event(user_event)
+    prompt_event = record_event(user_event)
+    ledger.note_root_event(prompt_event)
     context = load_project_context()
     renderer = build_turn_renderer(output, objective=objective)
     recorder = AgentStepEventRecorder(
@@ -172,9 +173,14 @@ def step(
                 reasoning_observer=progress_reasoning_observer(renderer),
             ),
             stream_sink=renderer.stream_renderer,
+            caused_by=ledger.root_event_id,
         )
     except RuntimeError as error:
-        record_turn_abort(error, workflow=workflow)
+        record_turn_abort(
+            error,
+            workflow=workflow,
+            caused_by=ledger.causal_parent_event_id(),
+        )
         turn = ledger.finish(TURN_OUTCOME_ABORTED)
         finalize_progress(renderer, turn)
         raise

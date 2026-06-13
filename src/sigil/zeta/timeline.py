@@ -27,7 +27,7 @@ NON_HEAD_EVENT_TYPES = {"model_usage"}
 DURABLE_EVENT_NAMES = {
     "model": "zeta.model.called",
     "tool_result": "zeta.tool.called",
-    "user_message": "sigil.message.sent",
+    "user_message": "sigil.prompt.submitted",
 }
 
 
@@ -204,8 +204,6 @@ def add_object_link(
 
 
 def durable_event_id(event_type: str, event: dict[str, Any]) -> str | None:
-    if event_type == "tool_result":
-        return None
     event_id = event.get("id")
     return event_id if isinstance(event_id, str) and event_id else None
 

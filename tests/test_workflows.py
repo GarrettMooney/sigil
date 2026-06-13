@@ -1927,6 +1927,74 @@ def zeta_tool_events() -> list[Any]:
     return [event for event in read_events() if event.event_type == "zeta.tool.called"]
 
 
+def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        prompt_event_id = cast(str, kwargs["caused_by"])
+        captured["prompt_event_id"] = prompt_event_id
+        return zeta_agent.AgentTurnResult(
+            final_text="done",
+            events=[
+                {
+                    "type": "model",
+                    "id": "model-event",
+                    "content": "",
+                    "caused_by": prompt_event_id,
+                },
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "tool_call_id": "call-1",
+                    "name": "write",
+                    "input": {"path": "a.txt", "content": "hello\n"},
+                    "caused_by": "model-event",
+                },
+                {
+                    "type": "tool_result",
+                    "id": "tool-event",
+                    "tool_call_id": "call-1",
+                    "name": "write",
+                    "result": {
+                        "ok": True,
+                        "metadata": {"mode": "direct", "path": "a.txt"},
+                    },
+                    "caused_by": "model-event",
+                },
+            ],
+        )
+
+    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.step("write the file", workflow="do")
+
+    assert code == 0
+    events = read_events()
+    (prompt_event,) = [
+        event for event in events if event.event_type == "sigil.prompt.submitted"
+    ]
+    (model_event,) = [
+        event for event in events if event.event_type == "zeta.model.called"
+    ]
+    (tool_event,) = zeta_tool_events()
+    (turn_event,) = [
+        event for event in events if event.event_type == "sigil.turn.completed"
+    ]
+    assert captured["prompt_event_id"] == prompt_event.id
+    assert model_event.id == "model-event"
+    assert model_event.caused_by == prompt_event.id
+    assert tool_event.id == "tool-event"
+    assert tool_event.caused_by == model_event.id
+    assert turn_event.caused_by == tool_event.id
+
+
 def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(

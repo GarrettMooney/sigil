@@ -121,6 +121,22 @@ class TurnLedger:
         self.effects: list[dict[str, Any]] = []
         self.effect_object_ids: list[str] = []
         self.model_calls: list[dict[str, Any]] = []
+        self.root_event_id: str | None = None
+        self.last_runtime_event_id: str | None = None
+
+    def note_root_event(self, event: dict[str, Any]) -> None:
+        event_id = event_id_value(event)
+        if event_id is not None:
+            self.root_event_id = event_id
+
+    def note_runtime_event(self, event: dict[str, Any]) -> None:
+        event_id = event_id_value(event)
+        if event_id is None or not is_durable_runtime_event(event):
+            return
+        self.last_runtime_event_id = event_id
+
+    def causal_parent_event_id(self) -> str | None:
+        return self.last_runtime_event_id or self.root_event_id
 
     def attach_tool_result_effect(self, event: dict[str, Any]) -> None:
         """Attach the effect record a tool result implies, if any."""
@@ -155,19 +171,21 @@ class TurnLedger:
         prompt_traces: Iterable[PromptTrace] = (),
     ) -> dict[str, Any]:
         """Append the turn record closing this turn and bridge it into the graph."""
-        event = append_turn_record(
-            turn_record(
-                self.turn_id,
-                workflow=self.workflow,
-                objective=self.objective,
-                contract=self.contract,
-                outcome=outcome,
-                agent=self.agent,
-                cost=self.cost(),
-                prompt_object_ids=[trace.prompt_object_id for trace in prompt_traces],
-                effect_ids=self.effect_ids,
-            )
+        record = turn_record(
+            self.turn_id,
+            workflow=self.workflow,
+            objective=self.objective,
+            contract=self.contract,
+            outcome=outcome,
+            agent=self.agent,
+            cost=self.cost(),
+            prompt_object_ids=[trace.prompt_object_id for trace in prompt_traces],
+            effect_ids=self.effect_ids,
         )
+        caused_by = self.causal_parent_event_id()
+        if caused_by is not None:
+            record["caused_by"] = caused_by
+        event = append_turn_record(record)
         payload = ledger_event_record(event)
         record_turn_trace_object(payload, self.effects, self.effect_object_ids)
         return payload
@@ -257,6 +275,24 @@ def tool_result_effect_fields(name: str, result: Any) -> dict[str, Any] | None:
     if name == "bash":
         return command_effect_fields(result, metadata, staged=staged)
     return None
+
+
+def event_id_value(event: dict[str, Any]) -> str | None:
+    event_id = event.get("id")
+    return event_id if isinstance(event_id, str) and event_id else None
+
+
+def is_durable_runtime_event(event: dict[str, Any]) -> bool:
+    event_type = str(event.get("type") or "")
+    if event_type == "model":
+        return True
+    if event_type != "tool_result":
+        return False
+    return (
+        "effects" in event
+        or "returned_objects" in event
+        or bool(event.get("tool_result_object_id"))
+    )
 
 
 def file_effect_fields(
@@ -354,6 +390,8 @@ class TurnEventRecorder:
         if event_type == "tool_result" and self.ledger is not None:
             self.ledger.attach_tool_result_effect(event)
         persisted = self.persist(event_type, event)
+        if self.ledger is not None:
+            self.ledger.note_runtime_event(persisted)
         if event_type == "tool_call":
             params = persisted.get("input")
             self.handle_tool_call(

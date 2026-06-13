@@ -68,6 +68,7 @@ def run_agent_turn(
     model_status: ModelStatusFactory | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
     prompt_builder: PromptBuilder | None = None,
+    caused_by: str | None = None,
 ) -> AgentTurnResult:
     """Run an assistant/tool loop without mutating session state."""
     if not agent_model_endpoint_open(config):
@@ -79,6 +80,7 @@ def run_agent_turn(
     prompt_traces: list[PromptTrace] = []
     builder = prompt_builder or PromptBuilder(transform=prompt_transform_from_env())
     tools = model_tool_descriptors(allowed_tools)
+    next_model_caused_by = caused_by
     for _ in turn_indices(config.max_turns):
         prepared_prompt = builder.build(
             objective,
@@ -112,6 +114,7 @@ def run_agent_turn(
             prompt_trace=prompt_trace,
             prompt_builder=builder,
             event_sink=event_sink,
+            caused_by=next_model_caused_by,
         )
         if not tool_calls:
             return AgentTurnResult(
@@ -135,6 +138,7 @@ def run_agent_turn(
                 caused_by=assistant_event_id,
             )
             events.extend(result_event.events)
+            next_model_caused_by = next_model_parent(result_event.events)
             if result_event.handoff is not None and config.stop_on_handoff:
                 return AgentTurnResult(
                     final_text="",
@@ -338,8 +342,11 @@ def record_model_event(
     prompt_trace: PromptTrace | None,
     prompt_builder: PromptBuilder,
     event_sink: AgentEventSink | None,
+    caused_by: str | None = None,
 ) -> tuple[str | None, list[dict[str, Any]]]:
     event = model_event(assistant)
+    if caused_by is not None:
+        event["caused_by"] = caused_by
     if prompt_trace is not None:
         attach_prompt_trace(event, prompt_trace)
     event_id = ensure_event_id(event) if event else None
@@ -355,6 +362,16 @@ def record_model_event(
     if event:
         emit_event(events, event, event_sink)
     return event_id, tool_calls
+
+
+def next_model_parent(events: list[dict[str, Any]]) -> str | None:
+    for event in reversed(events):
+        if str(event.get("type") or "") != "tool_result":
+            continue
+        event_id = event.get("id")
+        if isinstance(event_id, str) and event_id:
+            return event_id
+    return None
 
 
 def attach_prompt_trace(event: dict[str, Any], trace: PromptTrace) -> None:
@@ -656,6 +673,7 @@ def tool_result_event(
         "name": name,
         "result": result,
     }
+    ensure_event_id(event)
     if model_telemetry:
         event["model_telemetry"] = dict(model_telemetry)
     if prompt_trace is not None:
