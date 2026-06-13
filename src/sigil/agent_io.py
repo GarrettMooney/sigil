@@ -31,7 +31,6 @@ from .protocols import (
     EFFECT_KIND_FILE_EDIT,
     EFFECT_KIND_FILE_WRITE,
     TURN_RECORD_SCHEMA,
-    TURN_RECORD_TYPE,
     effect_record,
     is_shell_prompt_handoff,
     turn_contract,
@@ -217,7 +216,7 @@ def record_turn_trace_object(
         with store.batch():
             turn_object_id = store.put_object(
                 Object(
-                    kind=TURN_RECORD_TYPE,
+                    kind=TURN_RECORD_SCHEMA,
                     schema=TURN_RECORD_SCHEMA,
                     data={**payload, "effects": effects},
                     links=tuple(links),

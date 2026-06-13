@@ -15,6 +15,7 @@ from sigil.events import DraftEvent, Event, publish_event
 from sigil.protocols import (
     EFFECT_KIND_COMMAND,
     EFFECT_KIND_FILE_WRITE,
+    TURN_OUTCOME_ABORTED,
     TURN_OUTCOME_EXECUTED,
     TURN_OUTCOME_FAILED,
     effect_record,
@@ -67,8 +68,21 @@ def test_ledger_append_turn_record_writes_log_and_index() -> None:
     payload = sigil_ledger.ledger_event_record(event)
 
     (stored_event,) = read_events()
+    assert event.event_type == "sigil.turn.completed"
     assert stored_event == event
     assert sigil_ledger.ledger_index().turn("turn-1") == payload
+
+
+def test_ledger_append_turn_record_uses_outcome_event_names() -> None:
+    failed = sigil_ledger.append_turn_record(
+        sample_turn_record("turn-failed", outcome=TURN_OUTCOME_FAILED)
+    )
+    aborted = sigil_ledger.append_turn_record(
+        sample_turn_record("turn-aborted", outcome=TURN_OUTCOME_ABORTED)
+    )
+
+    assert failed.event_type == "sigil.turn.failed"
+    assert aborted.event_type == "sigil.turn.aborted"
 
 
 def test_ledger_append_effect_record_writes_projection_only() -> None:
@@ -175,7 +189,7 @@ def test_ledger_reindex_reads_event_store() -> None:
     index.index_event(
         Event(
             id="stale-event",
-            event_type="sigil.turn",
+            event_type="sigil.turn.completed",
             source="test",
             payload=sample_turn_record("stale-turn", time=300.0),
             idempotency_key=None,
@@ -196,7 +210,7 @@ def test_ledger_reindex_reads_event_store() -> None:
 def test_ledger_reindex_uses_event_metadata() -> None:
     publish_event(
         DraftEvent(
-            event_type="sigil.turn",
+            event_type="sigil.turn.completed",
             source="test",
             payload={
                 "turn_id": "turn-meta",
@@ -753,7 +767,7 @@ def test_bundle_import_is_idempotent(monkeypatch, tmp_path) -> None:
     assert second["records"] == 0
     log_lines = read_events()
     assert len(log_lines) == 1
-    assert log_lines[0].event_type == "sigil.turn"
+    assert log_lines[0].event_type == "sigil.turn.completed"
 
 
 def test_bundle_import_survives_reindex(monkeypatch, tmp_path) -> None:

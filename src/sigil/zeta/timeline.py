@@ -27,8 +27,7 @@ NON_HEAD_EVENT_TYPES = {"model_usage"}
 DURABLE_EVENT_NAMES = {
     "model": "zeta.model.called",
     "tool_result": "zeta.tool.called",
-    "turn_aborted": "zeta.turn.aborted",
-    "user_message": "zeta.message.sent",
+    "user_message": "sigil.message.sent",
 }
 
 

@@ -325,7 +325,7 @@ def test_event_store_path_is_separate_from_trace_object_store() -> None:
 def test_sqlite_event_store_deduplicates_idempotency_keys() -> None:
     store = SqliteEventStore.in_memory()
     draft = DraftEvent(
-        event_type="sigil.turn",
+        event_type="sigil.turn.completed",
         source="test",
         payload={"turn_id": "turn-1"},
         idempotency_key="turn:turn-1",
@@ -362,7 +362,7 @@ def test_sqlite_event_store_filters_and_cursors() -> None:
     ).event
     store.accept(
         DraftEvent(
-            event_type="sigil.turn",
+            event_type="sigil.turn.completed",
             source="sigil",
             payload={"turn_id": "turn-1"},
             session_id="s2",

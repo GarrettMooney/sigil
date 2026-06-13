@@ -1852,7 +1852,7 @@ def test_turn_record_carries_schema_contract_and_optional_blocks() -> None:
         effect_ids=["effect-1"],
     )
 
-    assert record["type"] == "sigil.turn"
+    assert record["type"] == "sigil.turn.completed"
     assert record["schema"] == "sigil.turn"
     assert record["turn_id"] == "turn-1"
     assert record["contract"] == {
@@ -1910,7 +1910,7 @@ def ledger_turns() -> list[dict[str, Any]]:
     return [
         sigil_ledger.ledger_event_record(event)
         for event in read_events()
-        if event.event_type == "sigil.turn"
+        if event.event_type.startswith("sigil.turn.")
     ]
 
 

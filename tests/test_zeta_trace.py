@@ -617,8 +617,7 @@ def test_zeta_message_and_abort_are_durable_but_usage_is_not(
     zeta_timeline.record_event({"type": "turn_aborted", "content": "stopped"})
 
     assert [event.event_type for event in event_store().list_events(Filter())] == [
-        "zeta.message.sent",
-        "zeta.turn.aborted",
+        "sigil.message.sent",
     ]
 
 

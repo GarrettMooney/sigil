@@ -19,6 +19,7 @@ from .events import (
     event_store_path,
     time_from_timestamp_micros,
 )
+from .protocols import turn_event_type
 from .state import append_event, session_id
 
 LOGGER = logging.getLogger("sigil.ledger")
@@ -157,7 +158,7 @@ class LedgerIndex:
 
     def index_event(self, event: Event) -> bool:
         """Index one durable event; non-ledger events return False."""
-        if event.event_type == "sigil.turn":
+        if event.event_type.startswith("sigil.turn."):
             self.index_turn_event(event)
             return True
         if event.event_type == "zeta.tool.called":
@@ -479,7 +480,12 @@ atexit.register(close_ledger_indexes)
 
 def append_turn_record(record: dict[str, Any]) -> Event:
     """Append one turn record to the event store and index it."""
-    event = append_event(record)
+    event = append_event(
+        {
+            **record,
+            "type": turn_event_type(str(record.get("outcome") or "")),
+        }
+    )
     index_event("append_turn_record", event)
     return event
 
@@ -515,7 +521,7 @@ def reindex(index: LedgerIndex | None = None) -> tuple[int, int]:
     turns = 0
     effects = 0
     for event in event_store().list_events(Filter()):
-        if event.event_type == "sigil.turn":
+        if event.event_type.startswith("sigil.turn."):
             target.index_turn_event(event)
             turns += 1
         elif event.event_type == "zeta.tool.called":

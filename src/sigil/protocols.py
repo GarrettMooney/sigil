@@ -68,7 +68,9 @@ def is_shell_handoff_result(value: object) -> bool:
     return _has_schema(value, SHELL_HANDOFF_RESULT_SCHEMA)
 
 
-TURN_RECORD_TYPE = "sigil.turn"
+TURN_EVENT_COMPLETED = "sigil.turn.completed"
+TURN_EVENT_FAILED = "sigil.turn.failed"
+TURN_EVENT_ABORTED = "sigil.turn.aborted"
 TURN_RECORD_SCHEMA = "sigil.turn"
 EFFECT_RECORD_TYPE = "sigil.effect"
 EFFECT_RECORD_SCHEMA = "sigil.effect"
@@ -100,6 +102,15 @@ def turn_contract(
     }
 
 
+def turn_event_type(outcome: str) -> str:
+    """Return the durable event type for a turn outcome."""
+    if outcome == TURN_OUTCOME_FAILED:
+        return TURN_EVENT_FAILED
+    if outcome == TURN_OUTCOME_ABORTED:
+        return TURN_EVENT_ABORTED
+    return TURN_EVENT_COMPLETED
+
+
 def turn_record(
     turn_id: str,
     *,
@@ -114,7 +125,7 @@ def turn_record(
 ) -> dict[str, Any]:
     """Return one ledger turn record; the event envelope adds time/cwd/session."""
     record: dict[str, Any] = {
-        "type": TURN_RECORD_TYPE,
+        "type": turn_event_type(outcome),
         "schema": TURN_RECORD_SCHEMA,
         "turn_id": turn_id,
         "workflow": workflow,
