@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 
 import click
 
@@ -43,31 +44,57 @@ def cmd_model() -> None:
 def cmd_model_list() -> int:
     """List configured model profiles, one per line.
 
-    Reads ~/.zeta/models.toml and marks the `default = true` profile. With
-    no profiles configured, prints the builtin local default. Exits 1 when
+    Reads ~/.zeta/models.toml and marks the profile the next request will use.
+    With no profiles configured, prints the builtin local default. Exits 1 when
     the profile config has diagnostics.
     """
+    from .. import configure_zeta_for_sigil
+
+    configure_zeta_for_sigil()
     catalog = load_model_profiles()
+    active = resolve_active_model().selection
     for diagnostic in catalog.diagnostics:
         click.echo(f"model config: {diagnostic.message}", err=True)
     if not catalog.profiles:
         default = default_model_selection()
-        click.echo(f"{default.profile}\t{default.model}\t{default.url}")
+        click.echo(
+            format_model_list_rows([(default.profile, default.model, default.url, "")])
+        )
         click.echo(
             "no profiles configured; using the builtin local default. "
             "Add profiles in ~/.zeta/models.toml.",
             err=True,
         )
         return 1 if catalog.diagnostics else 0
+    rows: list[tuple[str, str, str, str]] = []
     for profile in sorted(catalog.profiles.values(), key=lambda item: item.name):
         selection = resolve_model_profile(profile.name, catalog=catalog)
         if selection is None:
             continue
-        line = f"{selection.profile}\t{selection.model}\t{selection.url}"
-        if profile.name == catalog.default_profile:
-            line += "\t(default)"
-        click.echo(line)
+        marker = "(active)" if profile.name == active.profile else ""
+        rows.append((selection.profile, selection.model, selection.url, marker))
+    click.echo(format_model_list_rows(rows))
     return 1 if catalog.diagnostics else 0
+
+
+def format_model_list_rows(rows: list[tuple[str, str, str, str]]) -> str:
+    profile_width = max(len(row[0]) for row in rows)
+    model_width = max(len(row[1]) for row in rows)
+    endpoint_width = max(len(endpoint_label(row[2])) for row in rows)
+    lines = []
+    for profile, model, url, marker in rows:
+        endpoint = endpoint_label(url)
+        endpoint_column = f"{endpoint:<{endpoint_width}}" if marker else endpoint
+        line = f"{profile:<{profile_width}}  {model:<{model_width}}  {endpoint_column}"
+        if marker:
+            line += f"  {marker}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def endpoint_label(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed.netloc or url
 
 
 @cmd_model.command(

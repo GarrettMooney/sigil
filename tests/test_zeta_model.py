@@ -1391,7 +1391,7 @@ def test_zeta_models_package_rejects_unknown_api() -> None:
         )
 
 
-def test_zeta_model_cli_list_resolves_urls_and_marks_default(
+def test_zeta_model_cli_list_resolves_urls_and_marks_active_config_profile(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1416,8 +1416,41 @@ model = "fast-model"
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
-    assert "codex\tgpt-5.5\thttps://chatgpt.com/backend-api\t(default)" in lines
-    assert f"fast\tfast-model\t{zeta_models.DEFAULT_MODEL_URL}" in lines
+    assert "codex  gpt-5.5     chatgpt.com     (active)" in lines
+    assert "fast   fast-model  127.0.0.1:8080" in lines
+    assert lines[0].index("chatgpt.com") == lines[1].index("127.0.0.1")
+
+
+def test_zeta_model_cli_list_marks_session_profile_active(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "codex"
+model = "gpt-5.5"
+api = "codex-responses"
+default = true
+
+[[models]]
+name = "fast"
+model = "fast-model"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "list-active-session")
+    zeta_models.set_active_model_profile("fast")
+
+    result = CliRunner().invoke(sigil_cli, ["model", "list"])
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert "codex  gpt-5.5     chatgpt.com" in lines
+    assert "fast   fast-model  127.0.0.1:8080  (active)" in lines
+    assert lines[0].index("chatgpt.com") == lines[1].index("127.0.0.1")
 
 
 def test_zeta_model_cli_show_reports_source(
