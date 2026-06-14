@@ -240,13 +240,18 @@ def test_zeta_tool_grep_reports_invalid_pattern_error(tmp_path: Path) -> None:
     assert data["content"][0]["text"]
 
 
-def test_zeta_tool_bash_returns_handoff() -> None:
+def test_zeta_tool_bash_returns_proposed_command_effect() -> None:
     data = tool_registry.run_tool(
         "bash", {"command": "uv run pytest", "reason": "Run tests."}
     )
 
-    assert data["handoff"]["command"] == "uv run pytest"
-    assert data["handoff"]["reason"] == "Run tests."
+    assert "handoff" not in data
+    assert data["effect"] == {
+        "kind": "command",
+        "status": "proposed",
+        "command": "uv run pytest",
+        "reason": "Run tests.",
+    }
 
 
 def test_zeta_tool_bash_direct_executes_command() -> None:
@@ -366,12 +371,12 @@ def test_zeta_tool_edit_writes_patch_artifact(tmp_path: Path) -> None:
     data = tool_registry.run_tool(
         "edit", {"location": str(target), "old": "old\n", "new": "new\n"}
     )
-    artifact = Path(data["handoff"]["artifact"])
+    artifact = Path(data["effect"]["artifact"])
     assert artifact.exists()
     patch = artifact.read_text(encoding="utf-8")
     assert "-old\n" in patch
     assert "+new\n" in patch
-    assert data["handoff"]["command"].startswith("git apply ")
+    assert data["effect"]["command"].startswith("git apply ")
 
 
 def test_zeta_tool_edit_accepts_exact_replacement(tmp_path: Path) -> None:
@@ -387,10 +392,10 @@ def test_zeta_tool_edit_accepts_exact_replacement(tmp_path: Path) -> None:
     data = tool_registry.run_tool("edit", payload)
 
     assert tool_registry.validate_tool_args("edit", payload) == []
-    artifact = Path(data["handoff"]["artifact"])
+    artifact = Path(data["effect"]["artifact"])
     patch = artifact.read_text(encoding="utf-8")
-    assert data["handoff"]["command"].startswith("git apply ")
-    assert data["handoff"]["reason"] == "Replace one line."
+    assert data["effect"]["command"].startswith("git apply ")
+    assert data["effect"]["reason"] == "Replace one line."
     assert "-old\n" in patch
     assert "+new\n" in patch
 
@@ -467,7 +472,7 @@ def test_zeta_tool_edit_marks_no_newline_exact_replacement(tmp_path: Path) -> No
         "edit", {"location": str(target), "old": "old", "new": "new"}
     )
 
-    artifact = Path(data["handoff"]["artifact"])
+    artifact = Path(data["effect"]["artifact"])
     patch = artifact.read_text(encoding="utf-8")
     assert "-old\n\\ No newline at end of file\n" in patch
     assert "+new\n\\ No newline at end of file\n" in patch
@@ -515,7 +520,7 @@ def test_zeta_tool_write_stage_records_staged_hashes(tmp_path: Path) -> None:
 
     data = tool_registry.run_tool("write", {"path": str(target), "content": "hello\n"})
 
-    assert data["handoff"]["command"].startswith("cp ")
+    assert data["effect"]["command"].startswith("cp ")
     metadata = data["metadata"]
     assert metadata["path"] == str(target)
     assert metadata["before_hash"] == "sha256:" + hashlib.sha256(b"old\n").hexdigest()
@@ -562,7 +567,7 @@ def test_zeta_tool_edit_stage_records_staged_hashes(tmp_path: Path) -> None:
         "edit", {"location": str(target), "old": "old\n", "new": "new\n"}
     )
 
-    assert data["handoff"]["command"].startswith("git apply ")
+    assert data["effect"]["command"].startswith("git apply ")
     metadata = data["metadata"]
     assert metadata["path"] == str(target)
     before = "sha256:" + hashlib.sha256(b"hello\nold\nbye\n").hexdigest()

@@ -16,9 +16,6 @@ from _zeta_helpers import (
     required_stream_sink,
 )
 
-from sigil.protocols import (
-    SHELL_PROMPT_HANDOFF_TYPE,
-)
 from sigil.tools import ensure_builtin_tools_registered
 from sigil.zeta import agent as zeta_agent
 from sigil.zeta import prompt as zeta_prompt
@@ -968,8 +965,9 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
         "run_tool",
         lambda name, params, **kwargs: {
             "ok": True,
-            "handoff": {
-                "type": SHELL_PROMPT_HANDOFF_TYPE,
+            "effect": {
+                "kind": "command",
+                "status": "proposed",
                 "command": "uv run pytest",
                 "reason": "Run tests.",
             },
@@ -984,7 +982,8 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
 
     assert requests == 1
     assert result.staged_effect == {
-        "type": SHELL_PROMPT_HANDOFF_TYPE,
+        "kind": "command",
+        "status": "proposed",
         "command": "uv run pytest",
         "reason": "Run tests.",
     }

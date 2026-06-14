@@ -8,7 +8,7 @@ import subprocess
 import time
 from typing import Any
 
-from sigil.zeta.tools.base import ToolSpec, error_result, handoff
+from sigil.zeta.tools.base import ToolSpec, error_result, proposed_command_effect
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_OUTPUT_CHARS = 12_000
@@ -36,7 +36,10 @@ def stage(params: dict[str, Any]) -> dict[str, Any]:
     command = str(params.get("command") or "").strip()
     if not command:
         return error_result("missing-command", "missing command")
-    return handoff(command, str(params.get("reason") or "Run the proposed command."))
+    return proposed_command_effect(
+        command,
+        str(params.get("reason") or "Run the proposed command."),
+    )
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:

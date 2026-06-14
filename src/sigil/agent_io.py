@@ -32,13 +32,13 @@ from .protocols import (
     EFFECT_KIND_FILE_WRITE,
     TURN_RECORD_SCHEMA,
     effect_record,
-    is_shell_prompt_handoff,
     turn_contract,
     turn_record,
 )
 from .zeta.agent import AgentTurnResult
 from .zeta.models import CODEX_RESPONSES_API, ModelSelection, ensure_server
 from .zeta.timeline import add_event_link, record_event
+from .zeta.tools.base import proposed_effect
 from .zeta.trace import (
     Derivation,
     Object,
@@ -269,11 +269,12 @@ def tool_result_effect_fields(name: str, result: Any) -> dict[str, Any] | None:
         return None
     metadata = result.get("metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
-    staged = is_shell_prompt_handoff(result.get("handoff"))
+    staged_effect = proposed_effect(result)
+    staged = staged_effect is not None
     if name in {"write", "edit"}:
         return file_effect_fields(name, result, metadata, staged=staged)
     if name == "bash":
-        return command_effect_fields(result, metadata, staged=staged)
+        return command_effect_fields(result, metadata, staged_effect=staged_effect)
     return None
 
 
@@ -323,15 +324,13 @@ def command_effect_fields(
     result: dict[str, Any],
     metadata: dict[str, Any],
     *,
-    staged: bool,
+    staged_effect: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    if staged:
-        handoff = result.get("handoff")
-        command = handoff.get("command") if isinstance(handoff, dict) else ""
+    if staged_effect is not None:
         return {
             "kind": EFFECT_KIND_COMMAND,
             "staged": True,
-            "command": str(command or ""),
+            "command": str(staged_effect.get("command") or ""),
         }
     status = metadata.get("status")
     if not isinstance(status, int) or isinstance(status, bool):

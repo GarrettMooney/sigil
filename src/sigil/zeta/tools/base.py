@@ -10,8 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, get_args
 
-from ...protocols import shell_handoff_tool_result
-
 EffectKind = Literal["read", "write", "delete", "execute", "search"]
 
 EFFECT_KINDS = frozenset(get_args(EffectKind))
@@ -70,10 +68,29 @@ def error_result(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "error": {"code": code, "message": message}}
 
 
-def handoff(
+def proposed_command_effect(
     command: str, reason: str, *, artifact: str | None = None
 ) -> dict[str, Any]:
-    return shell_handoff_tool_result(command, reason, artifact=artifact)
+    effect = {
+        "kind": "command",
+        "status": "proposed",
+        "command": command,
+        "reason": reason,
+    }
+    if artifact is not None:
+        effect["artifact"] = artifact
+    return {"ok": True, "effect": effect}
+
+
+def proposed_effect(result: dict[str, Any]) -> dict[str, Any] | None:
+    if result.get("ok") is not True:
+        return None
+    effect = result.get("effect")
+    if not isinstance(effect, dict):
+        return None
+    if effect.get("status") != "proposed":
+        return None
+    return effect
 
 
 def content_hash(data: bytes | str) -> str:

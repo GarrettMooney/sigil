@@ -21,6 +21,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from ..zeta.prompt.budget import estimated_tokens_for_text
+from ..zeta.tools.base import proposed_effect
 from .summarize import short_trace_id, summarize, text_content, tool_result_summary
 from .tty import iris_italic, is_interactive, muted, should_color
 
@@ -305,8 +306,9 @@ def mutation_progress_event(
     summary: str,
     failed: bool,
 ) -> ProgressEvent:
-    handoff = result.get("handoff")
-    staged = isinstance(handoff, dict)
+    staged = proposed_effect(result) is not None or isinstance(
+        result.get("handoff"), dict
+    )
     if failed:
         line = success_line(name, subject, summary, failed=True)
     elif subject:
@@ -355,11 +357,12 @@ def progress_subject(
 ) -> str:
     metadata = result.get("metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
+    effect = proposed_effect(result) or {}
     handoff = result.get("handoff")
     handoff = handoff if isinstance(handoff, dict) else {}
     if name == "ls":
         return ls_progress_subject(metadata, args)
-    for source in (metadata, handoff, args):
+    for source in (metadata, effect, handoff, args):
         for key in progress_subject_fields(name):
             value = source.get(key)
             if isinstance(value, str) and value:

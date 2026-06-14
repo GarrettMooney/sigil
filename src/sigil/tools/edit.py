@@ -1,4 +1,4 @@
-"""Exact-replacement edit handoff tool implementation."""
+"""Exact-replacement edit tool implementation."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from sigil.zeta.tools.base import (
     ToolSpec,
     change_hashes,
     error_result,
-    handoff,
+    proposed_command_effect,
     write_temp,
 )
 
@@ -116,7 +116,7 @@ def prepare_exact_replacement(
 
 def stage_patch(patch: str, reason: str) -> dict[str, Any]:
     path = write_temp("zeta-edit-", ".patch", patch)
-    return handoff(
+    return proposed_command_effect(
         f"git apply {shlex.quote(str(path))}",
         reason,
         artifact=str(path),

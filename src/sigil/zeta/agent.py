@@ -18,6 +18,7 @@ from .models import (
 )
 from .prompt import PromptBuilder, prompt_transform_from_env
 from .prompt.system import model_tool_descriptors
+from .tools.base import proposed_effect
 from .tools.registry import ExecutionMode
 from .tools.registry import registry as tool_registry
 from .trace import PromptTrace, prompt_trace_payload
@@ -696,12 +697,4 @@ def tool_call_stages_effect(name: str, execution_mode: ExecutionMode) -> bool:
 
 
 def result_staged_effect(result: dict[str, Any]) -> dict[str, Any] | None:
-    if result.get("ok") is not True:
-        return None
-    effect = result.get("effect")
-    if isinstance(effect, dict):
-        return cast(dict[str, Any], effect)
-    handoff = result.get("handoff")
-    if isinstance(handoff, dict):
-        return cast(dict[str, Any], handoff)
-    return None
+    return proposed_effect(result)

@@ -12,6 +12,7 @@ from typing import Any
 from ..events import durable_event, publish_event, timestamp_micros_from_time
 from ..protocols import is_shell_handoff_result, is_shell_prompt_handoff
 from ..state import session_id
+from .tools.base import proposed_effect
 from .trace import (
     Derivation,
     Object,
@@ -737,6 +738,9 @@ def is_resolved_shell_prompt_handoff(
     result = event.get("result")
     if not isinstance(result, dict):
         return False
+    effect = proposed_effect(result)
+    if effect is not None and effect.get("kind") == "command":
+        return True
     return is_shell_prompt_handoff(result.get("handoff"))
 
 

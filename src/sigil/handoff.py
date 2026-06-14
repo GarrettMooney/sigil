@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from .ledger import append_effect_record
 from .protocols import (
@@ -21,6 +21,7 @@ from .protocols import (
 )
 from .session import event_time, recent_turns
 from .zeta.timeline import current_timeline, record_event
+from .zeta.tools.base import proposed_effect
 
 
 def append_shell_result() -> dict[str, Any]:
@@ -246,8 +247,8 @@ def latest_unresolved_shell_handoff(
             if tool_call_id:
                 resolved_call_ids.add(tool_call_id)
             continue
-        handoff = result.get("handoff")
-        if not is_shell_prompt_handoff(handoff):
+        handoff = shell_handoff_metadata(result)
+        if not handoff:
             continue
         if tool_call_id and tool_call_id in resolved_call_ids:
             continue
@@ -259,6 +260,25 @@ def latest_unresolved_shell_handoff(
             "artifact": str(handoff.get("artifact") or ""),
             "time": event.get("time"),
             "turn_id": str(event.get("turn_id") or ""),
+        }
+    return {}
+
+
+def shell_handoff_metadata(result: dict[str, Any]) -> dict[str, Any]:
+    effect = proposed_effect(result)
+    if effect is not None and effect.get("kind") == "command":
+        return {
+            "command": str(effect.get("command") or ""),
+            "reason": str(effect.get("reason") or ""),
+            "artifact": str(effect.get("artifact") or ""),
+        }
+    handoff = result.get("handoff")
+    if is_shell_prompt_handoff(handoff):
+        handoff = cast(dict[str, Any], handoff)
+        return {
+            "command": str(handoff.get("command") or ""),
+            "reason": str(handoff.get("reason") or ""),
+            "artifact": str(handoff.get("artifact") or ""),
         }
     return {}
 

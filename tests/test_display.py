@@ -20,7 +20,6 @@ from sigil.display.tty import IRIS, ITALIC, MUTED, RESET
 from sigil.protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
-    SHELL_PROMPT_HANDOFF_TYPE,
 )
 from sigil.zeta import trace as zeta_trace
 
@@ -30,8 +29,9 @@ def test_sigil_display_summarizes_tool_results() -> None:
         "bash",
         {
             "ok": True,
-            "handoff": {
-                "type": SHELL_PROMPT_HANDOFF_TYPE,
+            "effect": {
+                "kind": "command",
+                "status": "proposed",
                 "command": "uv run pytest",
             },
         },

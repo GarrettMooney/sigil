@@ -78,8 +78,9 @@ def test_sigil_step_writes_handoff_file(
                     "name": "bash",
                     "result": {
                         "ok": True,
-                        "handoff": {
-                            "type": SHELL_PROMPT_HANDOFF_TYPE,
+                        "effect": {
+                            "kind": "command",
+                            "status": "proposed",
                             "command": "uv run pytest",
                             "reason": "Run tests.",
                         },
@@ -87,7 +88,8 @@ def test_sigil_step_writes_handoff_file(
                 },
             ],
             staged_effect={
-                "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "kind": "command",
+                "status": "proposed",
                 "command": "uv run pytest",
                 "reason": "Run tests.",
             },
@@ -2015,8 +2017,9 @@ def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
                     "name": "bash",
                     "result": {
                         "ok": True,
-                        "handoff": {
-                            "type": SHELL_PROMPT_HANDOFF_TYPE,
+                        "effect": {
+                            "kind": "command",
+                            "status": "proposed",
                             "command": "uv run pytest",
                             "reason": "Run tests.",
                         },
@@ -2024,7 +2027,8 @@ def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
                 },
             ],
             staged_effect={
-                "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "kind": "command",
+                "status": "proposed",
                 "command": "uv run pytest",
                 "reason": "Run tests.",
             },
@@ -2408,8 +2412,9 @@ def test_latest_unresolved_shell_handoff_surfaces_turn_id() -> None:
             "time": 100.0,
             "result": {
                 "ok": True,
-                "handoff": {
-                    "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "effect": {
+                    "kind": "command",
+                    "status": "proposed",
                     "command": "make",
                     "reason": "Build.",
                 },
@@ -2461,8 +2466,9 @@ def staged_handoff_event(command: str) -> dict[str, Any]:
         "name": "bash",
         "result": {
             "ok": True,
-            "handoff": {
-                "type": SHELL_PROMPT_HANDOFF_TYPE,
+            "effect": {
+                "kind": "command",
+                "status": "proposed",
                 "command": command,
                 "reason": "Run it.",
             },

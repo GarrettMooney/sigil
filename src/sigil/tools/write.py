@@ -10,7 +10,7 @@ from sigil.zeta.tools.base import (
     ToolSpec,
     change_hashes,
     error_result,
-    handoff,
+    proposed_command_effect,
     write_temp,
 )
 
@@ -27,7 +27,7 @@ SCHEMA: dict[str, Any] = {
 
 SPEC = ToolSpec(
     "write",
-    "Write content directly or stage a cp handoff, depending on the active workflow.",
+    "Write content directly or stage a proposed cp command.",
     SCHEMA,
     interactive=True,
     effects=("write",),
@@ -40,7 +40,7 @@ def stage(params: dict[str, Any]) -> dict[str, Any]:
         return error_result("missing-path", "missing path")
     content = str(params.get("content") or "")
     path = write_temp("zeta-write-", ".tmp", content)
-    result = handoff(
+    result = proposed_command_effect(
         f"cp {shlex.quote(str(path))} {shlex.quote(dest)}",
         str(params.get("reason") or f"Write {dest}."),
         artifact=str(path),

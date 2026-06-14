@@ -14,6 +14,7 @@ from ..protocols import (
     SHELL_HANDOFF_OUTCOME_NO_PENDING,
 )
 from ..zeta.prompt.budget import estimated_tokens_for_text
+from ..zeta.tools.base import proposed_effect
 from ..zeta.trace import Object
 
 SUMMARY_FIELDS_BY_TOOL = {
@@ -58,6 +59,10 @@ def display_path(value: str) -> str:
 
 def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
     """Return compact user-facing lines for a Zeta tool result."""
+    effect = proposed_effect(result)
+    if effect is not None:
+        return proposed_effect_summary(name, effect)
+
     handoff = result.get("handoff")
     if isinstance(handoff, dict):
         return handoff_summary(name, handoff)
@@ -201,7 +206,15 @@ def shell_result_summary(event: dict[str, Any]) -> list[str]:
 
 def handoff_summary(name: str, handoff: dict[str, Any]) -> list[str]:
     """Return compact lines for a tool result that stages shell work."""
-    artifact = str(handoff.get("artifact") or "")
+    return staged_command_summary(name, str(handoff.get("artifact") or ""))
+
+
+def proposed_effect_summary(name: str, effect: dict[str, Any]) -> list[str]:
+    """Return compact lines for a proposed tool effect."""
+    return staged_command_summary(name, str(effect.get("artifact") or ""))
+
+
+def staged_command_summary(name: str, artifact: str) -> list[str]:
     if name == "bash":
         return ["staged"]
     if name == "edit":

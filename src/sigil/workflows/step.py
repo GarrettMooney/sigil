@@ -36,6 +36,7 @@ from ..protocols import (
     TURN_OUTCOME_EXECUTED,
     TURN_OUTCOME_FAILED,
     TURN_OUTCOME_STAGED,
+    shell_prompt_handoff,
 )
 from ..tools import ensure_builtin_tools_registered
 from ..zeta.agent import AgentConfig, registered_tools, run_agent_turn
@@ -47,6 +48,7 @@ from ..zeta.models import (
 from ..zeta.prompt import system_prompt
 from ..zeta.skills import expand_skill_directive
 from ..zeta.timeline import current_timeline, record_event
+from ..zeta.tools.base import proposed_effect
 from ..zeta.tools.registry import ExecutionMode
 from ..zeta.tools.registry import registry as tool_registry
 from ..zeta.trace import latest_prompt_trace_fields
@@ -273,7 +275,7 @@ class AgentStepEventRecorder(TurnEventRecorder):
                 output=self.render_output,
                 mark_text_separator=self.renderer.trace_state,
             )
-        handoff = result_payload.get("handoff")
+        handoff = shell_handoff_from_tool_result(result_payload)
         status = None
         if isinstance(handoff, dict):
             write_handoff(self.handoff_path, handoff)
@@ -285,6 +287,22 @@ class AgentStepEventRecorder(TurnEventRecorder):
                 result_payload,
             )
         return status
+
+
+def shell_handoff_from_tool_result(result: dict[str, Any]) -> dict[str, Any] | None:
+    effect = proposed_effect(result)
+    if effect is None or effect.get("kind") != "command":
+        return None
+    command = effect.get("command")
+    if not isinstance(command, str) or not command:
+        return None
+    reason = str(effect.get("reason") or "")
+    artifact = effect.get("artifact")
+    return shell_prompt_handoff(
+        command,
+        reason,
+        artifact=artifact if isinstance(artifact, str) and artifact else None,
+    )
 
 
 def turn_status_detail(renderer: TurnRenderer) -> Callable[[], str]:
