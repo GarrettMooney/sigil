@@ -12,13 +12,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .events import (
+from zeta.events import (
     Event,
     Filter,
     event_store,
     event_store_path,
     time_from_timestamp_micros,
 )
+
 from .protocols import turn_event_type
 from .state import append_event, session_id
 

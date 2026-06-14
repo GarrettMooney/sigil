@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from zeta.events import Event, event_store, timestamp_micros_from_time
 from zeta.trace import (
     Derivation,
     Object,
@@ -13,7 +14,6 @@ from zeta.trace import (
     session_sqlite_path,
 )
 
-from .events import Event, event_store, timestamp_micros_from_time
 from .ledger import LedgerIndex, ledger_index
 from .protocols import is_effect_record, is_turn_record
 

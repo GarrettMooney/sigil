@@ -8,8 +8,14 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
-from uuid import uuid4
 
+from .events import (
+    DraftEvent,
+    EventPublisher,
+    model_called_event,
+    timestamp_micros_from_time,
+    tool_called_event,
+)
 from .tools.base import effect_resolution, proposed_effect
 from .trace import (
     Derivation,
@@ -23,64 +29,15 @@ from .trace import (
 RUN_EVENT_KIND = "run_event"
 RUN_HEAD_EVENT_TYPES = {"model", "tool_call", "tool_result"}
 NON_HEAD_EVENT_TYPES = {"model_usage"}
-_DURABLE_EVENT_PUBLISHER: DurableEventPublisher | None = None
+_DURABLE_EVENT_PUBLISHER: EventPublisher | None = None
 _SESSION_ID_FACTORY: SessionIdFactory | None = None
-
-
-@dataclass(frozen=True)
-class TimelineEvent:
-    id: str
-    event_type: str
-    source: str
-    payload: dict[str, Any]
-    idempotency_key: str | None
-    caused_by: str | None
-    session_id: str | None
-    turn_id: str | None
-    timestamp_micros: int
-
-
-@dataclass(frozen=True)
-class TimelineDraftEvent:
-    event_type: str
-    source: str
-    payload: dict[str, Any]
-    idempotency_key: str | None = None
-    caused_by: str | None = None
-    session_id: str | None = None
-    turn_id: str | None = None
-    timestamp_micros: int | None = None
-    event_id: str | None = None
-
-    def enrich(self) -> TimelineEvent:
-        idempotency_key = normalize_idempotency_key(self.idempotency_key)
-        event_id = self.event_id
-        if event_id is None and idempotency_key is not None:
-            event_id = id_for_idempotency_key(idempotency_key)
-        if event_id is None:
-            event_id = f"evt_{uuid4().hex}"
-        return TimelineEvent(
-            id=event_id,
-            event_type=self.event_type,
-            source=self.source,
-            payload=dict(self.payload),
-            idempotency_key=idempotency_key,
-            caused_by=self.caused_by,
-            session_id=self.session_id,
-            turn_id=self.turn_id,
-            timestamp_micros=self.timestamp_micros or current_timestamp_micros(),
-        )
-
-
-class DurableEventPublisher(Protocol):
-    def __call__(self, draft: TimelineDraftEvent) -> object: ...
 
 
 class SessionIdFactory(Protocol):
     def __call__(self) -> str: ...
 
 
-def set_durable_event_publisher(publisher: DurableEventPublisher | None) -> None:
+def set_durable_event_publisher(publisher: EventPublisher | None) -> None:
     global _DURABLE_EVENT_PUBLISHER
     _DURABLE_EVENT_PUBLISHER = publisher
 
@@ -175,108 +132,32 @@ def durable_event_from_timeline(
     caused_by: str | None,
     event_id: str | None,
     timestamp_micros: int | None,
-) -> TimelineDraftEvent | None:
+) -> DraftEvent | None:
     if event_type == "model":
-        return durable_event_draft(
-            "zeta.model.called",
-            "zeta",
+        return model_called_event(
             payload=payload,
             turn_id=turn_id,
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            idempotency_key=event_idempotency_key("zeta.model.called", event_id),
             timestamp_micros=timestamp_micros,
         )
     if event_type == "tool_result":
-        return durable_event_draft(
-            "zeta.tool.called",
-            "zeta",
+        return tool_called_event(
             payload=payload,
             turn_id=turn_id,
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
-            idempotency_key=event_idempotency_key("zeta.tool.called", event_id),
-            timestamp_micros=timestamp_micros,
-        )
-    if event_type == "user_message":
-        return durable_event_draft(
-            "sigil.prompt.submitted",
-            "sigil",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            idempotency_key=turn_idempotency_key("sigil.prompt.submitted", turn_id),
             timestamp_micros=timestamp_micros,
         )
     return None
-
-
-def durable_event_draft(
-    event_type: str,
-    source: str,
-    *,
-    payload: dict[str, Any],
-    turn_id: str | None,
-    session_id: str,
-    caused_by: str | None,
-    event_id: str | None,
-    idempotency_key: str | None,
-    timestamp_micros: int | None,
-) -> TimelineDraftEvent:
-    return TimelineDraftEvent(
-        event_type=event_type,
-        source=source,
-        payload=payload,
-        idempotency_key=idempotency_key,
-        caused_by=caused_by,
-        session_id=session_id,
-        turn_id=turn_id,
-        timestamp_micros=timestamp_micros,
-        event_id=event_id,
-    )
-
-
-def event_idempotency_key(event_type: str, event_id: str | None) -> str | None:
-    if not event_id:
-        return None
-    return f"{event_type}:{event_id}"
-
-
-def turn_idempotency_key(event_type: str, turn_id: str | None) -> str | None:
-    if not turn_id:
-        return None
-    return f"{event_type}:{turn_id}"
 
 
 def timeline_session_id() -> str:
     if _SESSION_ID_FACTORY is None:
         return ""
     return _SESSION_ID_FACTORY()
-
-
-def current_timestamp_micros() -> int:
-    return time.time_ns() // 1_000
-
-
-def timestamp_micros_from_time(value: object) -> int | None:
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return int(float(value) * 1_000_000)
-    return None
-
-
-def id_for_idempotency_key(key: str) -> str:
-    return "evt_" + key.encode("utf-8").hex()
-
-
-def normalize_idempotency_key(key: str | None) -> str | None:
-    if key is None:
-        return None
-    normalized = key.strip()
-    return normalized or None
 
 
 def durable_event_payload(event: dict[str, Any]) -> dict[str, Any]:

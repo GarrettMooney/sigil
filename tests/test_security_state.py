@@ -26,19 +26,6 @@ from sigil.cli._base import (
     EXIT_USAGE,
 )
 from sigil.display.tty import should_color
-from sigil.events import (
-    AppendOutcome,
-    DraftEvent,
-    EventCursor,
-    Filter,
-    SqliteEventStore,
-    causal_chain,
-    durable_event,
-    event_children,
-    event_store_path,
-    events_for_turn,
-    publish_event,
-)
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.session import (
     ingest_spooled_turns,
@@ -48,6 +35,7 @@ from sigil.session import (
 )
 from sigil.state import (
     append_event,
+    durable_event,
     session_dir,
     session_id,
     state_dir,
@@ -55,6 +43,20 @@ from sigil.state import (
 from sigil.workflows.ask import (
     ASK_SYSTEM_PROMPT,
     ask,
+)
+from zeta.events import (
+    AppendOutcome,
+    DraftEvent,
+    EventCursor,
+    Filter,
+    SqliteEventStore,
+    causal_chain,
+    event_children,
+    event_store_path,
+    events_for_turn,
+    model_called_event,
+    publish_event,
+    tool_called_event,
 )
 
 
@@ -617,14 +619,14 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
         session_id="s1",
         event_id="prompt-event",
     )
-    model = durable_event.model_called(
+    model = model_called_event(
         payload={"content": "answer"},
         turn_id="turn-1",
         session_id="s1",
         caused_by=prompt.event_id,
         event_id="model-event",
     )
-    tool = durable_event.tool_called(
+    tool = tool_called_event(
         payload={"name": "read"},
         turn_id="turn-1",
         session_id="s1",
@@ -666,6 +668,8 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
     assert failed.idempotency_key == "sigil.turn.failed:turn-1"
     assert aborted.event_type == "sigil.turn.aborted"
     assert aborted.idempotency_key == "sigil.turn.aborted:turn-1"
+    assert not hasattr(durable_event, "model_called")
+    assert not hasattr(durable_event, "tool_called")
 
 
 def test_durable_event_constructor_idempotency_deduplicates_replays() -> None:

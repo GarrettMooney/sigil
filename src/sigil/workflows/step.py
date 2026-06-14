@@ -52,6 +52,7 @@ from ..protocols import (
     TURN_OUTCOME_STAGED,
     shell_prompt_handoff,
 )
+from ..state import append_prompt_submitted_event
 from ..tools import ensure_builtin_tools_registered
 
 HandoffOutput = Literal["detail", "summary", "none"]
@@ -138,6 +139,7 @@ def step(
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
     prompt_event = record_event(user_event)
+    append_prompt_submitted_event(prompt_event)
     ledger.note_root_event(prompt_event)
     context = load_project_context()
     renderer = build_turn_renderer(output, objective=objective)

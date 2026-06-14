@@ -13,10 +13,10 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
-from sigil.events import Filter, event_store
 from zeta import prompt as zeta_prompt
 from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
+from zeta.events import Filter, event_store
 from zeta.models import profiles as zeta_models
 
 
@@ -605,7 +605,7 @@ def test_zeta_tool_called_links_used_and_returned_objects(
     ]
 
 
-def test_zeta_message_and_abort_are_durable_but_usage_is_not(
+def test_zeta_user_message_and_abort_stay_trace_only(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -616,9 +616,7 @@ def test_zeta_message_and_abort_are_durable_but_usage_is_not(
     zeta_timeline.record_event({"type": "model_usage", "usage": {"tokens": 1}})
     zeta_timeline.record_event({"type": "turn_aborted", "content": "stopped"})
 
-    assert [event.event_type for event in event_store().list_events(Filter())] == [
-        "sigil.prompt.submitted",
-    ]
+    assert event_store().list_events(Filter()) == []
 
 
 def test_zeta_timeline_projects_from_ref_and_object(

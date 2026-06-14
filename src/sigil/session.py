@@ -15,7 +15,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .events import Event, Filter, event_store, time_from_timestamp_micros
+from zeta.events import Event, Filter, event_store, time_from_timestamp_micros
+
 from .failure import (
     failure_context_prompt,
     last_failure_or_none,
@@ -54,7 +55,7 @@ TURN_SKIP_PREFIXES = (",", "sigil ", "__sigil_")
 
 def session_paths() -> dict[str, str]:
     """Return the global and current-session paths users need for debugging."""
-    from .events import event_store_path
+    from zeta.events import event_store_path
 
     return {
         "state": str(state_dir()),

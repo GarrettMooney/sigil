@@ -11,7 +11,6 @@ from click.testing import CliRunner
 
 from sigil import ledger as sigil_ledger
 from sigil.cli import cli as sigil_cli
-from sigil.events import DraftEvent, Event, publish_event
 from sigil.protocols import (
     EFFECT_KIND_COMMAND,
     EFFECT_KIND_FILE_WRITE,
@@ -24,6 +23,7 @@ from sigil.protocols import (
 )
 from sigil.session import clear_current_session, read_events
 from sigil.state import append_event, session_dir, state_dir
+from zeta.events import DraftEvent, Event, publish_event
 
 
 def sample_turn_record(turn_id: str = "turn-1", **overrides: Any) -> dict[str, Any]:

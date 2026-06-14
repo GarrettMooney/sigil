@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from sigil import configure_zeta_for_sigil
-from sigil.events import close_event_stores
 from sigil.ledger import close_ledger_indexes
+from zeta.events import close_event_stores
 from zeta.trace import close_default_stores
 
 

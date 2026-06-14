@@ -6,7 +6,7 @@
 
 ;; Enable `zeta-block-mode', write a paragraph or comment block beginning with
 ;; "?", and press C-c C-c.  The package submits the question to
-;; `sigil zeta rpc --stdio', registers an `emacs_read' read-only tool for the
+;; `zeta-block-rpc-command', registers an `emacs_read' read-only tool for the
 ;; current live buffer, and inserts Zeta's answer below the block.
 
 ;;; Code:
@@ -20,9 +20,11 @@
   "Submit Zeta questions from ordinary Emacs buffers."
   :group 'tools)
 
-(defcustom zeta-block-sigil-command "sigil"
-  "Command used to start the Sigil CLI."
-  :type 'string
+(defcustom zeta-block-rpc-command '("zeta" "rpc" "--stdio")
+  "Command used to start the Zeta JSON-RPC backend.
+Set this to an absolute executable path when developing against a local
+checkout."
+  :type '(repeat string)
   :group 'zeta-block)
 
 (defcustom zeta-block-read-only-tools
@@ -62,7 +64,7 @@
 When the current block is not a Zeta question, dispatch to the binding that
 `C-c C-c' would have used without `zeta-block-mode'."
   (interactive)
-  (pcase-let ((`(,begin ,end ,raw) (zeta-block-current-block)))
+  (pcase-let ((`(,_begin ,end ,raw) (zeta-block-current-block)))
     (let* ((comment-prefix (zeta-block-comment-prefix raw))
            (question (zeta-block-clean-question raw)))
       (if (not question)
@@ -240,7 +242,7 @@ When the current block is not a Zeta question, dispatch to the binding that
           (make-process
            :name "zeta-block-rpc"
            :buffer "*zeta-block-rpc*"
-           :command (list zeta-block-sigil-command "zeta" "rpc" "--stdio")
+           :command zeta-block-rpc-command
            :connection-type 'pipe
            :coding 'utf-8
            :noquery t

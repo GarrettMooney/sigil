@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from collections.abc import Callable
 from io import StringIO
 from pathlib import Path
@@ -22,11 +23,18 @@ from sigil.agent_io import run_zeta_rpc_session
 from sigil.cli import cli
 from sigil.tools import ensure_builtin_tools_registered
 from zeta import agent as zeta_agent
+from zeta import cli as zeta_cli
 from zeta import prompt as zeta_prompt
 from zeta import trace as zeta_trace
 from zeta.models import chat_completions as zeta_model
 
 ensure_builtin_tools_registered()
+
+
+def test_zeta_console_script_is_declared() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    assert pyproject["project"]["scripts"]["zeta"] == "zeta.cli:main"
 
 
 def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
@@ -75,6 +83,23 @@ def test_zeta_rpc_initialize_returns_server_metadata() -> None:
 
 def test_zeta_rpc_cli_serves_stdio_initialize() -> None:
     result = CliRunner().invoke(
+        zeta_cli.cli,
+        ["rpc", "--stdio"],
+        input=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}) + "\n",
+    )
+
+    assert result.exit_code == 0
+    assert [json.loads(line) for line in result.output.splitlines()] == [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"server": "zeta", "protocol": "0.1"},
+        }
+    ]
+
+
+def test_sigil_zeta_rpc_cli_serves_stdio_initialize() -> None:
+    result = CliRunner().invoke(
         cli,
         ["zeta", "rpc", "--stdio"],
         input=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}) + "\n",
@@ -88,6 +113,40 @@ def test_zeta_rpc_cli_serves_stdio_initialize() -> None:
             "result": {"server": "zeta", "protocol": "0.1"},
         }
     ]
+
+
+def test_zeta_rpc_cli_runs_pure_session_without_sigil_turn(monkeypatch) -> None:
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {"content": "done"},
+    )
+
+    result = CliRunner().invoke(
+        zeta_cli.cli,
+        ["rpc", "--stdio"],
+        input=json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "session.run",
+                "params": {"objective": "answer", "tools": [], "context": ""},
+            }
+        )
+        + "\n",
+    )
+
+    assert result.exit_code == 0
+    messages = [json.loads(line) for line in result.output.splitlines()]
+    published = [
+        message["params"]["event"]
+        for message in messages
+        if message.get("method") == "events.publish"
+    ]
+    assert [event["type"] for event in published] == ["user_message", "model"]
+    assert messages[-1]["result"]["outcome"] == "answered"
+    assert messages[-1]["result"]["final_text"] == "done"
 
 
 def test_zeta_rpc_registers_client_tools_and_calls_client() -> None:

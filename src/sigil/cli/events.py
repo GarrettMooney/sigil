@@ -6,7 +6,7 @@ from datetime import datetime
 
 import click
 
-from ..events import (
+from zeta.events import (
     Event,
     Filter,
     causal_chain,
@@ -14,6 +14,7 @@ from ..events import (
     events_for_turn,
     time_from_timestamp_micros,
 )
+
 from ..session import read_events
 from ._base import cli, examples
 from ._shared import pretty_print_json

@@ -62,6 +62,7 @@ from .protocols import (
     turn_record,
 )
 from .session import session_id
+from .state import append_prompt_submitted_event
 from .tools import ensure_builtin_tools_registered
 
 
@@ -538,6 +539,7 @@ def run_zeta_rpc_session(
         }
     )
     ledger.note_root_event(user_event)
+    append_prompt_submitted_event(user_event)
     publish_event(user_event)
 
     def sink(event: dict[str, Any]) -> None:

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, TextIO, cast
 
+from .context import load_project_context
 from .models import (
     CODEX_RESPONSES_API,
     ChatCompletionStreamSink,
@@ -18,6 +19,7 @@ from .models import (
 )
 from .prompt import PromptBuilder, prompt_transform_from_env
 from .prompt.system import model_tool_descriptors
+from .timeline import current_timeline, record_event
 from .tools.base import EFFECT_KINDS, EffectKind, ToolImpl, ToolSpec, proposed_effect
 from .tools.registry import ExecutionMode
 from .tools.registry import registry as tool_registry
@@ -699,6 +701,83 @@ def tool_call_stages_effect(name: str, execution_mode: ExecutionMode) -> bool:
 
 def result_staged_effect(result: dict[str, Any]) -> dict[str, Any] | None:
     return proposed_effect(result)
+
+
+def run_rpc_session(
+    params: dict[str, Any],
+    *,
+    publish_event: Callable[[dict[str, Any]], None],
+) -> dict[str, Any]:
+    objective = str(params.get("objective") or "")
+    if not objective:
+        raise ValueError("session.run requires objective")
+    workflow = str(params.get("workflow") or "ask")
+    if workflow not in {"ask", "propose", "do"}:
+        raise ValueError("workflow must be ask, propose, or do")
+    requested_tools = params.get("tools")
+    allowed_tools = (
+        tuple(str(tool) for tool in requested_tools if isinstance(tool, str))
+        if isinstance(requested_tools, list)
+        else None
+    )
+    enabled_tools = registered_tools(allowed_tools)
+    execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
+    prior_timeline = current_timeline()
+    user_event = record_event(
+        {
+            "type": "user_message",
+            "content": objective,
+            "workflow": workflow,
+            "runtime": "zeta-rpc",
+            "available_tools": list(enabled_tools),
+        }
+    )
+    publish_event(user_event)
+
+    def sink(event: dict[str, Any]) -> None:
+        persisted = record_event(event)
+        publish_event(persisted)
+
+    result = run_agent_turn(
+        objective,
+        prior_timeline,
+        AgentConfig(
+            system_prompt=params.get("system")
+            if isinstance(params.get("system"), str)
+            else None,
+            allowed_tools=enabled_tools,
+            max_turns=params.get("max_steps")
+            if isinstance(params.get("max_steps"), int)
+            else None,
+            stop_on_staged_effect=True,
+            execution_mode=execution_mode,
+            model_name=params.get("model")
+            if isinstance(params.get("model"), str)
+            else None,
+            model_url=params.get("url") if isinstance(params.get("url"), str) else None,
+            thinking=params.get("thinking")
+            if isinstance(params.get("thinking"), str)
+            else None,
+            model_api=params.get("api") if isinstance(params.get("api"), str) else None,
+        ),
+        context=(
+            str(params.get("context"))
+            if isinstance(params.get("context"), str)
+            else load_project_context()
+        ),
+        event_sink=sink,
+        caused_by=str(user_event.get("id") or ""),
+    )
+    if result.staged_effect is not None:
+        outcome = "staged"
+    elif result.final_text:
+        outcome = "answered"
+    else:
+        outcome = "failed"
+    return {
+        "outcome": outcome,
+        "final_text": result.final_text,
+    }
 
 
 class JsonRpcServer:

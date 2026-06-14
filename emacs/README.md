@@ -20,7 +20,7 @@ In source buffers, comment blocks stay commented:
 #   Probably not. The branch looks specific to the old shell handoff path.
 ```
 
-The frontend starts `sigil zeta rpc --stdio`, registers an `emacs_read`
+The frontend starts the command in `zeta-block-rpc-command`, registers an `emacs_read`
 read-only tool for the current live buffer, and runs `session.run` with the
 read-only ask workflow. It does not register edit/write tools and does not apply
 changes to buffers.
@@ -35,8 +35,15 @@ Add the local package to `~/.doom.d/config.el`:
   :load-path "/Users/remilouf/projects/sigil/emacs"
   :demand t
   :config
-  (setq zeta-block-sigil-command "/Users/remilouf/projects/sigil/.venv/bin/sigil")
+  (setq zeta-block-rpc-command
+        '("/Users/remilouf/projects/sigil/.venv/bin/zeta" "rpc" "--stdio"))
   (zeta-block-global-mode 1))
+```
+
+When `zeta` is already on PATH, the default is enough:
+
+```elisp
+(setq zeta-block-rpc-command '("zeta" "rpc" "--stdio"))
 ```
 
 Then reload Doom or restart Emacs:

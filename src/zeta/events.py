@@ -1,9 +1,10 @@
-"""Durable event ontology and SQLite store for Sigil."""
+"""Durable event ontology and SQLite store for Zeta runtimes."""
 
 from __future__ import annotations
 
 import atexit
 import json
+import os
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -12,6 +13,16 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 EVENT_STORE_NAME = "events.sqlite3"
+_EVENT_STORE_PATH_FACTORY: EventStorePathFactory | None = None
+
+
+class EventStorePathFactory(Protocol):
+    def __call__(self) -> Path: ...
+
+
+def set_event_store_path_factory(factory: EventStorePathFactory | None) -> None:
+    global _EVENT_STORE_PATH_FACTORY
+    _EVENT_STORE_PATH_FACTORY = factory
 
 
 @dataclass(frozen=True)
@@ -104,6 +115,12 @@ class EventSink(Protocol):
         """Accept one draft event."""
 
 
+class EventPublisher(Protocol):
+    """Callable publisher for draft events."""
+
+    def __call__(self, draft: DraftEvent) -> object: ...
+
+
 @dataclass(frozen=True)
 class Filter:
     """Event listing filter."""
@@ -115,162 +132,6 @@ class Filter:
     caused_by: str | None = None
     after: EventCursor | None = None
     limit: int | None = None
-
-
-class DurableEventConstructors:
-    """Factories for durable events with stable metadata."""
-
-    def prompt_submitted(
-        self,
-        *,
-        payload: dict[str, Any],
-        turn_id: str | None,
-        session_id: str,
-        caused_by: str | None = None,
-        event_id: str | None = None,
-        timestamp_micros: int | None = None,
-    ) -> DraftEvent:
-        return durable_event_draft(
-            "sigil.prompt.submitted",
-            "sigil",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            idempotency_key=turn_idempotency_key("sigil.prompt.submitted", turn_id),
-            timestamp_micros=timestamp_micros,
-        )
-
-    def model_called(
-        self,
-        *,
-        payload: dict[str, Any],
-        turn_id: str | None,
-        session_id: str,
-        caused_by: str | None = None,
-        event_id: str | None = None,
-        timestamp_micros: int | None = None,
-    ) -> DraftEvent:
-        return durable_event_draft(
-            "zeta.model.called",
-            "zeta",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            idempotency_key=event_idempotency_key("zeta.model.called", event_id),
-            timestamp_micros=timestamp_micros,
-        )
-
-    def tool_called(
-        self,
-        *,
-        payload: dict[str, Any],
-        turn_id: str | None,
-        session_id: str,
-        caused_by: str | None = None,
-        event_id: str | None = None,
-        timestamp_micros: int | None = None,
-    ) -> DraftEvent:
-        return durable_event_draft(
-            "zeta.tool.called",
-            "zeta",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            idempotency_key=event_idempotency_key("zeta.tool.called", event_id),
-            timestamp_micros=timestamp_micros,
-        )
-
-    def turn_completed(
-        self,
-        *,
-        payload: dict[str, Any],
-        turn_id: str | None,
-        session_id: str,
-        caused_by: str | None = None,
-        event_id: str | None = None,
-        timestamp_micros: int | None = None,
-    ) -> DraftEvent:
-        return self._turn_event(
-            "sigil.turn.completed",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-
-    def turn_failed(
-        self,
-        *,
-        payload: dict[str, Any],
-        turn_id: str | None,
-        session_id: str,
-        caused_by: str | None = None,
-        event_id: str | None = None,
-        timestamp_micros: int | None = None,
-    ) -> DraftEvent:
-        return self._turn_event(
-            "sigil.turn.failed",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-
-    def turn_aborted(
-        self,
-        *,
-        payload: dict[str, Any],
-        turn_id: str | None,
-        session_id: str,
-        caused_by: str | None = None,
-        event_id: str | None = None,
-        timestamp_micros: int | None = None,
-    ) -> DraftEvent:
-        return self._turn_event(
-            "sigil.turn.aborted",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            timestamp_micros=timestamp_micros,
-        )
-
-    def _turn_event(
-        self,
-        event_type: str,
-        *,
-        payload: dict[str, Any],
-        turn_id: str | None,
-        session_id: str,
-        caused_by: str | None,
-        event_id: str | None,
-        timestamp_micros: int | None,
-    ) -> DraftEvent:
-        return durable_event_draft(
-            event_type,
-            "sigil",
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-            idempotency_key=turn_idempotency_key(event_type, turn_id),
-            timestamp_micros=timestamp_micros,
-        )
-
-
-durable_event = DurableEventConstructors()
 
 
 def durable_event_draft(
@@ -308,6 +169,50 @@ def turn_idempotency_key(event_type: str, turn_id: str | None) -> str | None:
     if not turn_id:
         return None
     return f"{event_type}:{turn_id}"
+
+
+def model_called_event(
+    *,
+    payload: dict[str, Any],
+    turn_id: str | None,
+    session_id: str,
+    caused_by: str | None = None,
+    event_id: str | None = None,
+    timestamp_micros: int | None = None,
+) -> DraftEvent:
+    return durable_event_draft(
+        "zeta.model.called",
+        "zeta",
+        payload=payload,
+        turn_id=turn_id,
+        session_id=session_id,
+        caused_by=caused_by,
+        event_id=event_id,
+        idempotency_key=event_idempotency_key("zeta.model.called", event_id),
+        timestamp_micros=timestamp_micros,
+    )
+
+
+def tool_called_event(
+    *,
+    payload: dict[str, Any],
+    turn_id: str | None,
+    session_id: str,
+    caused_by: str | None = None,
+    event_id: str | None = None,
+    timestamp_micros: int | None = None,
+) -> DraftEvent:
+    return durable_event_draft(
+        "zeta.tool.called",
+        "zeta",
+        payload=payload,
+        turn_id=turn_id,
+        session_id=session_id,
+        caused_by=caused_by,
+        event_id=event_id,
+        idempotency_key=event_idempotency_key("zeta.tool.called", event_id),
+        timestamp_micros=timestamp_micros,
+    )
 
 
 class SqliteEventStore:
@@ -508,9 +413,11 @@ class SqliteEventStore:
 def event_store_path(root: Path | None = None) -> Path:
     if root is not None:
         return root / EVENT_STORE_NAME
-    from .state import state_dir
-
-    return state_dir() / EVENT_STORE_NAME
+    if _EVENT_STORE_PATH_FACTORY is not None:
+        return _EVENT_STORE_PATH_FACTORY()
+    state_dir = os.environ.get("ZETA_STATE_DIR")
+    base = Path(state_dir).expanduser() if state_dir else Path.home() / ".zeta"
+    return base / EVENT_STORE_NAME
 
 
 _STORES_BY_PATH: dict[Path, SqliteEventStore] = {}
