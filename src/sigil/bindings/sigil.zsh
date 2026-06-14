@@ -147,6 +147,7 @@ sigil_command() {
   emulate -L zsh
   # `, prompt`: read-only assistant answer. It does not stage commands or mutate
   # history; `,,` and `,,,` are the workflows that can hand a command back to zsh.
+  # A bare `,` composes the question in $EDITOR (CLI-side).
   if [[ "$#" == "0" ]]; then
     "$__sigil_bin" ask
   else
@@ -161,14 +162,18 @@ __sigil_step_turn() {
   local objective handoff_file step_status command
   local -a args
   args=()
+  # `--continue` is only ever passed by the `+` resume path; a bare glyph
+  # sends no positional and the CLI composes the objective in $EDITOR.
+  if [[ "${1:-}" == "--continue" ]]; then
+    args+=(--continue)
+    shift
+  fi
   objective="$*"
   handoff_file="$(mktemp "${TMPDIR:-/tmp}/sigil-handoff.XXXXXX")" || return 1
   # Ctrl-C aborts this function mid-flight; the always block is the only
   # cleanup zsh still runs on that path.
   {
-    if [[ -z "$objective" ]]; then
-      args+=(--continue)
-    else
+    if [[ -n "$objective" ]]; then
       args+=("$objective")
     fi
     "$__sigil_bin" step --workflow "$workflow" --handoff-file "$handoff_file" "${args[@]}"
@@ -245,7 +250,7 @@ __sigil_run_plus_capture_command() {
     SIGIL_RUN_SHELL="${SIGIL_RUN_SHELL:-${SHELL:-zsh}}" "$__sigil_bin" run "${resume_args[@]}" --shell "$command"
     run_status=$?
     if [[ -n "$resume_file" && -s "$resume_file" ]]; then
-      __sigil_step_turn "${__sigil_resume_workflow:-propose}"
+      __sigil_step_turn "${__sigil_resume_workflow:-propose}" --continue
     fi
   } always {
     [[ -n "$resume_file" ]] && rm -f "$resume_file"

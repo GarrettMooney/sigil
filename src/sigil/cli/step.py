@@ -15,9 +15,9 @@ from ..workflows.ask import ask
 from ..workflows.do import do
 from ..workflows.propose import propose
 from ._base import cli, examples
-from ._shared import piped_stdin_text, question_with_stdin
+from ._shared import compose_in_editor, piped_stdin_text, question_with_stdin
 
-DEFAULT_QUESTION = "Inspect and summarize the current shell context."
+EDIT_GLYPHS = {"ask": ",", "propose": ",,", "do": ",,,"}
 
 CONTINUE_OBJECTIVE = (
     "Continue the active agent step. Read the latest "
@@ -35,6 +35,7 @@ CONTINUE_OBJECTIVE = (
     epilog=examples(
         'sigil ask "what changed in this repo?"',
         'git diff | sigil ask "review risky changes"',
+        "sigil ask",
     ),
 )
 @click.argument("question", required=False)
@@ -42,18 +43,31 @@ def cmd_ask(question: str | None) -> int:
     """Ask a read-only question from local session context.
 
     The `,` glyph calls this command. The answer comes from the session's
-    recorded shell context; piped stdin is used directly as context. It
-    never stages or executes commands.
+    recorded shell context; piped stdin is used directly as context. With
+    no question and no piped stdin, the question is composed in
+    $VISUAL/$EDITOR. It never stages or executes commands.
 
     Exits 69 when the model endpoint is down or fails mid-answer;
     `sigil doctor` diagnoses it.
     """
     stdin_text = piped_stdin_text()
     if stdin_text is not None:
-        prompt = question_with_stdin(question or "", stdin_text)
-    else:
-        prompt = question or DEFAULT_QUESTION
-    return ask(prompt)
+        return ask(question_with_stdin(question or "", stdin_text))
+    if not question:
+        question = composed_or_abort("ask", "question")
+    return ask(question)
+
+
+def composed_or_abort(workflow: str, noun: str) -> str:
+    """Compose the prompt for a bare glyph in $EDITOR; abort when left empty."""
+    hint = (
+        f"# {EDIT_GLYPHS[workflow]} ({workflow}) — compose the {noun} above.\n"
+        "# Lines starting with '#' are ignored; save an empty file to abort."
+    )
+    text = compose_in_editor(hint=hint)
+    if text is None:
+        raise click.ClickException(f"aborted: empty {noun}")
+    return text
 
 
 @cli.command(
@@ -95,7 +109,8 @@ def cmd_step(
     The `,,` and `,,,` glyphs call this command. `--workflow propose`
     stages reviewed shell work at your prompt; `--workflow do` runs
     auto-approved tool calls; `--continue` resumes the pending handoff
-    with the recorded shell results.
+    with the recorded shell results. With no objective and without
+    `--continue`, the objective is composed in $VISUAL/$EDITOR.
 
     Exits 69 when the model endpoint is down or fails mid-answer;
     `sigil doctor` diagnoses it.
@@ -107,6 +122,11 @@ def cmd_step(
         render_shell_result(sigil_handoff.append_shell_result(), output=sys.stderr)
         if not objective:
             objective = CONTINUE_OBJECTIVE
+    elif not objective:
+        objective = composed_or_abort(
+            workflow,
+            "question" if workflow == "ask" else "objective",
+        )
     match workflow:
         case "ask":
             return ask(objective)

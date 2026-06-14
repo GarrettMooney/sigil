@@ -242,13 +242,15 @@ Agent-step workflows are driven by the prompt text and the current shell session
 + uv run pytest tests/test_shell_bindings.py
 
 # 4. Any other command stays plain capture: explore as long as you
-#    want, then resume explicitly. Zeta sees everything you ran.
+#    want. A bare `,,` opens $EDITOR to compose the next objective;
+#    Zeta sees everything you ran in between.
 ,,
 ```
 
 Only the staged command (whitespace changes and appended arguments
 included) triggers the automatic resume, and a Ctrl-C'd run never does.
-Set `SIGIL_AUTO_CONTINUE=0` to always resume by hand with a bare `,,`.
+Set `SIGIL_AUTO_CONTINUE=0` to keep `+` as plain capture and resume by
+hand with `sigil step --workflow propose --continue`.
 
 Sigil keeps session state under `~/.sigil/` so Zeta can resume from recent
 ask turns, handoff timeline events, and command results recorded through `+`.
@@ -295,7 +297,10 @@ Examples:
 ?
 ```
 
-`,` prints a read-only answer. It does not stage commands.
+`,` prints a read-only answer. It does not stage commands. A bare glyph —
+`,`, `,,`, or `,,,` with no text — composes the prompt in
+`$VISUAL`/`$EDITOR` instead of the command line; lines starting with `#`
+are ignored, and saving an empty file aborts.
 
 `,,` proposes the next reviewed step. The loop may call local
 tools such as `read`, `ls`, `grep`, `bash`, `edit`, and `write` until the model

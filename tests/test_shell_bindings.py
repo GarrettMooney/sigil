@@ -442,25 +442,27 @@ def test_zsh_agent_step_uses_zeta_handoff_directly() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_bare_agent_step_continues_after_shell_handoff() -> None:
+def test_zsh_bare_agent_step_sends_no_continue_and_no_positional() -> None:
+    # A bare `,,` is the editor gesture: the CLI composes the objective in
+    # $EDITOR, so the wrapper must send neither --continue nor an empty
+    # positional. Only the `+` resume path passes --continue.
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/bindings/sigil.zsh\n                    sigil_agent_step\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                """\
+                source src/sigil/bindings/sigil.zsh
+                sigil_agent_step
+                sigil_agent_step_auto
+                """
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        # argc=0: a bare continue passes no positional, not an empty string the
-        # CLI has to know to ignore.
-        assert read_log(tmp) == ["step --continue argc=0 workflow=propose"]
-        assert "(staged)" in result.stdout
-        assert "Continue after shell handoff." not in result.stdout
-        assert "history=+ echo continued" in result.stdout
+        assert read_log(tmp) == ["step", "step"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
