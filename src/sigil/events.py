@@ -514,7 +514,6 @@ def event_store_path(root: Path | None = None) -> Path:
 
 
 _STORES_BY_PATH: dict[Path, SqliteEventStore] = {}
-_EVENT_SINK: EventSink | None = None
 
 
 def event_store() -> SqliteEventStore:
@@ -526,25 +525,15 @@ def event_store() -> SqliteEventStore:
     return store
 
 
-def default_event_sink() -> EventSink:
-    if _EVENT_SINK is not None:
-        return _EVENT_SINK
-    return event_store()
-
-
-def set_default_event_sink(sink: EventSink | None) -> None:
-    global _EVENT_SINK
-    _EVENT_SINK = sink
-
-
 def close_event_stores() -> None:
     while _STORES_BY_PATH:
         _, store = _STORES_BY_PATH.popitem()
         store.close()
 
 
-def publish_event(draft: DraftEvent) -> AppendOutcome:
-    return default_event_sink().accept(draft)
+def publish_event(draft: DraftEvent, sink: EventSink | None = None) -> AppendOutcome:
+    target = sink if sink is not None else event_store()
+    return target.accept(draft)
 
 
 def event_children(event_id: str, *, limit: int | None = None) -> list[Event]:

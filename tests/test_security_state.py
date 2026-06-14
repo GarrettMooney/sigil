@@ -32,13 +32,11 @@ from sigil.events import (
     Filter,
     SqliteEventStore,
     causal_chain,
-    default_event_sink,
     durable_event,
     event_children,
     event_store_path,
     events_for_turn,
     publish_event,
-    set_default_event_sink,
 )
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.session import (
@@ -364,32 +362,39 @@ class RecordingEventSink:
 
 def test_publish_event_uses_configured_event_sink() -> None:
     sink = RecordingEventSink()
-    try:
-        set_default_event_sink(sink)
-        outcome = publish_event(
-            DraftEvent(
-                event_type="test.published",
-                source="test",
-                payload={"ok": True},
-            )
-        )
-    finally:
-        set_default_event_sink(None)
+    outcome = publish_event(
+        DraftEvent(
+            event_type="test.published",
+            source="test",
+            payload={"ok": True},
+        ),
+        sink=sink,
+    )
 
     assert outcome.inserted is True
     assert [draft.event_type for draft in sink.drafts] == ["test.published"]
     assert sink.store.get(outcome.event.id) == outcome.event
 
 
-def test_default_event_sink_returns_sqlite_event_store() -> None:
+def test_publish_event_defaults_to_sqlite_event_store() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
-            sink = default_event_sink()
+            outcome = publish_event(
+                DraftEvent(
+                    event_type="test.default_sink",
+                    source="test",
+                    payload={"ok": True},
+                )
+            )
+            stored = SqliteEventStore(Path(tmp) / "events.sqlite3").get(
+                outcome.event.id
+            )
 
-    assert isinstance(sink, SqliteEventStore)
+    assert outcome.inserted is True
+    assert stored == outcome.event
 
 
 def test_sqlite_event_store_filters_and_cursors() -> None:
