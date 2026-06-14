@@ -262,6 +262,7 @@ def normalized_event(event: Event) -> dict[str, object]:
         "idempotency_key": event.idempotency_key,
         "caused_by": event.caused_by,
         "session_id": event.session_id,
+        "turn_id": event.turn_id,
         "timestamp_micros": event.timestamp_micros,
         "time": time_from_timestamp_micros(event.timestamp_micros),
     }

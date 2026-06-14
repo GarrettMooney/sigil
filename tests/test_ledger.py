@@ -102,7 +102,12 @@ def test_ledger_index_upserts_converge_on_one_row_per_id() -> None:
     first = append_event(sample_turn_record())
     index.index_event(first)
     index.index_event(first)
-    replaced = append_event(sample_turn_record(outcome=TURN_OUTCOME_FAILED))
+    replaced = append_event(
+        sample_turn_record(
+            outcome=TURN_OUTCOME_FAILED,
+            type="sigil.turn.failed",
+        )
+    )
     index.index_event(replaced)
 
     (row,) = index.turns()
@@ -199,6 +204,7 @@ def test_ledger_reindex_reads_event_store() -> None:
             idempotency_key=None,
             caused_by=None,
             session_id="default",
+            turn_id="stale-turn",
             timestamp_micros=300_000_000,
         )
     )

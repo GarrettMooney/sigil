@@ -8,7 +8,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 EVENT_STORE_NAME = "events.sqlite3"
@@ -50,6 +50,7 @@ class DraftEvent:
     idempotency_key: str | None = None
     caused_by: str | None = None
     session_id: str | None = None
+    turn_id: str | None = None
     timestamp_micros: int | None = None
     event_id: str | None = None
 
@@ -68,6 +69,7 @@ class DraftEvent:
             idempotency_key=idempotency_key,
             caused_by=self.caused_by,
             session_id=self.session_id,
+            turn_id=self.turn_id,
             timestamp_micros=self.timestamp_micros or current_timestamp_micros(),
         )
 
@@ -83,6 +85,7 @@ class Event:
     idempotency_key: str | None
     caused_by: str | None
     session_id: str | None
+    turn_id: str | None
     timestamp_micros: int
 
 
@@ -94,6 +97,13 @@ class AppendOutcome:
     inserted: bool
 
 
+class EventSink(Protocol):
+    """Consumer of draft events."""
+
+    def accept(self, draft: DraftEvent) -> AppendOutcome:
+        """Accept one draft event."""
+
+
 @dataclass(frozen=True)
 class Filter:
     """Event listing filter."""
@@ -101,9 +111,203 @@ class Filter:
     event_type: str | None = None
     event_type_prefix: str | None = None
     session_id: str | None = None
+    turn_id: str | None = None
     caused_by: str | None = None
     after: EventCursor | None = None
     limit: int | None = None
+
+
+class DurableEventConstructors:
+    """Factories for durable events with stable metadata."""
+
+    def prompt_submitted(
+        self,
+        *,
+        payload: dict[str, Any],
+        turn_id: str | None,
+        session_id: str,
+        caused_by: str | None = None,
+        event_id: str | None = None,
+        timestamp_micros: int | None = None,
+    ) -> DraftEvent:
+        return durable_event_draft(
+            "sigil.prompt.submitted",
+            "sigil",
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            idempotency_key=turn_idempotency_key("sigil.prompt.submitted", turn_id),
+            timestamp_micros=timestamp_micros,
+        )
+
+    def model_called(
+        self,
+        *,
+        payload: dict[str, Any],
+        turn_id: str | None,
+        session_id: str,
+        caused_by: str | None = None,
+        event_id: str | None = None,
+        timestamp_micros: int | None = None,
+    ) -> DraftEvent:
+        return durable_event_draft(
+            "zeta.model.called",
+            "zeta",
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            idempotency_key=event_idempotency_key("zeta.model.called", event_id),
+            timestamp_micros=timestamp_micros,
+        )
+
+    def tool_called(
+        self,
+        *,
+        payload: dict[str, Any],
+        turn_id: str | None,
+        session_id: str,
+        caused_by: str | None = None,
+        event_id: str | None = None,
+        timestamp_micros: int | None = None,
+    ) -> DraftEvent:
+        return durable_event_draft(
+            "zeta.tool.called",
+            "zeta",
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            idempotency_key=event_idempotency_key("zeta.tool.called", event_id),
+            timestamp_micros=timestamp_micros,
+        )
+
+    def turn_completed(
+        self,
+        *,
+        payload: dict[str, Any],
+        turn_id: str | None,
+        session_id: str,
+        caused_by: str | None = None,
+        event_id: str | None = None,
+        timestamp_micros: int | None = None,
+    ) -> DraftEvent:
+        return self._turn_event(
+            "sigil.turn.completed",
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            timestamp_micros=timestamp_micros,
+        )
+
+    def turn_failed(
+        self,
+        *,
+        payload: dict[str, Any],
+        turn_id: str | None,
+        session_id: str,
+        caused_by: str | None = None,
+        event_id: str | None = None,
+        timestamp_micros: int | None = None,
+    ) -> DraftEvent:
+        return self._turn_event(
+            "sigil.turn.failed",
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            timestamp_micros=timestamp_micros,
+        )
+
+    def turn_aborted(
+        self,
+        *,
+        payload: dict[str, Any],
+        turn_id: str | None,
+        session_id: str,
+        caused_by: str | None = None,
+        event_id: str | None = None,
+        timestamp_micros: int | None = None,
+    ) -> DraftEvent:
+        return self._turn_event(
+            "sigil.turn.aborted",
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            timestamp_micros=timestamp_micros,
+        )
+
+    def _turn_event(
+        self,
+        event_type: str,
+        *,
+        payload: dict[str, Any],
+        turn_id: str | None,
+        session_id: str,
+        caused_by: str | None,
+        event_id: str | None,
+        timestamp_micros: int | None,
+    ) -> DraftEvent:
+        return durable_event_draft(
+            event_type,
+            "sigil",
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            idempotency_key=turn_idempotency_key(event_type, turn_id),
+            timestamp_micros=timestamp_micros,
+        )
+
+
+durable_event = DurableEventConstructors()
+
+
+def durable_event_draft(
+    event_type: str,
+    source: str,
+    *,
+    payload: dict[str, Any],
+    turn_id: str | None,
+    session_id: str,
+    caused_by: str | None,
+    event_id: str | None,
+    idempotency_key: str | None,
+    timestamp_micros: int | None,
+) -> DraftEvent:
+    return DraftEvent(
+        event_type=event_type,
+        source=source,
+        payload=payload,
+        idempotency_key=idempotency_key,
+        caused_by=caused_by,
+        session_id=session_id,
+        turn_id=turn_id,
+        timestamp_micros=timestamp_micros,
+        event_id=event_id,
+    )
+
+
+def event_idempotency_key(event_type: str, event_id: str | None) -> str | None:
+    if not event_id:
+        return None
+    return f"{event_type}:{event_id}"
+
+
+def turn_idempotency_key(event_type: str, turn_id: str | None) -> str | None:
+    if not turn_id:
+        return None
+    return f"{event_type}:{turn_id}"
 
 
 class SqliteEventStore:
@@ -146,15 +350,8 @@ class SqliteEventStore:
               idempotency_key TEXT,
               caused_by TEXT,
               session_id TEXT,
+              turn_id TEXT,
               timestamp INTEGER NOT NULL
-            ) STRICT;
-            CREATE TABLE IF NOT EXISTS event_streams (
-              stream_key TEXT NOT NULL,
-              version INTEGER NOT NULL,
-              event_id TEXT NOT NULL,
-              PRIMARY KEY (stream_key, version),
-              UNIQUE (stream_key, event_id),
-              FOREIGN KEY (event_id) REFERENCES events(id)
             ) STRICT;
             CREATE INDEX IF NOT EXISTS idx_events_type_ts
               ON events(type, timestamp);
@@ -167,8 +364,9 @@ class SqliteEventStore:
             CREATE INDEX IF NOT EXISTS idx_events_caused_by_ts
               ON events(caused_by, timestamp)
               WHERE caused_by IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS idx_event_streams_event_id
-              ON event_streams(event_id);
+            CREATE INDEX IF NOT EXISTS idx_events_turn_ts
+              ON events(turn_id, timestamp)
+              WHERE turn_id IS NOT NULL;
             """
         )
         self.connection.commit()
@@ -182,8 +380,8 @@ class SqliteEventStore:
             """
             INSERT INTO events
               (id, type, source, payload, idempotency_key, caused_by, session_id,
-               timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               turn_id, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT DO NOTHING
             """,
             (
@@ -194,6 +392,7 @@ class SqliteEventStore:
                 event.idempotency_key,
                 event.caused_by,
                 event.session_id,
+                event.turn_id,
                 event.timestamp_micros,
             ),
         )
@@ -202,67 +401,11 @@ class SqliteEventStore:
             return AppendOutcome(event=event, inserted=True)
         return AppendOutcome(event=self._duplicate_for(event), inserted=False)
 
-    def append_if_stream_version(
-        self,
-        stream_key: str,
-        expected_version: int,
-        event: Event,
-    ) -> AppendOutcome:
-        with self.connection:
-            current_version = self.stream_version(stream_key)
-            if current_version != expected_version:
-                raise ValueError(
-                    f"stream {stream_key} expected version {expected_version}, "
-                    f"found {current_version}"
-                )
-            outcome = self._append_without_commit(event)
-            if not outcome.inserted:
-                return outcome
-            self.connection.execute(
-                "INSERT INTO event_streams (stream_key, version, event_id) "
-                "VALUES (?, ?, ?)",
-                (stream_key, expected_version + 1, event.id),
-            )
-        return outcome
-
-    def _append_without_commit(self, event: Event) -> AppendOutcome:
-        payload = json.dumps(event.payload, ensure_ascii=False, separators=(",", ":"))
-        cursor = self.connection.execute(
-            """
-            INSERT INTO events
-              (id, type, source, payload, idempotency_key, caused_by, session_id,
-               timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT DO NOTHING
-            """,
-            (
-                event.id,
-                event.event_type,
-                event.source,
-                payload,
-                event.idempotency_key,
-                event.caused_by,
-                event.session_id,
-                event.timestamp_micros,
-            ),
-        )
-        if cursor.rowcount == 1:
-            return AppendOutcome(event=event, inserted=True)
-        return AppendOutcome(event=self._duplicate_for(event), inserted=False)
-
-    def stream_version(self, stream_key: str) -> int:
-        row = self.connection.execute(
-            "SELECT COALESCE(MAX(version), 0) AS version "
-            "FROM event_streams WHERE stream_key = ?",
-            (stream_key,),
-        ).fetchone()
-        return int(row["version"])
-
     def get(self, event_id: str) -> Event | None:
         row = self.connection.execute(
             """
             SELECT id, type, source, payload, idempotency_key, caused_by,
-                   session_id, timestamp
+                   session_id, turn_id, timestamp
             FROM events
             WHERE id = ?
             """,
@@ -282,6 +425,9 @@ class SqliteEventStore:
         if filter.session_id is not None:
             clauses.append("session_id = ?")
             params.append(filter.session_id)
+        if filter.turn_id is not None:
+            clauses.append("turn_id = ?")
+            params.append(filter.turn_id)
         if filter.caused_by is not None:
             clauses.append("caused_by = ?")
             params.append(filter.caused_by)
@@ -302,7 +448,7 @@ class SqliteEventStore:
         rows = self.connection.execute(
             f"""
             SELECT id, type, source, payload, idempotency_key, caused_by,
-                   session_id, timestamp
+                   session_id, turn_id, timestamp
             FROM events
             {where}
             ORDER BY timestamp ASC, id ASC
@@ -329,18 +475,14 @@ class SqliteEventStore:
         return chain
 
     def events_for_turn(self, turn_id: str) -> list[Event]:
-        return [
-            event
-            for event in self.list_events(Filter())
-            if event.payload.get("turn_id") == turn_id
-        ]
+        return self.list_events(Filter(turn_id=turn_id))
 
     def _duplicate_for(self, event: Event) -> Event:
         if event.idempotency_key is not None:
             row = self.connection.execute(
                 """
                 SELECT id, type, source, payload, idempotency_key, caused_by,
-                       session_id, timestamp
+                       session_id, turn_id, timestamp
                 FROM events
                 WHERE id = ? OR idempotency_key = ?
                 ORDER BY id = ? DESC
@@ -352,7 +494,7 @@ class SqliteEventStore:
             row = self.connection.execute(
                 """
                 SELECT id, type, source, payload, idempotency_key, caused_by,
-                       session_id, timestamp
+                       session_id, turn_id, timestamp
                 FROM events
                 WHERE id = ?
                 """,
@@ -371,26 +513,38 @@ def event_store_path(root: Path | None = None) -> Path:
     return state_dir() / EVENT_STORE_NAME
 
 
-_DEFAULT_STORES: dict[Path, SqliteEventStore] = {}
+_STORES_BY_PATH: dict[Path, SqliteEventStore] = {}
+_EVENT_SINK: EventSink | None = None
 
 
 def event_store() -> SqliteEventStore:
     path = event_store_path()
-    store = _DEFAULT_STORES.get(path)
+    store = _STORES_BY_PATH.get(path)
     if store is None:
         store = SqliteEventStore(path)
-        _DEFAULT_STORES[path] = store
+        _STORES_BY_PATH[path] = store
     return store
 
 
+def default_event_sink() -> EventSink:
+    if _EVENT_SINK is not None:
+        return _EVENT_SINK
+    return event_store()
+
+
+def set_default_event_sink(sink: EventSink | None) -> None:
+    global _EVENT_SINK
+    _EVENT_SINK = sink
+
+
 def close_event_stores() -> None:
-    while _DEFAULT_STORES:
-        _, store = _DEFAULT_STORES.popitem()
+    while _STORES_BY_PATH:
+        _, store = _STORES_BY_PATH.popitem()
         store.close()
 
 
 def publish_event(draft: DraftEvent) -> AppendOutcome:
-    return event_store().accept(draft)
+    return default_event_sink().accept(draft)
 
 
 def event_children(event_id: str, *, limit: int | None = None) -> list[Event]:
@@ -417,6 +571,7 @@ def row_to_event(row: sqlite3.Row) -> Event:
         idempotency_key=optional_str(row["idempotency_key"]),
         caused_by=optional_str(row["caused_by"]),
         session_id=optional_str(row["session_id"]),
+        turn_id=optional_str(row["turn_id"]),
         timestamp_micros=int(row["timestamp"]),
     )
 

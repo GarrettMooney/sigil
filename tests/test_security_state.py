@@ -26,14 +26,19 @@ from sigil.cli._base import (
 )
 from sigil.display.tty import should_color
 from sigil.events import (
+    AppendOutcome,
     DraftEvent,
     EventCursor,
     Filter,
     SqliteEventStore,
     causal_chain,
+    default_event_sink,
+    durable_event,
     event_children,
     event_store_path,
     events_for_turn,
+    publish_event,
+    set_default_event_sink,
 )
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.session import (
@@ -333,6 +338,7 @@ def test_sqlite_event_store_deduplicates_idempotency_keys() -> None:
         payload={"turn_id": "turn-1"},
         idempotency_key="turn:turn-1",
         session_id="s1",
+        turn_id="turn-1",
     )
 
     first = store.accept(draft)
@@ -342,6 +348,48 @@ def test_sqlite_event_store_deduplicates_idempotency_keys() -> None:
     assert second.inserted is False
     assert second.event == first.event
     assert [event.id for event in store.list_events(Filter())] == [first.event.id]
+    assert first.event.turn_id == "turn-1"
+    assert first.event.payload == {"turn_id": "turn-1"}
+
+
+class RecordingEventSink:
+    def __init__(self) -> None:
+        self.store = SqliteEventStore.in_memory()
+        self.drafts: list[DraftEvent] = []
+
+    def accept(self, draft: DraftEvent) -> AppendOutcome:
+        self.drafts.append(draft)
+        return self.store.accept(draft)
+
+
+def test_publish_event_uses_configured_event_sink() -> None:
+    sink = RecordingEventSink()
+    try:
+        set_default_event_sink(sink)
+        outcome = publish_event(
+            DraftEvent(
+                event_type="test.published",
+                source="test",
+                payload={"ok": True},
+            )
+        )
+    finally:
+        set_default_event_sink(None)
+
+    assert outcome.inserted is True
+    assert [draft.event_type for draft in sink.drafts] == ["test.published"]
+    assert sink.store.get(outcome.event.id) == outcome.event
+
+
+def test_default_event_sink_returns_sqlite_event_store() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            sink = default_event_sink()
+
+    assert isinstance(sink, SqliteEventStore)
 
 
 def test_sqlite_event_store_filters_and_cursors() -> None:
@@ -389,6 +437,7 @@ def test_sqlite_event_store_traverses_causality() -> None:
             event_type="sigil.prompt.submitted",
             source="sigil",
             payload={"turn_id": "turn-1"},
+            turn_id="turn-1",
             event_id="prompt-event",
         )
     ).event
@@ -397,6 +446,7 @@ def test_sqlite_event_store_traverses_causality() -> None:
             event_type="zeta.model.called",
             source="zeta",
             payload={"turn_id": "turn-1"},
+            turn_id="turn-1",
             caused_by=prompt.id,
             event_id="model-event",
         )
@@ -406,6 +456,7 @@ def test_sqlite_event_store_traverses_causality() -> None:
             event_type="zeta.tool.called",
             source="zeta",
             payload={"turn_id": "turn-1"},
+            turn_id="turn-1",
             caused_by=model.id,
             event_id="tool-event",
         )
@@ -415,6 +466,7 @@ def test_sqlite_event_store_traverses_causality() -> None:
             event_type="sigil.turn.completed",
             source="sigil",
             payload={"turn_id": "turn-1"},
+            turn_id="turn-1",
             caused_by=tool.id,
             event_id="turn-event",
         )
@@ -484,7 +536,119 @@ def test_default_event_query_helpers_use_event_store() -> None:
             assert events_for_turn("turn-1") == [prompt, model]
 
 
-def test_sqlite_event_store_append_if_stream_version() -> None:
+def test_sqlite_event_store_events_for_turn_uses_turn_id_column() -> None:
+    store = SqliteEventStore.in_memory()
+    column_match = store.accept(
+        DraftEvent(
+            event_type="zeta.model.called",
+            source="test",
+            payload={"turn_id": "payload-turn"},
+            turn_id="column-turn",
+            event_id="column-event",
+        )
+    ).event
+    store.accept(
+        DraftEvent(
+            event_type="zeta.model.called",
+            source="test",
+            payload={"turn_id": "payload-turn"},
+            turn_id="other-turn",
+            event_id="other-event",
+        )
+    )
+
+    assert store.events_for_turn("column-turn") == [column_match]
+    assert store.events_for_turn("payload-turn") == []
+
+
+def test_sqlite_event_store_has_no_stream_projection_table() -> None:
+    store = SqliteEventStore.in_memory()
+    table = store.connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        ("event_streams",),
+    ).fetchone()
+
+    assert table is None
+    assert not hasattr(store, "append_if_stream_version")
+    assert not hasattr(store, "stream_version")
+
+
+def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
+    prompt = durable_event.prompt_submitted(
+        payload={"content": "hello"},
+        turn_id="turn-1",
+        session_id="s1",
+        event_id="prompt-event",
+    )
+    model = durable_event.model_called(
+        payload={"content": "answer"},
+        turn_id="turn-1",
+        session_id="s1",
+        caused_by=prompt.event_id,
+        event_id="model-event",
+    )
+    tool = durable_event.tool_called(
+        payload={"name": "read"},
+        turn_id="turn-1",
+        session_id="s1",
+        caused_by=model.event_id,
+        event_id="tool-event",
+    )
+    completed = durable_event.turn_completed(
+        payload={"outcome": "answered"},
+        turn_id="turn-1",
+        session_id="s1",
+        caused_by=tool.event_id,
+        event_id="turn-event",
+    )
+    failed = durable_event.turn_failed(
+        payload={"outcome": "failed"},
+        turn_id="turn-1",
+        session_id="s1",
+    )
+    aborted = durable_event.turn_aborted(
+        payload={"outcome": "aborted"},
+        turn_id="turn-1",
+        session_id="s1",
+    )
+
+    assert prompt.event_type == "sigil.prompt.submitted"
+    assert prompt.source == "sigil"
+    assert prompt.turn_id == "turn-1"
+    assert prompt.idempotency_key == "sigil.prompt.submitted:turn-1"
+    assert model.event_type == "zeta.model.called"
+    assert model.source == "zeta"
+    assert model.turn_id == "turn-1"
+    assert model.caused_by == "prompt-event"
+    assert model.idempotency_key == "zeta.model.called:model-event"
+    assert tool.event_type == "zeta.tool.called"
+    assert tool.idempotency_key == "zeta.tool.called:tool-event"
+    assert completed.event_type == "sigil.turn.completed"
+    assert completed.idempotency_key == "sigil.turn.completed:turn-1"
+    assert failed.event_type == "sigil.turn.failed"
+    assert failed.idempotency_key == "sigil.turn.failed:turn-1"
+    assert aborted.event_type == "sigil.turn.aborted"
+    assert aborted.idempotency_key == "sigil.turn.aborted:turn-1"
+
+
+def test_durable_event_constructor_idempotency_deduplicates_replays() -> None:
+    store = SqliteEventStore.in_memory()
+    draft = durable_event.turn_completed(
+        payload={"outcome": "answered"},
+        turn_id="turn-1",
+        session_id="s1",
+    )
+
+    first = store.accept(draft)
+    second = store.accept(draft)
+
+    assert first.inserted is True
+    assert second.inserted is False
+    assert first.event == second.event
+    assert first.event.id.startswith("evt_")
+
+
+def test_sqlite_event_store_accepts_events_without_idempotency_keys() -> None:
     store = SqliteEventStore.in_memory()
     event = DraftEvent(
         event_type="sigil.command.accepted",
@@ -492,20 +656,9 @@ def test_sqlite_event_store_append_if_stream_version() -> None:
         payload={"command": "ls"},
     ).enrich()
 
-    inserted = store.append_if_stream_version("session:s1", 0, event)
+    inserted = store.append(event)
 
     assert inserted.inserted is True
-    with pytest.raises(ValueError, match="expected version 0"):
-        store.append_if_stream_version(
-            "session:s1",
-            0,
-            DraftEvent(
-                event_type="sigil.command.accepted",
-                source="test",
-                payload={"command": "pwd"},
-            ).enrich(),
-        )
-    assert store.stream_version("session:s1") == 1
 
 
 def test_events_default_lists_recent_events() -> None:

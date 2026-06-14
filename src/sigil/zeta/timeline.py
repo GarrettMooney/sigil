@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from ..events import DraftEvent, publish_event, timestamp_micros_from_time
+from ..events import durable_event, publish_event, timestamp_micros_from_time
 from ..protocols import is_shell_handoff_result, is_shell_prompt_handoff
 from ..state import session_id
 from .trace import (
@@ -24,11 +24,6 @@ from .trace import (
 RUN_EVENT_KIND = "run_event"
 RUN_HEAD_EVENT_TYPES = {"model", "tool_call", "tool_result"}
 NON_HEAD_EVENT_TYPES = {"model_usage"}
-DURABLE_EVENT_NAMES = {
-    "model": "zeta.model.called",
-    "tool_result": "zeta.tool.called",
-    "user_message": "sigil.prompt.submitted",
-}
 
 
 @dataclass(frozen=True)
@@ -81,9 +76,6 @@ def record_event(event: dict[str, Any]) -> dict[str, Any]:
 
 def record_durable_event(event: dict[str, Any]) -> None:
     event_type = str(event.get("type") or "event")
-    durable_event_name = DURABLE_EVENT_NAMES.get(event_type)
-    if durable_event_name is None:
-        return
     payload = durable_event_payload(event)
     if (
         event_type == "tool_result"
@@ -91,24 +83,61 @@ def record_durable_event(event: dict[str, Any]) -> None:
         and "effects" not in payload
     ):
         return
+    draft = durable_event_from_timeline(
+        event_type,
+        payload=payload,
+        turn_id=optional_event_str(event.get("turn_id")),
+        session_id=str(event.get("session") or session_id()),
+        caused_by=optional_event_str(event.get("caused_by")),
+        event_id=durable_event_id(event_type, event),
+        timestamp_micros=timestamp_micros_from_time(event.get("time")),
+    )
+    if draft is None:
+        return
     try:
-        publish_event(
-            DraftEvent(
-                event_type=durable_event_name,
-                source="zeta",
-                payload=payload,
-                caused_by=(
-                    str(event["caused_by"])
-                    if isinstance(event.get("caused_by"), str)
-                    else None
-                ),
-                session_id=str(event.get("session") or session_id()),
-                timestamp_micros=timestamp_micros_from_time(event.get("time")),
-                event_id=durable_event_id(event_type, event),
-            )
-        )
+        publish_event(draft)
     except Exception as exc:
         warn_trace_failure_once("record_durable_event", exc)
+
+
+def durable_event_from_timeline(
+    event_type: str,
+    *,
+    payload: dict[str, Any],
+    turn_id: str | None,
+    session_id: str,
+    caused_by: str | None,
+    event_id: str | None,
+    timestamp_micros: int | None,
+) -> Any | None:
+    if event_type == "model":
+        return durable_event.model_called(
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            timestamp_micros=timestamp_micros,
+        )
+    if event_type == "tool_result":
+        return durable_event.tool_called(
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            timestamp_micros=timestamp_micros,
+        )
+    if event_type == "user_message":
+        return durable_event.prompt_submitted(
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            timestamp_micros=timestamp_micros,
+        )
+    return None
 
 
 def durable_event_payload(event: dict[str, Any]) -> dict[str, Any]:
@@ -206,6 +235,10 @@ def add_object_link(
 def durable_event_id(event_type: str, event: dict[str, Any]) -> str | None:
     event_id = event.get("id")
     return event_id if isinstance(event_id, str) and event_id else None
+
+
+def optional_event_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def current_timeline() -> list[dict[str, Any]]:

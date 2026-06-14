@@ -106,6 +106,7 @@ def append_event(event: dict[str, Any]) -> Event:
     """Append a global audit/debug event with session metadata."""
     from .events import (
         DraftEvent,
+        durable_event,
         publish_event,
         timestamp_micros_from_time,
     )
@@ -113,27 +114,110 @@ def append_event(event: dict[str, Any]) -> Event:
     payload = _with_envelope(event)
     event_id = payload.get("id") if isinstance(payload.get("id"), str) else None
     event_type = str(payload.get("type") or "event")
+    turn_id = (
+        payload.get("turn_id") if isinstance(payload.get("turn_id"), str) else None
+    )
+    event_session_id = str(payload.get("session") or session_id())
+    event_timestamp = timestamp_micros_from_time(payload.get("time"))
+    caused_by = (
+        str(payload["caused_by"]) if isinstance(payload.get("caused_by"), str) else None
+    )
     domain_payload = {
         key: value
         for key, value in payload.items()
         if key not in {"id", "type", "time", "session", "source", "caused_by"}
     }
-    outcome = publish_event(
-        DraftEvent(
+    draft = durable_draft_from_payload(
+        durable_event,
+        event_type=event_type,
+        payload=domain_payload,
+        turn_id=turn_id,
+        session_id=event_session_id,
+        caused_by=caused_by,
+        event_id=event_id,
+        timestamp_micros=event_timestamp,
+    )
+    if draft is None:
+        draft = DraftEvent(
             event_type=event_type,
             source=str(payload.get("source") or "sigil"),
             payload=domain_payload,
-            caused_by=(
-                str(payload["caused_by"])
-                if isinstance(payload.get("caused_by"), str)
-                else None
-            ),
-            session_id=str(payload.get("session") or session_id()),
-            timestamp_micros=timestamp_micros_from_time(payload.get("time")),
+            caused_by=caused_by,
+            session_id=event_session_id,
+            turn_id=turn_id,
+            timestamp_micros=event_timestamp,
             event_id=event_id,
         )
-    )
+    outcome = publish_event(draft)
     return outcome.event
+
+
+def durable_draft_from_payload(
+    durable_event: Any,
+    *,
+    event_type: str,
+    payload: dict[str, Any],
+    turn_id: str | None,
+    session_id: str,
+    caused_by: str | None,
+    event_id: str | None,
+    timestamp_micros: int | None,
+) -> Any | None:
+    if event_type == "sigil.prompt.submitted":
+        return durable_event.prompt_submitted(
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            timestamp_micros=timestamp_micros,
+        )
+    if event_type == "sigil.turn.completed":
+        return durable_event.turn_completed(
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            timestamp_micros=timestamp_micros,
+        )
+    if event_type == "sigil.turn.failed":
+        return durable_event.turn_failed(
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            timestamp_micros=timestamp_micros,
+        )
+    if event_type == "sigil.turn.aborted":
+        return durable_event.turn_aborted(
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            timestamp_micros=timestamp_micros,
+        )
+    if event_type == "zeta.model.called":
+        return durable_event.model_called(
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            timestamp_micros=timestamp_micros,
+        )
+    if event_type == "zeta.tool.called":
+        return durable_event.tool_called(
+            payload=payload,
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=caused_by,
+            event_id=event_id,
+            timestamp_micros=timestamp_micros,
+        )
+    return None
 
 
 def write_text_atomic(path: Path, text: str) -> None:

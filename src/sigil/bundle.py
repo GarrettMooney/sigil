@@ -149,6 +149,9 @@ def event_from_record(record: dict[str, Any]) -> Event:
         session_id=(
             str(record["session"]) if isinstance(record.get("session"), str) else None
         ),
+        turn_id=(
+            str(record["turn_id"]) if isinstance(record.get("turn_id"), str) else None
+        ),
         timestamp_micros=timestamp_micros_from_time(record.get("time")) or 0,
     )
 
