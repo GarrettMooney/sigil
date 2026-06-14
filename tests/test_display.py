@@ -287,6 +287,31 @@ def test_sigil_display_terminal_digest_uses_reasoning_for_phase() -> None:
     assert "[00:00] Inspect prompt assembly before editing" in output.getvalue()
 
 
+def test_sigil_display_terminal_digest_ignores_generic_reasoning_phase() -> None:
+    output = StringIO()
+    renderer = display_render.TerminalDigestRenderer(
+        output,
+        clock=lambda: 12.0,
+        chapter_event_threshold=1,
+    )
+
+    renderer.observe_tool_call("read", {"path": "README.md"})
+    renderer.observe_tool_result("read", {"ok": True})
+    renderer.observe_reasoning_delta("Checking.")
+    renderer.observe_tool_call("read", {"path": "src/sigil/agent_io.py"})
+    renderer.observe_tool_result("read", {"ok": True})
+
+    assert renderer.current_phase == "Mapping repo"
+    assert "[00:00] Mapping repo" in output.getvalue()
+    assert "[00:00] Checking" not in output.getvalue()
+
+
+def test_sigil_display_terminal_digest_keeps_specific_reasoning_phase() -> None:
+    assert display_render.reasoning_phase("Checking model configuration.") == (
+        "Checking model configuration"
+    )
+
+
 def test_sigil_display_thinking_status_forwards_reasoning_to_progress(
     monkeypatch,
 ) -> None:

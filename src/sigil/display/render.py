@@ -60,6 +60,18 @@ REASONING_PHASE_PREFIXES = (
     "validating",
     "fixing",
 )
+GENERIC_REASONING_PHASES = frozenset(
+    {
+        "checking",
+        "inspecting",
+        "looking",
+        "mapping",
+        "thinking",
+        "understanding",
+        "validating",
+        "working",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -216,12 +228,18 @@ def reasoning_phase(text: str) -> str:
         match = pattern.search(normalized)
         if match is None:
             continue
-        return phase_title(match.group(1))
+        title = phase_title(match.group(1))
+        return "" if is_generic_reasoning_phase(title) else title
     lower = normalized.lower()
     for prefix in REASONING_PHASE_PREFIXES:
         if lower.startswith(prefix):
-            return phase_title(normalized)
+            title = phase_title(normalized)
+            return "" if is_generic_reasoning_phase(title) else title
     return ""
+
+
+def is_generic_reasoning_phase(title: str) -> bool:
+    return title.strip(" .:;-—").lower() in GENERIC_REASONING_PHASES
 
 
 def phase_title(text: str) -> str:
