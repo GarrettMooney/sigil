@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import tempfile
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
-
-from ...state import read_json, remove_json, write_json
+from typing import Any, Literal, Protocol
 
 ACTIVE_MODEL_STATE = "active-model.json"
 MODEL_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
@@ -23,6 +24,29 @@ THINKING_EFFORTS = ("none", "minimal", "low", "medium", "high")
 CHAT_COMPLETIONS_API = "chat-completions"
 CODEX_RESPONSES_API = "codex-responses"
 MODEL_APIS = (CHAT_COMPLETIONS_API, CODEX_RESPONSES_API)
+_SESSION_DIR_FACTORY: SessionDirFactory | None = None
+
+
+class SessionDirFactory(Protocol):
+    def __call__(self, session_id: str | None = None) -> Path: ...
+
+
+def set_profile_session_dir_factory(factory: SessionDirFactory | None) -> None:
+    global _SESSION_DIR_FACTORY
+    _SESSION_DIR_FACTORY = factory
+
+
+def profile_session_dir() -> Path:
+    if _SESSION_DIR_FACTORY is not None:
+        return _SESSION_DIR_FACTORY(None)
+    root = os.environ.get("ZETA_STATE_DIR")
+    session = os.environ.get("ZETA_SESSION_ID") or "default"
+    base = Path(root).expanduser() if root else Path.home() / ".zeta"
+    return base / "sessions" / session
+
+
+def active_model_state_path() -> Path:
+    return profile_session_dir() / ACTIVE_MODEL_STATE
 
 
 @dataclass(frozen=True)
@@ -153,7 +177,7 @@ def resolve_model_profile(
 
 def active_model_profile() -> str | None:
     """Return the active model profile name for this session, if set."""
-    state = read_json(ACTIVE_MODEL_STATE)
+    state = read_json(active_model_state_path())
     if not isinstance(state, dict):
         return None
     profile = state.get("profile")
@@ -185,12 +209,44 @@ def configured_default_selection(
 
 def set_active_model_profile(name: str) -> None:
     """Store the active model profile name for this session."""
-    write_json(ACTIVE_MODEL_STATE, {"profile": name})
+    write_json(active_model_state_path(), {"profile": name})
 
 
 def clear_active_model_profile() -> bool:
     """Clear the active model profile for this session."""
-    return remove_json(ACTIVE_MODEL_STATE)
+    return remove_json(active_model_state_path())
+
+
+def read_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(handle.name, path)
+
+
+def remove_json(path: Path) -> bool:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def default_model_selection() -> ModelSelection:

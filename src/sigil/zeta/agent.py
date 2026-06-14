@@ -25,6 +25,7 @@ from .trace import PromptTrace, prompt_trace_payload
 
 AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]
+RpcSessionRunner = Callable[[dict[str, Any]], dict[str, Any]]
 
 DEFAULT_MAX_TURNS = 25
 
@@ -701,9 +702,16 @@ def result_staged_effect(result: dict[str, Any]) -> dict[str, Any] | None:
 
 
 class JsonRpcServer:
-    def __init__(self, input: TextIO, output: TextIO) -> None:
+    def __init__(
+        self,
+        input: TextIO,
+        output: TextIO,
+        *,
+        session_runner: RpcSessionRunner | None = None,
+    ) -> None:
         self.input = input
         self.output = output
+        self.session_runner = session_runner
         self.tool_responses: dict[str, dict[str, Any]] = {}
         self.client_tools: set[str] = set()
 
@@ -741,14 +749,16 @@ class JsonRpcServer:
 
     def dispatch(self, method: str, params: dict[str, Any]) -> dict[str, Any] | None:
         if method == "initialize":
-            return {"server": "sigil-zeta", "protocol": "0.1"}
+            return {"server": "zeta", "protocol": "0.1"}
         if method == "tools.register":
             return {"registered": self.register_client_tools(params.get("tools"))}
         if method == "tools.respond":
             self.record_tool_response(params)
             return None
         if method == "session.run":
-            return self.run_session(params)
+            if self.session_runner is None:
+                raise ValueError("session.run is not configured")
+            return self.session_runner(params)
         raise ValueError(f"unknown method: {method}")
 
     def register_client_tools(self, tools: Any) -> list[str]:
@@ -831,137 +841,6 @@ class JsonRpcServer:
                 continue
             self.handle_message(message)
         return self.tool_responses.pop(call_id)
-
-    def run_session(self, params: dict[str, Any]) -> dict[str, Any]:
-        from ..agent_io import TurnLedger, record_turn_abort
-        from ..protocols import (
-            TURN_OUTCOME_ABORTED,
-            TURN_OUTCOME_ANSWERED,
-            TURN_OUTCOME_EXECUTED,
-            TURN_OUTCOME_FAILED,
-            TURN_OUTCOME_STAGED,
-        )
-        from ..session import session_id
-        from ..tools import ensure_builtin_tools_registered
-        from .context import load_project_context
-        from .models import active_model_selection, model_selection_event
-        from .timeline import current_timeline, record_event
-
-        objective = str(params.get("objective") or "")
-        if not objective:
-            raise ValueError("session.run requires objective")
-        workflow = str(params.get("workflow") or "propose")
-        if workflow not in {"ask", "propose", "do"}:
-            raise ValueError("workflow must be ask, propose, or do")
-        requested_tools = params.get("tools")
-        allowed_tools = (
-            tuple(str(tool) for tool in requested_tools if isinstance(tool, str))
-            if isinstance(requested_tools, list)
-            else None
-        )
-        ensure_builtin_tools_registered()
-        selected_model = active_model_selection()
-        enabled_tools = registered_tools(allowed_tools)
-        execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
-        ledger = TurnLedger(
-            workflow=workflow,
-            objective=objective,
-            allowed_tools=enabled_tools,
-            staged=any(
-                tool.spec.mutates()
-                for name in enabled_tools
-                if (tool := tool_registry.get(name)) is not None
-            )
-            and execution_mode == "stage",
-            agent=model_selection_event(selected_model) if selected_model else None,
-        )
-        prior_timeline = current_timeline()
-        user_event = record_event(
-            {
-                "type": "user_message",
-                "content": objective,
-                "workflow": workflow,
-                "runtime": "zeta-rpc",
-                "turn_id": ledger.turn_id,
-                "available_tools": list(enabled_tools),
-            }
-        )
-        ledger.note_root_event(user_event)
-        self.publish_event(user_event)
-
-        def sink(event: dict[str, Any]) -> None:
-            event_type = str(event.get("type") or "")
-            if event_type == "tool_result":
-                ledger.attach_tool_result_effect(event)
-            event["turn_id"] = ledger.turn_id
-            persisted = record_event(event)
-            ledger.note_runtime_event(persisted)
-            self.publish_event(persisted)
-
-        try:
-            result = run_agent_turn(
-                objective,
-                prior_timeline,
-                AgentConfig(
-                    system_prompt=params.get("system")
-                    if isinstance(params.get("system"), str)
-                    else None,
-                    allowed_tools=enabled_tools,
-                    max_turns=params.get("max_steps")
-                    if isinstance(params.get("max_steps"), int)
-                    else None,
-                    stop_on_staged_effect=True,
-                    execution_mode=execution_mode,
-                    model_profile=(
-                        selected_model.profile if selected_model is not None else None
-                    ),
-                    model_name=(
-                        selected_model.model if selected_model is not None else None
-                    ),
-                    model_url=selected_model.url
-                    if selected_model is not None
-                    else None,
-                    thinking=(
-                        selected_model.thinking if selected_model is not None else None
-                    ),
-                    model_api=selected_model.api
-                    if selected_model is not None
-                    else None,
-                ),
-                context=(
-                    str(params.get("context"))
-                    if isinstance(params.get("context"), str)
-                    else load_project_context()
-                ),
-                event_sink=sink,
-                caused_by=ledger.root_event_id,
-            )
-        except RuntimeError as error:
-            record_turn_abort(
-                error,
-                workflow=workflow,
-                caused_by=ledger.causal_parent_event_id(),
-            )
-            turn = ledger.finish(TURN_OUTCOME_ABORTED)
-            self.publish_event(turn)
-            raise
-        ledger.add_model_calls(result.model_telemetry_calls)
-        if result.staged_effect is not None:
-            outcome = TURN_OUTCOME_STAGED
-        elif result.final_text:
-            outcome = (
-                TURN_OUTCOME_EXECUTED if ledger.effect_ids else TURN_OUTCOME_ANSWERED
-            )
-        else:
-            outcome = TURN_OUTCOME_FAILED
-        turn = ledger.finish(outcome, prompt_traces=result.prompt_traces)
-        self.publish_event(turn)
-        return {
-            "turn_id": ledger.turn_id,
-            "session_id": session_id(),
-            "outcome": outcome,
-            "final_text": result.final_text,
-        }
 
     def publish_event(self, event: dict[str, Any]) -> None:
         self.write_notification("events.publish", {"event": event})

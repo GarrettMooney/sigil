@@ -18,6 +18,7 @@ from _zeta_helpers import (
 )
 from click.testing import CliRunner
 
+from sigil.agent_io import run_zeta_rpc_session
 from sigil.cli import cli
 from sigil.tools import ensure_builtin_tools_registered
 from sigil.zeta import agent as zeta_agent
@@ -67,7 +68,7 @@ def test_zeta_rpc_initialize_returns_server_metadata() -> None:
         {
             "jsonrpc": "2.0",
             "id": 1,
-            "result": {"server": "sigil-zeta", "protocol": "0.1"},
+            "result": {"server": "zeta", "protocol": "0.1"},
         }
     ]
 
@@ -84,7 +85,7 @@ def test_zeta_rpc_cli_serves_stdio_initialize() -> None:
         {
             "jsonrpc": "2.0",
             "id": 1,
-            "result": {"server": "sigil-zeta", "protocol": "0.1"},
+            "result": {"server": "zeta", "protocol": "0.1"},
         }
     ]
 
@@ -160,6 +161,10 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
     )
 
     server = zeta_agent.JsonRpcServer(input_stream, output)
+    server.session_runner = lambda params: run_zeta_rpc_session(
+        params,
+        publish_event=server.publish_event,
+    )
 
     server.serve()
 

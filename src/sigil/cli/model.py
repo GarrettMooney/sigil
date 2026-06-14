@@ -83,6 +83,9 @@ def cmd_model_use(name: str) -> int:
     NAME is a profile from ~/.zeta/models.toml. The selection sticks until
     `sigil model clear`; other sessions are unaffected.
     """
+    from .. import configure_zeta_for_sigil
+
+    configure_zeta_for_sigil()
     catalog = load_model_profiles()
     for diagnostic in catalog.diagnostics:
         click.echo(f"model config: {diagnostic.message}", err=True)
@@ -110,6 +113,9 @@ def cmd_model_show() -> int:
     `sigil model use`, (config) for the `default = true` profile, (builtin)
     for the no-configuration fallback.
     """
+    from .. import configure_zeta_for_sigil
+
+    configure_zeta_for_sigil()
     resolution = resolve_active_model()
     if resolution.stale_profile is not None:
         click.echo(
@@ -133,6 +139,9 @@ def cmd_model_clear() -> int:
     The session returns to the `default = true` profile, or to the builtin
     local default when no profile claims the flag.
     """
+    from .. import configure_zeta_for_sigil
+
+    configure_zeta_for_sigil()
     removed = clear_active_model_profile()
     if removed:
         click.echo("model: cleared")

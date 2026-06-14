@@ -102,6 +102,9 @@ def step(
     wrapped in the step instruction scaffolding. The do workflow executes
     directly; every other workflow stages mutations for review.
     """
+    from .. import configure_zeta_for_sigil
+
+    configure_zeta_for_sigil(responses=True)
     system = system or STEP_SYSTEM_PROMPT
     execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
     selected_model = active_model_selection()

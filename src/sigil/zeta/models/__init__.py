@@ -35,6 +35,7 @@ from .profiles import (
     resolve_active_model,
     resolve_model_profile,
     set_active_model_profile,
+    set_profile_session_dir_factory,
     user_models_config_path,
 )
 
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
         model_endpoint_valid,
         request_model_metadata,
     )
+    from .responses import set_responses_session_id_factory
 
 _TRANSPORT_EXPORTS = frozenset(
     {
@@ -99,8 +101,16 @@ __all__ = [
     "resolve_active_model",
     "resolve_model_profile",
     "set_active_model_profile",
+    "set_profile_session_dir_factory",
+    "set_responses_session_id_factory",
     "user_models_config_path",
 ]
+
+
+def set_responses_session_id_factory(factory: Any) -> None:
+    from . import responses
+
+    responses.set_responses_session_id_factory(factory)
 
 
 def chat_completion_messages(

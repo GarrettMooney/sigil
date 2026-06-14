@@ -6,6 +6,7 @@ import atexit
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -15,12 +16,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from ..state import session_dir, state_dir
-
 ObjectId = str
 DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
 LOGGER = logging.getLogger("sigil.zeta.trace")
 _WARNED_FAILURES: set[str] = set()
+_STATE_DIR_FACTORY: StateDirFactory | None = None
+_SESSION_DIR_FACTORY: SessionDirFactory | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,38 @@ class Store(Protocol):
     def stats(self) -> TraceStats: ...
 
 
+class StateDirFactory(Protocol):
+    def __call__(self) -> Path: ...
+
+
+class SessionDirFactory(Protocol):
+    def __call__(self, session_id: str | None = None) -> Path: ...
+
+
+def set_trace_path_factories(
+    *,
+    state_dir_factory: StateDirFactory | None = None,
+    session_dir_factory: SessionDirFactory | None = None,
+) -> None:
+    global _STATE_DIR_FACTORY, _SESSION_DIR_FACTORY
+    _STATE_DIR_FACTORY = state_dir_factory
+    _SESSION_DIR_FACTORY = session_dir_factory
+
+
+def trace_state_dir() -> Path:
+    if _STATE_DIR_FACTORY is not None:
+        return _STATE_DIR_FACTORY()
+    root = os.environ.get("ZETA_STATE_DIR")
+    return Path(root).expanduser() if root else Path.home() / ".zeta"
+
+
+def trace_session_dir(session_id: str | None = None) -> Path:
+    if _SESSION_DIR_FACTORY is not None:
+        return _SESSION_DIR_FACTORY(session_id)
+    session = session_id or os.environ.get("ZETA_SESSION_ID") or "default"
+    return trace_state_dir() / "sessions" / session
+
+
 def resolve_object_id(store: Store, token: str) -> ObjectId:
     """Resolve a ref name, full object id, or unique id prefix to an object id.
 
@@ -161,17 +194,17 @@ def resolve_object_id(store: Store, token: str) -> ObjectId:
 
 def default_sqlite_path() -> Path:
     """Return the default per-session trace SQLite path."""
-    return session_dir() / DEFAULT_SQLITE_NAME
+    return trace_session_dir() / DEFAULT_SQLITE_NAME
 
 
 def session_sqlite_path(session_id: str) -> Path:
     """Return the trace SQLite path for a named session."""
-    return session_dir(session_id) / DEFAULT_SQLITE_NAME
+    return trace_session_dir(session_id) / DEFAULT_SQLITE_NAME
 
 
 def available_session_ids() -> list[str]:
     """Return the session ids that have a recorded trace store, sorted."""
-    sessions_root = state_dir() / "sessions"
+    sessions_root = trace_state_dir() / "sessions"
     return sorted(
         path.parent.name for path in sessions_root.glob(f"*/{DEFAULT_SQLITE_NAME}")
     )

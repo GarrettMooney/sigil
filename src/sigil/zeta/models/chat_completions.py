@@ -16,9 +16,11 @@ from urllib.parse import urlparse, urlunparse
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from ...display.tty import LOVE, RESET, muted, should_color
 from .profiles import model_name, model_url
 
+MUTED = "\033[38;2;110;106;134m"
+LOVE = "\033[38;2;235;111;146m"
+RESET = "\033[0m"
 DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS = 120.0
 DEFAULT_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS = 600.0
 MODEL_METADATA_TIMEOUT_SECONDS = 0.5
@@ -27,6 +29,19 @@ DEFAULT_MAX_COMPLETION_TOKENS = 8192
 USAGE_TOKEN_FIELDS = ("prompt_tokens", "completion_tokens", "total_tokens")
 ModelTelemetrySink = Callable[[dict[str, Any]], None]
 _MODEL_CONTEXT_TOKENS_CACHE: dict[tuple[str, str], int] = {}
+
+
+def should_color(stream: object) -> bool:
+    return (
+        bool(getattr(stream, "isatty", lambda: False)())
+        and "NO_COLOR" not in os.environ
+    )
+
+
+def muted(text: str, *, enabled: bool) -> str:
+    if not enabled:
+        return text
+    return f"{MUTED}{text}{RESET}"
 
 
 class ChatCompletionStreamSink(Protocol):

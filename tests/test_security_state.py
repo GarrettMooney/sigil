@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -60,6 +61,45 @@ from sigil.workflows.ask import (
 class TtyStringIO(StringIO):
     def isatty(self) -> bool:
         return True
+
+
+def test_zeta_package_does_not_import_parent_sigil_modules() -> None:
+    zeta_root = Path("src/sigil/zeta")
+    violations: list[str] = []
+    for path in sorted(zeta_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        package_parts = ("sigil", "zeta", *path.relative_to(zeta_root).parts[:-1])
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "sigil" or alias.name.startswith("sigil."):
+                        violations.append(f"{path}:{node.lineno}: import {alias.name}")
+            if isinstance(node, ast.ImportFrom):
+                resolved = resolved_import_module(package_parts, node)
+                if (
+                    resolved
+                    and resolved[0] == "sigil"
+                    and resolved[:2]
+                    != (
+                        "sigil",
+                        "zeta",
+                    )
+                ):
+                    module = "." * node.level + (node.module or "")
+                    violations.append(f"{path}:{node.lineno}: from {module}")
+    assert violations == []
+
+
+def resolved_import_module(
+    package_parts: tuple[str, ...],
+    node: ast.ImportFrom,
+) -> tuple[str, ...] | None:
+    module_parts = tuple((node.module or "").split(".")) if node.module else ()
+    if node.level == 0:
+        return module_parts
+    if node.level > len(package_parts):
+        return ()
+    return (*package_parts[: 1 - node.level], *module_parts)
 
 
 def test_question_system_prompt_points_zeta_at_query_log_for_older_history() -> None:

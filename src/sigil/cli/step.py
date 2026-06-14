@@ -178,7 +178,13 @@ def cmd_zeta_rpc(stdio: bool) -> int:
     """Serve the Zeta JSON-RPC protocol."""
     if not stdio:
         raise click.UsageError("only --stdio is supported")
+    from ..agent_io import run_zeta_rpc_session
     from ..zeta.agent import JsonRpcServer
 
-    JsonRpcServer(sys.stdin, sys.stdout).serve()
+    server = JsonRpcServer(sys.stdin, sys.stdout)
+    server.session_runner = lambda params: run_zeta_rpc_session(
+        params,
+        publish_event=server.publish_event,
+    )
+    server.serve()
     return 0

@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, TextIO
 
@@ -30,15 +30,31 @@ from .protocols import (
     EFFECT_KIND_COMMAND,
     EFFECT_KIND_FILE_EDIT,
     EFFECT_KIND_FILE_WRITE,
+    TURN_OUTCOME_ABORTED,
+    TURN_OUTCOME_ANSWERED,
+    TURN_OUTCOME_EXECUTED,
+    TURN_OUTCOME_FAILED,
+    TURN_OUTCOME_STAGED,
     TURN_RECORD_SCHEMA,
     effect_record,
     turn_contract,
     turn_record,
 )
-from .zeta.agent import AgentTurnResult
-from .zeta.models import CODEX_RESPONSES_API, ModelSelection, ensure_server
-from .zeta.timeline import add_event_link, record_event
+from .session import session_id
+from .tools import ensure_builtin_tools_registered
+from .zeta.agent import AgentConfig, AgentTurnResult, registered_tools, run_agent_turn
+from .zeta.context import load_project_context
+from .zeta.models import (
+    CODEX_RESPONSES_API,
+    ModelSelection,
+    active_model_selection,
+    ensure_server,
+    model_selection_event,
+)
+from .zeta.timeline import add_event_link, current_timeline, record_event
 from .zeta.tools.base import proposed_effect
+from .zeta.tools.registry import ExecutionMode
+from .zeta.tools.registry import registry as tool_registry
 from .zeta.trace import (
     Derivation,
     Object,
@@ -223,6 +239,9 @@ def record_turn_trace_object(
     `turn/<turn_id>` ref makes ledger ids resolve like trace ids.
     """
     try:
+        from . import configure_zeta_for_sigil
+
+        configure_zeta_for_sigil(responses=True)
         store = default_store()
         prompt_ids = payload.get("prompt_object_ids")
         links: list[str] = []
@@ -454,6 +473,9 @@ def render_final_text(
 
 
 def record_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
+    from . import configure_zeta_for_sigil
+
+    configure_zeta_for_sigil(responses=True)
     return record_event({"type": event_type, **fields})
 
 
@@ -465,6 +487,123 @@ def record_turn_abort(error: BaseException, **fields: Any) -> dict[str, Any]:
         content=f"(turn aborted: {error})",
         **fields,
     )
+
+
+def run_zeta_rpc_session(
+    params: dict[str, Any],
+    *,
+    publish_event: Callable[[dict[str, Any]], None],
+) -> dict[str, Any]:
+    from . import configure_zeta_for_sigil
+
+    configure_zeta_for_sigil(responses=True)
+    objective = str(params.get("objective") or "")
+    if not objective:
+        raise ValueError("session.run requires objective")
+    workflow = str(params.get("workflow") or "propose")
+    if workflow not in {"ask", "propose", "do"}:
+        raise ValueError("workflow must be ask, propose, or do")
+    requested_tools = params.get("tools")
+    allowed_tools = (
+        tuple(str(tool) for tool in requested_tools if isinstance(tool, str))
+        if isinstance(requested_tools, list)
+        else None
+    )
+    ensure_builtin_tools_registered()
+    selected_model = active_model_selection()
+    enabled_tools = registered_tools(allowed_tools)
+    execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
+    ledger = TurnLedger(
+        workflow=workflow,
+        objective=objective,
+        allowed_tools=enabled_tools,
+        staged=any(
+            tool.spec.mutates()
+            for name in enabled_tools
+            if (tool := tool_registry.get(name)) is not None
+        )
+        and execution_mode == "stage",
+        agent=model_selection_event(selected_model) if selected_model else None,
+    )
+    prior_timeline = current_timeline()
+    user_event = record_event(
+        {
+            "type": "user_message",
+            "content": objective,
+            "workflow": workflow,
+            "runtime": "zeta-rpc",
+            "turn_id": ledger.turn_id,
+            "available_tools": list(enabled_tools),
+        }
+    )
+    ledger.note_root_event(user_event)
+    publish_event(user_event)
+
+    def sink(event: dict[str, Any]) -> None:
+        event_type = str(event.get("type") or "")
+        if event_type == "tool_result":
+            ledger.attach_tool_result_effect(event)
+        event["turn_id"] = ledger.turn_id
+        persisted = record_event(event)
+        ledger.note_runtime_event(persisted)
+        publish_event(persisted)
+
+    try:
+        result = run_agent_turn(
+            objective,
+            prior_timeline,
+            AgentConfig(
+                system_prompt=params.get("system")
+                if isinstance(params.get("system"), str)
+                else None,
+                allowed_tools=enabled_tools,
+                max_turns=params.get("max_steps")
+                if isinstance(params.get("max_steps"), int)
+                else None,
+                stop_on_staged_effect=True,
+                execution_mode=execution_mode,
+                model_profile=selected_model.profile
+                if selected_model is not None
+                else None,
+                model_name=selected_model.model if selected_model is not None else None,
+                model_url=selected_model.url if selected_model is not None else None,
+                thinking=selected_model.thinking
+                if selected_model is not None
+                else None,
+                model_api=selected_model.api if selected_model is not None else None,
+            ),
+            context=(
+                str(params.get("context"))
+                if isinstance(params.get("context"), str)
+                else load_project_context()
+            ),
+            event_sink=sink,
+            caused_by=ledger.root_event_id,
+        )
+    except RuntimeError as error:
+        record_turn_abort(
+            error,
+            workflow=workflow,
+            caused_by=ledger.causal_parent_event_id(),
+        )
+        turn = ledger.finish(TURN_OUTCOME_ABORTED)
+        publish_event(turn)
+        raise
+    ledger.add_model_calls(result.model_telemetry_calls)
+    if result.staged_effect is not None:
+        outcome = TURN_OUTCOME_STAGED
+    elif result.final_text:
+        outcome = TURN_OUTCOME_EXECUTED if ledger.effect_ids else TURN_OUTCOME_ANSWERED
+    else:
+        outcome = TURN_OUTCOME_FAILED
+    turn = ledger.finish(outcome, prompt_traces=result.prompt_traces)
+    publish_event(turn)
+    return {
+        "turn_id": ledger.turn_id,
+        "session_id": session_id(),
+        "outcome": outcome,
+        "final_text": result.final_text,
+    }
 
 
 def model_telemetry_fields(
