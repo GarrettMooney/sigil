@@ -363,7 +363,7 @@ def test_event_store_path_uses_zeta_state_dir() -> None:
         ):
             path = event_store_path()
 
-    assert path == Path(tmp) / "events.sqlite3"
+    assert path == Path(tmp) / "zeta.sqlite3"
 
 
 def test_sqlite_event_store_deduplicates_idempotency_keys(tmp_path: Path) -> None:

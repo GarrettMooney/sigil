@@ -17,6 +17,7 @@ from typing import Any, Protocol, cast
 
 ObjectId = str
 DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
+ZETA_SQLITE_NAME = "zeta.sqlite3"
 LOGGER = logging.getLogger("zeta.trace")
 _WARNED_FAILURES: set[str] = set()
 
@@ -139,9 +140,9 @@ def trace_state_dir() -> Path:
     return Path(root).expanduser() if root else Path.home() / ".zeta"
 
 
-def trace_session_dir(session_id: str | None = None) -> Path:
-    session = session_id or os.environ.get("ZETA_SESSION_ID") or "default"
-    return trace_state_dir() / "sessions" / session
+def zeta_sqlite_path(root: Path | None = None) -> Path:
+    """Return the unified Zeta SQLite store path."""
+    return (root or trace_state_dir()) / ZETA_SQLITE_NAME
 
 
 def resolve_object_id(store: Store, token: str) -> ObjectId:
@@ -168,21 +169,63 @@ def resolve_object_id(store: Store, token: str) -> ObjectId:
 
 
 def default_sqlite_path() -> Path:
-    """Return the default per-session trace SQLite path."""
-    return trace_session_dir() / DEFAULT_SQLITE_NAME
-
-
-def session_sqlite_path(session_id: str) -> Path:
-    """Return the trace SQLite path for a named session."""
-    return trace_session_dir(session_id) / DEFAULT_SQLITE_NAME
+    """Return the default unified Zeta SQLite path."""
+    return zeta_sqlite_path()
 
 
 def available_session_ids() -> list[str]:
-    """Return the session ids that have a recorded trace store, sorted."""
-    sessions_root = trace_state_dir() / "sessions"
-    return sorted(
-        path.parent.name for path in sessions_root.glob(f"*/{DEFAULT_SQLITE_NAME}")
-    )
+    """Return the session ids recorded in the unified Zeta store, sorted."""
+    path = zeta_sqlite_path()
+    if not path.exists():
+        return []
+    connection = sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        sessions: set[str] = set()
+        if _table_exists(connection, "derivations") and _column_exists(
+            connection, "derivations", "session_id"
+        ):
+            rows = connection.execute(
+                "SELECT DISTINCT session_id FROM derivations WHERE session_id IS NOT NULL"
+            ).fetchall()
+            sessions.update(str(row["session_id"]) for row in rows)
+        if _table_exists(connection, "refs") and _column_exists(
+            connection, "refs", "scope"
+        ):
+            rows = connection.execute(
+                """
+                SELECT DISTINCT substr(scope, 9) AS session_id
+                FROM refs
+                WHERE scope LIKE 'session/%'
+                """
+            ).fetchall()
+            sessions.update(str(row["session_id"]) for row in rows)
+        if _table_exists(connection, "events"):
+            rows = connection.execute(
+                "SELECT DISTINCT session_id FROM events WHERE session_id IS NOT NULL"
+            ).fetchall()
+            sessions.update(str(row["session_id"]) for row in rows)
+        return sorted(session for session in sessions if session)
+    finally:
+        connection.close()
+
+
+def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
+    row = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (name,),
+    ).fetchone()
+    return row is not None
+
+
+def _column_exists(connection: sqlite3.Connection, table: str, column: str) -> bool:
+    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(str(row["name"]) == column for row in rows)
+
+
+def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
+    return {str(row["name"]) for row in rows}
 
 
 def warn_trace_failure_once(operation: str, exc: BaseException) -> None:
@@ -395,8 +438,15 @@ def _derivation_from_row(row: sqlite3.Row) -> Derivation:
 class SqliteStore(StoreBase):
     """Synchronous SQLite trace store using the standard library."""
 
-    def __init__(self, path: Path, *, read_only: bool = False) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        session_id: str | None = None,
+        read_only: bool = False,
+    ) -> None:
         self.path = path
+        self.session_id = session_id
         self.read_only = read_only
         if read_only:
             self.connection = sqlite3.connect(
@@ -414,6 +464,10 @@ class SqliteStore(StoreBase):
         self.connection.execute("PRAGMA busy_timeout=5000")
         if not read_only:
             self._init_schema()
+
+    @property
+    def scope(self) -> str:
+        return f"session/{self.session_id}" if self.session_id is not None else "global"
 
     @contextmanager
     def batch(self) -> Iterator[None]:
@@ -451,17 +505,27 @@ class SqliteStore(StoreBase):
                   links_json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS refs (
-                  name TEXT PRIMARY KEY,
-                  object_id TEXT NOT NULL
+                  scope TEXT NOT NULL DEFAULT 'global',
+                  name TEXT NOT NULL,
+                  object_id TEXT NOT NULL,
+                  PRIMARY KEY (scope, name)
                 );
                 CREATE TABLE IF NOT EXISTS derivations (
                   id TEXT PRIMARY KEY,
+                  session_id TEXT,
                   producer TEXT NOT NULL,
                   output_id TEXT NOT NULL,
                   input_ids_json TEXT NOT NULL,
                   params_json TEXT NOT NULL,
                   created_at REAL NOT NULL
                 );
+                """
+            )
+            self._migrate_legacy_schema()
+            self.connection.executescript(
+                """
+                CREATE INDEX IF NOT EXISTS derivations_session_output_id_idx
+                  ON derivations(session_id, output_id, created_at);
                 CREATE INDEX IF NOT EXISTS derivations_output_id_idx
                   ON derivations(output_id, created_at);
                 CREATE TABLE IF NOT EXISTS derivation_inputs (
@@ -476,6 +540,30 @@ class SqliteStore(StoreBase):
             )
             self.connection.commit()
             self._backfill_derivation_inputs()
+
+    def _migrate_legacy_schema(self) -> None:
+        """Upgrade old single-session trace schemas opened directly by tests."""
+        refs_columns = _table_columns(self.connection, "refs")
+        if refs_columns and "scope" not in refs_columns:
+            self.connection.executescript(
+                """
+                ALTER TABLE refs RENAME TO refs_old;
+                CREATE TABLE refs (
+                  scope TEXT NOT NULL DEFAULT 'global',
+                  name TEXT NOT NULL,
+                  object_id TEXT NOT NULL,
+                  PRIMARY KEY (scope, name)
+                );
+                INSERT OR IGNORE INTO refs(scope, name, object_id)
+                  SELECT 'global', name, object_id FROM refs_old;
+                DROP TABLE refs_old;
+                """
+            )
+        derivation_columns = _table_columns(self.connection, "derivations")
+        if derivation_columns and "session_id" not in derivation_columns:
+            self.connection.execute(
+                "ALTER TABLE derivations ADD COLUMN session_id TEXT"
+            )
 
     def _backfill_derivation_inputs(self) -> None:
         """Index pre-existing derivations whose inputs predate the table."""
@@ -555,17 +643,17 @@ class SqliteStore(StoreBase):
         with self._write_lock:
             self.connection.execute(
                 """
-                INSERT INTO refs (name, object_id) VALUES (?, ?)
-                ON CONFLICT(name) DO UPDATE SET object_id = excluded.object_id
+                INSERT INTO refs (scope, name, object_id) VALUES (?, ?, ?)
+                ON CONFLICT(scope, name) DO UPDATE SET object_id = excluded.object_id
                 """,
-                (name, object_id),
+                (self.scope, name, object_id),
             )
             self._commit()
 
     def get_ref(self, name: str) -> ObjectId | None:
         row = self.connection.execute(
-            "SELECT object_id FROM refs WHERE name = ?",
-            (name,),
+            "SELECT object_id FROM refs WHERE scope = ? AND name = ?",
+            (self.scope, name),
         ).fetchone()
         if row is None:
             return None
@@ -574,16 +662,18 @@ class SqliteStore(StoreBase):
     def record_derivation(self, derivation: Derivation) -> str:
         self._ensure_writable()
         stored = normalize_derivation(derivation)
-        id_value = derivation_id(stored)
+        id_value = self._derivation_id(stored)
         with self._write_lock:
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO derivations
-                  (id, producer, output_id, input_ids_json, params_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                  (id, session_id, producer, output_id, input_ids_json,
+                   params_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     id_value,
+                    self.session_id,
                     stored.producer,
                     stored.output_id,
                     canonical_json(list(stored.input_ids)),
@@ -596,14 +686,15 @@ class SqliteStore(StoreBase):
         return id_value
 
     def derivations_for_output(self, output_id: ObjectId) -> list[Derivation]:
+        session_filter, params = self._session_filter("output_id = ?", output_id)
         rows = self.connection.execute(
-            """
+            f"""
             SELECT producer, output_id, input_ids_json, params_json
             FROM derivations
-            WHERE output_id = ?
+            WHERE {session_filter}
             ORDER BY created_at, id
             """,
-            (output_id,),
+            params,
         ).fetchall()
         return [_derivation_from_row(row) for row in rows]
 
@@ -615,14 +706,15 @@ class SqliteStore(StoreBase):
         Exports need both fields to rebuild recency ordering elsewhere;
         the Derivation dataclass deliberately carries neither.
         """
+        session_filter, params = self._session_filter("output_id = ?", output_id)
         rows = self.connection.execute(
-            """
+            f"""
             SELECT id, producer, output_id, input_ids_json, params_json, created_at
             FROM derivations
-            WHERE output_id = ?
+            WHERE {session_filter}
             ORDER BY created_at, id
             """,
-            (output_id,),
+            params,
         ).fetchall()
         return [
             {
@@ -671,15 +763,22 @@ class SqliteStore(StoreBase):
         """Insert an exported derivation, preserving its original timestamp."""
         self._ensure_writable()
         stored = normalize_derivation(derivation)
+        stored_id = (
+            self._derivation_id(stored)
+            if self.session_id is not None
+            else derivation_id_value
+        )
         with self._write_lock:
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO derivations
-                  (id, producer, output_id, input_ids_json, params_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                  (id, session_id, producer, output_id, input_ids_json,
+                   params_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    derivation_id_value,
+                    stored_id,
+                    self.session_id,
                     stored.producer,
                     stored.output_id,
                     canonical_json(list(stored.input_ids)),
@@ -687,28 +786,39 @@ class SqliteStore(StoreBase):
                     created_at,
                 ),
             )
-            self._index_derivation_inputs(derivation_id_value, stored.input_ids)
+            self._index_derivation_inputs(stored_id, stored.input_ids)
             self._commit()
 
+    def _derivation_id(self, derivation: Derivation) -> str:
+        if self.session_id is None:
+            return derivation_id(derivation)
+        payload = {"session_id": self.session_id, **derivation_payload(derivation)}
+        digest = hashlib.sha256(canonical_json(payload).encode()).hexdigest()
+        return f"derivation:{digest}"
+
     def derivations_for_input(self, input_id: ObjectId) -> list[Derivation]:
+        session_filter, params = self._session_filter(
+            "derivation_inputs.input_id = ?", input_id
+        )
         rows = self.connection.execute(
-            """
+            f"""
             SELECT derivations.producer, derivations.output_id,
                    derivations.input_ids_json, derivations.params_json
             FROM derivations
             JOIN derivation_inputs
               ON derivation_inputs.derivation_id = derivations.id
-            WHERE derivation_inputs.input_id = ?
+            WHERE {session_filter}
             GROUP BY derivations.id
             ORDER BY derivations.created_at, derivations.id
             """,
-            (input_id,),
+            params,
         ).fetchall()
         return [_derivation_from_row(row) for row in rows]
 
     def refs(self) -> dict[str, ObjectId]:
         rows = self.connection.execute(
-            "SELECT name, object_id FROM refs ORDER BY name"
+            "SELECT name, object_id FROM refs WHERE scope = ? ORDER BY name",
+            (self.scope,),
         ).fetchall()
         return {str(row["name"]): str(row["object_id"]) for row in rows}
 
@@ -734,16 +844,37 @@ class SqliteStore(StoreBase):
     ) -> list[tuple[ObjectId, Object]]:
         kinds = (kind,) if isinstance(kind, str) else kind
         clauses: list[str] = []
-        params: list[Any] = []
+        join_params: list[Any] = []
+        where_params: list[Any] = []
+        join = "LEFT JOIN derivations ON derivations.output_id = objects.id"
+        created_at_expression = "derivations.created_at"
+        if self.session_id is not None:
+            join = """
+            JOIN (
+              SELECT output_id AS object_id, created_at
+              FROM derivations
+              WHERE session_id = ?
+              UNION ALL
+              SELECT derivation_inputs.input_id AS object_id,
+                     derivations.created_at AS created_at
+              FROM derivations
+              JOIN derivation_inputs
+                ON derivation_inputs.derivation_id = derivations.id
+              WHERE derivations.session_id = ?
+            ) AS session_objects ON session_objects.object_id = objects.id
+            """
+            join_params.extend([self.session_id, self.session_id])
+            created_at_expression = "session_objects.created_at"
         if kinds is not None:
             placeholders = ", ".join("?" for _ in kinds)
             clauses.append(f"objects.kind IN ({placeholders})")
-            params.extend(kinds)
+            where_params.extend(kinds)
         if pattern is not None:
             clauses.append(r"objects.data_json LIKE ? ESCAPE '\'")
-            params.append(f"%{escape_like(pattern)}%")
+            where_params.append(f"%{escape_like(pattern)}%")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         limit_clause = "LIMIT ?" if limit is not None else ""
+        params = [*join_params, *where_params]
         if limit is not None:
             params.append(limit)
         rows = self.connection.execute(
@@ -751,15 +882,50 @@ class SqliteStore(StoreBase):
             SELECT objects.id, objects.kind, objects.schema,
                    objects.data_json, objects.links_json
             FROM objects
-            LEFT JOIN derivations ON derivations.output_id = objects.id
+            {join}
             {where}
             GROUP BY objects.id
-            ORDER BY COALESCE(MAX(derivations.created_at), 0) DESC, objects.id DESC
+            ORDER BY COALESCE(MAX({created_at_expression}), 0) DESC, objects.id DESC
             {limit_clause}
             """,
             params,
         ).fetchall()
         return [(str(row["id"]), _object_from_row(row)) for row in rows]
+
+    def _session_filter(self, clause: str, *params: Any) -> tuple[str, tuple[Any, ...]]:
+        if self.session_id is None:
+            return clause, params
+        return f"session_id = ? AND {clause}", (self.session_id, *params)
+
+    def clear_session(self, session_id: str | None = None) -> None:
+        """Remove session-scoped refs and derivations without deleting objects."""
+        self._ensure_writable()
+        target = session_id or self.session_id
+        if target is None:
+            raise ValueError("session id is required")
+        with self._write_lock:
+            derivation_ids = [
+                str(row["id"])
+                for row in self.connection.execute(
+                    "SELECT id FROM derivations WHERE session_id = ?",
+                    (target,),
+                ).fetchall()
+            ]
+            if derivation_ids:
+                placeholders = ", ".join("?" for _ in derivation_ids)
+                self.connection.execute(
+                    f"DELETE FROM derivation_inputs WHERE derivation_id IN ({placeholders})",
+                    derivation_ids,
+                )
+            self.connection.execute(
+                "DELETE FROM derivations WHERE session_id = ?",
+                (target,),
+            )
+            self.connection.execute(
+                "DELETE FROM refs WHERE scope = ?",
+                (f"session/{target}",),
+            )
+            self._commit()
 
     def stats(self) -> TraceStats:
         row = self.connection.execute(

@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 EVENT_STORE_NAME = "events.sqlite3"
+ZETA_STORE_NAME = "zeta.sqlite3"
 
 
 @dataclass(frozen=True)
@@ -391,10 +392,10 @@ class SqliteEventStore:
 
 def event_store_path(root: Path | None = None) -> Path:
     if root is not None:
-        return root / EVENT_STORE_NAME
+        return root / ZETA_STORE_NAME
     state_dir = os.environ.get("ZETA_STATE_DIR")
     base = Path(state_dir).expanduser() if state_dir else Path.home() / ".zeta"
-    return base / EVENT_STORE_NAME
+    return base / ZETA_STORE_NAME
 
 
 def publish_event(draft: DraftEvent, *, sink: EventSink) -> AppendOutcome:

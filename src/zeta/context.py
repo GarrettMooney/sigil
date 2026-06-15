@@ -32,7 +32,7 @@ def default_context() -> ZetaContext:
     """Return the default process context for pure Zeta runtime calls."""
     from .events import SqliteEventStore, event_store_path
     from .tools.registry import registry as default_tool_registry
-    from .trace import DEFAULT_SQLITE_NAME, SqliteStore
+    from .trace import SqliteStore, zeta_sqlite_path
 
     state_dir = zeta_state_dir()
     session_id = os.environ.get("ZETA_SESSION_ID") or "default"
@@ -40,7 +40,7 @@ def default_context() -> ZetaContext:
     return ZetaContext(
         session_id=session_id,
         event_sink=SqliteEventStore(event_store_path(state_dir)),
-        trace_store=SqliteStore(session_dir / DEFAULT_SQLITE_NAME),
+        trace_store=SqliteStore(zeta_sqlite_path(state_dir), session_id=session_id),
         tool_registry=default_tool_registry,
         state_dir=state_dir,
         session_dir=session_dir,

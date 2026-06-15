@@ -50,6 +50,7 @@ from sigil.workflows import step as zeta_runner
 from zeta import agent as zeta_agent
 from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
+from zeta.events import Filter, SqliteEventStore, event_store_path
 from zeta.models import profiles as zeta_models
 from zeta.trace import PromptTrace
 
@@ -1820,7 +1821,7 @@ def test_session_clear_removes_zeta_continuity(
     result = CliRunner().invoke(sigil_cli, ["session", "clear"])
 
     assert result.exit_code == 0
-    assert "zeta-trace.sqlite3" in result.output
+    assert "zeta.sqlite3" in result.output
     assert not session_root.exists()
     assert current_sigil_timeline() == []
 
@@ -1961,7 +1962,17 @@ def ledger_effects() -> list[dict[str, Any]]:
 
 
 def zeta_tool_events() -> list[Any]:
-    return [event for event in read_events() if event.event_type == "zeta.tool.called"]
+    return [
+        event for event in read_zeta_events() if event.event_type == "zeta.tool.called"
+    ]
+
+
+def read_zeta_events() -> list[Any]:
+    store = SqliteEventStore(event_store_path())
+    try:
+        return store.list_events(Filter())
+    finally:
+        store.close()
 
 
 def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
@@ -2014,11 +2025,12 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
 
     assert code == 0
     events = read_events()
+    zeta_events = read_zeta_events()
     (prompt_event,) = [
         event for event in events if event.event_type == "sigil.prompt.submitted"
     ]
     (model_event,) = [
-        event for event in events if event.event_type == "zeta.model.called"
+        event for event in zeta_events if event.event_type == "zeta.model.called"
     ]
     (tool_event,) = zeta_tool_events()
     (turn_event,) = [

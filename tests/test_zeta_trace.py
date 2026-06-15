@@ -13,7 +13,6 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
-from sigil.state import trace_store_path
 from zeta import prompt as zeta_prompt
 from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
@@ -140,18 +139,17 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
 
 def seed_session_store(session_id: str, text: str) -> str:
     """Write one prompt object into a named session's trace store."""
-    path = zeta_trace.session_sqlite_path(session_id)
-    return seed_trace_store(path, text)
+    return seed_trace_store(zeta_trace.zeta_sqlite_path(), text, session_id=session_id)
 
 
 def seed_sigil_session_store(session_id: str, text: str) -> str:
     """Write one prompt object into a named Sigil session's trace store."""
-    return seed_trace_store(trace_store_path(session_id), text)
+    return seed_trace_store(zeta_trace.zeta_sqlite_path(), text, session_id=session_id)
 
 
-def seed_trace_store(path: Path, text: str) -> str:
+def seed_trace_store(path: Path, text: str, *, session_id: str | None = None) -> str:
     """Write one prompt object into a trace store path."""
-    store = zeta_trace.SqliteStore(path)
+    store = zeta_trace.SqliteStore(path, session_id=session_id)
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
@@ -189,7 +187,8 @@ def test_zeta_sqlite_store_opens_other_sessions_read_only(monkeypatch) -> None:
     prompt_id = seed_session_store("other", "from the other session")
 
     store = zeta_trace.SqliteStore(
-        zeta_trace.session_sqlite_path("other"),
+        zeta_trace.zeta_sqlite_path(),
+        session_id="other",
         read_only=True,
     )
 
@@ -198,7 +197,8 @@ def test_zeta_sqlite_store_opens_other_sessions_read_only(monkeypatch) -> None:
     with pytest.raises(sqlite3.OperationalError):
         store.put_object(zeta_trace.Object(kind="prompt", schema="v1", data={}))
     second = zeta_trace.SqliteStore(
-        zeta_trace.session_sqlite_path("other"),
+        zeta_trace.zeta_sqlite_path(),
+        session_id="other",
         read_only=True,
     )
     assert second is not store
@@ -1752,7 +1752,7 @@ def test_sigil_zeta_trace_tools_all_sessions_sorts_by_trace_time(
     tmp_path: Path,
 ) -> None:
     def seed_tool_result(session: str, call_id: str, created_at: float) -> None:
-        store = zeta_trace.SqliteStore(tmp_path / session / "zeta-trace.sqlite3")
+        store = zeta_trace.SqliteStore(tmp_path / "zeta.sqlite3", session_id=session)
         call_object_id = store.put_object(
             zeta_trace.Object(
                 kind="tool_call",
@@ -1786,13 +1786,12 @@ def test_sigil_zeta_trace_tools_all_sessions_sorts_by_trace_time(
     seed_tool_result("old", "call-old", 10.0)
     seed_tool_result("new", "call-new", 20.0)
 
-    monkeypatch.setattr(
-        "sigil.cli.trace.available_trace_session_ids", lambda: ["old", "new"]
-    )
+    monkeypatch.setattr("sigil.cli.trace.available_session_ids", lambda: ["old", "new"])
     monkeypatch.setattr(
         "sigil.cli.trace.open_session_store",
         lambda session: zeta_trace.SqliteStore(
-            tmp_path / session / "zeta-trace.sqlite3",
+            tmp_path / "zeta.sqlite3",
+            session_id=session,
             read_only=True,
         ),
     )
