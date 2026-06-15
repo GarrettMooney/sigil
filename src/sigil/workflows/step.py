@@ -176,6 +176,7 @@ def step(
                 ),
                 model_name=selected_model.model if selected_model is not None else None,
                 model_url=selected_model.url if selected_model is not None else None,
+                model_session_id=runtime_context.session_id,
                 thinking=(
                     selected_model.thinking if selected_model is not None else None
                 ),

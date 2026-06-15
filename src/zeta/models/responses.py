@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
-from typing import Any, Protocol
+from typing import Any
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
@@ -55,21 +55,9 @@ REASONING_EFFORT_BY_THINKING = {
     "high": "high",
 }
 DEFAULT_REASONING_EFFORT = "medium"
-_SESSION_ID_FACTORY: SessionIdFactory | None = None
-
-
-class SessionIdFactory(Protocol):
-    def __call__(self) -> str: ...
-
-
-def set_responses_session_id_factory(factory: SessionIdFactory | None) -> None:
-    global _SESSION_ID_FACTORY
-    _SESSION_ID_FACTORY = factory
 
 
 def responses_session_id() -> str:
-    if _SESSION_ID_FACTORY is not None:
-        return _SESSION_ID_FACTORY()
     return os.environ.get("ZETA_SESSION_ID") or "default"
 
 
@@ -281,10 +269,11 @@ def codex_completion_messages(
     stream_sink: ChatCompletionStreamSink | None = None,
     telemetry_sink: ModelTelemetrySink | None = None,
     thinking: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Request one assistant message from the Codex Responses backend."""
     model = codex_model_name(selected_model)
-    session = responses_session_id()
+    session = session_id or responses_session_id()
     body = responses_request_body(
         messages,
         model=model,
@@ -326,9 +315,10 @@ def codex_structured_output(
     max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
     selected_model: str | None = None,
     selected_url: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Request one schema-validated JSON object from the Codex backend."""
-    session = responses_session_id()
+    session = session_id or responses_session_id()
     body = responses_request_body(
         messages,
         model=codex_model_name(selected_model),

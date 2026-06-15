@@ -45,6 +45,7 @@ class AgentConfig:
     model_profile: str | None = None
     model_name: str | None = None
     model_url: str | None = None
+    model_session_id: str | None = None
     thinking: str | None = None
     model_api: str | None = None
 
@@ -259,6 +260,7 @@ def request_assistant_message(
             tool_choice=tool_choice,
             selected_model=config.model_name,
             selected_url=config.model_url,
+            session_id=config.model_session_id,
             stream_sink=turn_stream_sink if stream_sink is not None else None,
             telemetry_sink=model_telemetry.update,
             thinking=config.thinking,
@@ -793,6 +795,7 @@ def run_rpc_session(
             if isinstance(params.get("model"), str)
             else None,
             model_url=params.get("url") if isinstance(params.get("url"), str) else None,
+            model_session_id=runtime_context.session_id,
             thinking=params.get("thinking")
             if isinstance(params.get("thinking"), str)
             else None,

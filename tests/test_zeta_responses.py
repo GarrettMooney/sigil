@@ -378,7 +378,7 @@ def test_zeta_responses_codex_completion_round_trip(monkeypatch) -> None:
         "load_codex_credentials",
         lambda: codex_auth.CodexCredentials(access_token="tok-1", account_id="acct_1"),
     )
-    monkeypatch.setenv("SIGIL_SESSION_ID", "session-1")
+    monkeypatch.setenv("ZETA_SESSION_ID", "session-1")
     telemetry: dict[str, Any] = {}
 
     message = zeta_responses.codex_completion_messages(
