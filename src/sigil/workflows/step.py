@@ -37,9 +37,9 @@ from ..agent_io import (
     record_zeta_event,
     render_final_text,
 )
-from ..display.render import (
+from ..display.render import render_tool_result_summary
+from ..display.state import (
     PROGRESS_MODE_TRACE,
-    render_tool_result_summary,
     thinking_status_factory,
 )
 from ..display.summarize import render_handoff_lines

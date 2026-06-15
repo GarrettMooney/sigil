@@ -19,7 +19,7 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 import sigil
-import sigil.display.render as display_render
+import sigil.display.state as display_state
 from sigil import agent_io
 from sigil import handoff as sigil_handoff
 from sigil import ledger as sigil_ledger
@@ -1444,8 +1444,8 @@ def test_zeta_ask_workflow_streams_final_text_without_duplicate(
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
         stream_sink = required_stream_sink(kwargs)
-        assert isinstance(stream_sink, display_render.TraceAwareStreamRenderer)
-        assert isinstance(stream_sink.renderer, display_render.TerminalStreamRenderer)
+        assert isinstance(stream_sink, display_state.TraceAwareStreamRenderer)
+        assert isinstance(stream_sink.renderer, display_state.TerminalStreamRenderer)
         stream_sink.content_delta("streamed answer")
         return zeta_agent.AgentTurnResult(
             final_text="streamed answer",
@@ -1475,8 +1475,8 @@ def test_zeta_ask_workflow_streams_markdown_with_rich_for_tty(
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
         stream_sink = required_stream_sink(kwargs)
-        assert isinstance(stream_sink, display_render.TraceAwareStreamRenderer)
-        assert isinstance(stream_sink.renderer, display_render.RichStreamRenderer)
+        assert isinstance(stream_sink, display_state.TraceAwareStreamRenderer)
+        assert isinstance(stream_sink.renderer, display_state.RichStreamRenderer)
         stream_sink.content_delta("**streamed** answer")
         return zeta_agent.AgentTurnResult(
             final_text="streamed answer",

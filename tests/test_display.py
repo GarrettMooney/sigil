@@ -15,6 +15,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 import sigil.display.render as display_render
+import sigil.display.state as display_state
 import sigil.display.summarize as display_summarize
 from sigil.display.tty import IRIS, ITALIC, MUTED, RESET
 from sigil.protocols import (
@@ -86,7 +87,7 @@ def test_sigil_display_summarizes_tool_results() -> None:
 
 
 def test_sigil_display_classifies_progress_events() -> None:
-    event = display_render.progress_event_for_tool_result(
+    event = display_state.progress_event_for_tool_result(
         "read",
         {"ok": True, "metadata": {"path": "src/sigil/agent_io.py"}},
         {"path": "src/sigil/agent_io.py"},
@@ -96,7 +97,7 @@ def test_sigil_display_classifies_progress_events() -> None:
     assert event.phase == "Mapping repo"
     assert event.line == "✓ read src/sigil/agent_io.py · ok"
 
-    event = display_render.progress_event_for_tool_result(
+    event = display_state.progress_event_for_tool_result(
         "ls",
         {"ok": True, "metadata": {"path": "src/sigil", "entries": 3}},
         {"path": "src/sigil"},
@@ -106,7 +107,7 @@ def test_sigil_display_classifies_progress_events() -> None:
     assert event.phase == "Mapping repo"
     assert event.line == "✓ listed src/sigil · 3 entries"
 
-    event = display_render.progress_event_for_tool_result(
+    event = display_state.progress_event_for_tool_result(
         "ls",
         {
             "ok": True,
@@ -122,7 +123,7 @@ def test_sigil_display_classifies_progress_events() -> None:
     assert event is not None
     assert event.line == "✓ listed src/sigil (recursive) · 30 entries"
 
-    event = display_render.progress_event_for_tool_result(
+    event = display_state.progress_event_for_tool_result(
         "write",
         {"ok": True, "metadata": {"mode": "direct", "path": "notes.md"}},
         {"path": "notes.md"},
@@ -132,7 +133,7 @@ def test_sigil_display_classifies_progress_events() -> None:
     assert event.phase == "Applying changes"
     assert event.line == "+ notes.md"
 
-    event = display_render.progress_event_for_tool_result(
+    event = display_state.progress_event_for_tool_result(
         "bash",
         {"ok": False, "metadata": {"mode": "direct", "status": 2}},
         {"command": "uv run pytest"},
@@ -145,7 +146,7 @@ def test_sigil_display_classifies_progress_events() -> None:
 
 def test_sigil_display_terminal_digest_keeps_short_turns_compact() -> None:
     output = StringIO()
-    renderer = display_render.TerminalDigestRenderer(output, clock=lambda: 0.0)
+    renderer = display_state.TerminalDigestRenderer(output, clock=lambda: 0.0)
 
     renderer.observe_tool_call("read", {"path": "README.md"})
     renderer.observe_tool_result(
@@ -159,7 +160,7 @@ def test_sigil_display_terminal_digest_keeps_short_turns_compact() -> None:
 
 def test_sigil_display_terminal_digest_quotes_web_search_query() -> None:
     output = StringIO()
-    renderer = display_render.TerminalDigestRenderer(output, clock=lambda: 0.0)
+    renderer = display_state.TerminalDigestRenderer(output, clock=lambda: 0.0)
 
     renderer.observe_tool_call(
         "web_search",
@@ -178,7 +179,7 @@ def test_sigil_display_terminal_digest_quotes_web_search_query() -> None:
 
 def test_sigil_display_terminal_digest_has_no_empty_status_detail() -> None:
     output = StringIO()
-    renderer = display_render.TerminalDigestRenderer(output)
+    renderer = display_state.TerminalDigestRenderer(output)
 
     assert renderer.status_detail() == ""
 
@@ -186,7 +187,7 @@ def test_sigil_display_terminal_digest_has_no_empty_status_detail() -> None:
 def test_sigil_display_terminal_digest_switches_to_chapters() -> None:
     output = StringIO()
     now = 0.0
-    renderer = display_render.TerminalDigestRenderer(
+    renderer = display_state.TerminalDigestRenderer(
         output,
         clock=lambda: now,
         chapter_event_threshold=2,
@@ -214,7 +215,7 @@ def test_sigil_display_terminal_digest_switches_to_chapters() -> None:
 
 def test_sigil_display_terminal_digest_bounds_repeated_chapter_lines() -> None:
     output = StringIO()
-    renderer = display_render.TerminalDigestRenderer(
+    renderer = display_state.TerminalDigestRenderer(
         output,
         clock=lambda: 0.0,
         chapter_event_threshold=1,
@@ -237,7 +238,7 @@ def test_sigil_display_terminal_digest_bounds_repeated_chapter_lines() -> None:
 
 def test_sigil_display_terminal_digest_quiet_keeps_failures_and_final_digest() -> None:
     output = StringIO()
-    renderer = display_render.TerminalDigestRenderer(output, mode="quiet")
+    renderer = display_state.TerminalDigestRenderer(output, mode="quiet")
 
     renderer.observe_tool_call("read", {"path": "README.md"})
     renderer.observe_tool_result("read", {"ok": True})
@@ -263,7 +264,7 @@ def test_sigil_display_terminal_digest_quiet_keeps_failures_and_final_digest() -
 
 def test_sigil_display_terminal_digest_final_receipt_summarizes_effects() -> None:
     output = StringIO()
-    renderer = display_render.TerminalDigestRenderer(output, mode="compact")
+    renderer = display_state.TerminalDigestRenderer(output, mode="compact")
     renderer.observe_tool_call("bash", {"command": "uv run pytest"})
     renderer.observe_tool_result(
         "bash",
@@ -289,7 +290,7 @@ def test_sigil_display_terminal_digest_final_receipt_summarizes_effects() -> Non
 
 def test_sigil_display_terminal_digest_uses_reasoning_for_phase() -> None:
     output = StringIO()
-    renderer = display_render.TerminalDigestRenderer(
+    renderer = display_state.TerminalDigestRenderer(
         output,
         clock=lambda: 12.0,
         chapter_event_threshold=1,
@@ -308,7 +309,7 @@ def test_sigil_display_terminal_digest_uses_reasoning_for_phase() -> None:
 
 def test_sigil_display_terminal_digest_ignores_generic_reasoning_phase() -> None:
     output = StringIO()
-    renderer = display_render.TerminalDigestRenderer(
+    renderer = display_state.TerminalDigestRenderer(
         output,
         clock=lambda: 12.0,
         chapter_event_threshold=1,
@@ -326,7 +327,7 @@ def test_sigil_display_terminal_digest_ignores_generic_reasoning_phase() -> None
 
 
 def test_sigil_display_terminal_digest_keeps_specific_reasoning_phase() -> None:
-    assert display_render.reasoning_phase("Checking model configuration.") == (
+    assert display_state.reasoning_phase("Checking model configuration.") == (
         "Checking model configuration"
     )
 
@@ -337,7 +338,7 @@ def test_sigil_display_thinking_status_forwards_reasoning_to_progress(
     monkeypatch.setenv("SIGIL_THINKING_TRACE", "0")
     seen: list[str] = []
 
-    with display_render.ThinkingStatus(
+    with display_state.ThinkingStatus(
         StringIO(),
         enabled=False,
         reasoning_observer=seen.append,
@@ -377,7 +378,7 @@ def test_sigil_display_renders_tool_paths_relative_to_cwd(
 
 
 def test_sigil_display_summarizes_current_context_estimate() -> None:
-    line = display_render.context_usage_line(
+    line = display_state.context_usage_line(
         {
             "usage": {
                 "prompt_tokens": 18_432,
@@ -390,13 +391,13 @@ def test_sigil_display_summarizes_current_context_estimate() -> None:
 
     assert line == "context  [█░░░░░░░░░░░░░░░░░░░] 7%"
     assert (
-        display_render.context_usage_line(
+        display_state.context_usage_line(
             {"usage": {"prompt_tokens": 18_432, "completion_tokens": 391}}
         )
         == ""
     )
     assert (
-        display_render.context_usage_line(
+        display_state.context_usage_line(
             {"estimated_context_tokens": 200, "model_context_tokens": 1_000}
         )
         == "context  [████░░░░░░░░░░░░░░░░] 20% est."
@@ -404,7 +405,7 @@ def test_sigil_display_summarizes_current_context_estimate() -> None:
 
 
 def test_sigil_display_summarizes_context_from_total_tokens() -> None:
-    line = display_render.context_usage_line(
+    line = display_state.context_usage_line(
         {
             "usage": {"total_tokens": 18_823},
             "model_context_tokens": 262_144,
@@ -416,7 +417,7 @@ def test_sigil_display_summarizes_context_from_total_tokens() -> None:
 
 def test_sigil_display_context_usage_footer_estimates_tool_result_tokens() -> None:
     output = StringIO()
-    footer = display_render.ContextUsageFooter(output)
+    footer = display_state.ContextUsageFooter(output)
     base_telemetry = {
         "usage": {"prompt_tokens": 100, "completion_tokens": 0},
         "model_context_tokens": 1_000,
@@ -426,8 +427,8 @@ def test_sigil_display_context_usage_footer_estimates_tool_result_tokens() -> No
     footer.update(base_telemetry)
     footer.update_for_tool_result(None, result)
 
-    estimated_tokens = 100 + display_render.estimated_tool_result_context_tokens(result)
-    assert footer.current_line() == display_render.context_usage_line(
+    estimated_tokens = 100 + display_state.estimated_tool_result_context_tokens(result)
+    assert footer.current_line() == display_state.context_usage_line(
         {
             "estimated_context_tokens": estimated_tokens,
             "model_context_tokens": 1_000,
@@ -446,7 +447,7 @@ def test_sigil_display_context_usage_footer_estimates_tool_result_tokens() -> No
 
 
 def test_sigil_display_tool_result_telemetry_replaces_stale_estimates() -> None:
-    footer = display_render.ContextUsageFooter(StringIO())
+    footer = display_state.ContextUsageFooter(StringIO())
     stale_result = {"ok": True, "content": [{"type": "text", "text": "x" * 400}]}
     fresh_result = {"ok": True, "content": [{"type": "text", "text": "y" * 40}]}
     fresh_telemetry = {
@@ -463,18 +464,18 @@ def test_sigil_display_tool_result_telemetry_replaces_stale_estimates() -> None:
     footer.update_for_tool_result(None, stale_result)
     footer.update_for_tool_result(fresh_telemetry, fresh_result)
 
-    expected_tokens = 420 + display_render.estimated_tool_result_context_tokens(
+    expected_tokens = 420 + display_state.estimated_tool_result_context_tokens(
         fresh_result
     )
-    assert footer.current_line() == display_render.context_usage_line(
+    assert footer.current_line() == display_state.context_usage_line(
         {
             "estimated_context_tokens": expected_tokens,
             "model_context_tokens": 1_000,
         }
     )
-    assert display_render.context_usage_line({"model_context_tokens": 262_144}) == ""
+    assert display_state.context_usage_line({"model_context_tokens": 262_144}) == ""
     assert (
-        display_render.context_usage_line(
+        display_state.context_usage_line(
             {
                 "usage": {"prompt_tokens": 18_432},
                 "model_context_tokens": 262_144,
@@ -493,7 +494,7 @@ def test_sigil_display_context_usage_footer_is_ephemeral_for_tty(
         "model_context_tokens": 262_144,
     }
     output = TtyBuffer()
-    footer = display_render.ContextUsageFooter(output)
+    footer = display_state.ContextUsageFooter(output)
 
     assert footer.update(telemetry)
     assert not output.getvalue().endswith("\n")
@@ -511,7 +512,7 @@ def test_sigil_display_context_usage_footer_prints_final_only_for_non_tty() -> N
         "model_context_tokens": 262_144,
     }
     output = StringIO()
-    footer = display_render.ContextUsageFooter(output)
+    footer = display_state.ContextUsageFooter(output)
 
     assert not footer.update(telemetry)
     assert output.getvalue() == ""
@@ -521,18 +522,18 @@ def test_sigil_display_context_usage_footer_prints_final_only_for_non_tty() -> N
 
 def test_sigil_display_stream_renderer_factory_selects_output_mode() -> None:
     assert isinstance(
-        display_render.create_stream_renderer(StringIO()),
-        display_render.TerminalStreamRenderer,
+        display_state.create_stream_renderer(StringIO()),
+        display_state.TerminalStreamRenderer,
     )
     assert isinstance(
-        display_render.create_stream_renderer(TtyBuffer()),
-        display_render.RichStreamRenderer,
+        display_state.create_stream_renderer(TtyBuffer()),
+        display_state.RichStreamRenderer,
     )
 
 
 def test_sigil_display_rich_stream_renderer_renders_markdown() -> None:
     output = TtyBuffer()
-    renderer = display_render.RichStreamRenderer(output, refresh_interval=0)
+    renderer = display_state.RichStreamRenderer(output, refresh_interval=0)
 
     renderer.content_delta("Hello ")
     renderer.content_delta("**world**")
@@ -545,7 +546,7 @@ def test_sigil_display_rich_stream_renderer_renders_markdown() -> None:
 
 def test_sigil_display_rich_stream_renderer_wraps_with_left_padding() -> None:
     output = TtyBuffer()
-    renderer = display_render.RichStreamRenderer(
+    renderer = display_state.RichStreamRenderer(
         output,
         width=24,
         refresh_interval=0,
@@ -565,7 +566,7 @@ def test_sigil_display_rich_stream_renderer_wraps_with_left_padding() -> None:
 
 def test_sigil_display_rich_stream_renderer_finalizes_trace_boundaries() -> None:
     output = TtyBuffer()
-    renderer = display_render.RichStreamRenderer(output, refresh_interval=0)
+    renderer = display_state.RichStreamRenderer(output, refresh_interval=0)
 
     renderer.content_delta("First")
     renderer.ensure_trace_boundary()
@@ -590,7 +591,7 @@ def test_sigil_display_thinking_status_updates_and_clears(monkeypatch) -> None:
     def clock() -> float:
         return now
 
-    with display_render.ThinkingStatus(output, interval=60, clock=clock) as status:
+    with display_state.ThinkingStatus(output, interval=60, clock=clock) as status:
         now = 10.4
         status.refresh()
 
@@ -604,7 +605,7 @@ def test_sigil_display_thinking_status_is_muted(monkeypatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
     output = TtyBuffer()
 
-    with display_render.ThinkingStatus(output, interval=60):
+    with display_state.ThinkingStatus(output, interval=60):
         pass
 
     assert f"{MUTED}  prefill 0s{RESET}" in (output.getvalue())
@@ -616,7 +617,7 @@ def test_sigil_display_thinking_status_includes_context_detail(
     monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
 
-    with display_render.ThinkingStatus(
+    with display_state.ThinkingStatus(
         output,
         interval=60,
         detail=lambda: "context  [█░░░░░░░░░░░░░░░░░░░] 7%",
@@ -633,7 +634,7 @@ def test_sigil_display_thinking_status_includes_context_detail(
 def test_sigil_display_thinking_status_skips_non_tty() -> None:
     output = StringIO()
 
-    with display_render.ThinkingStatus(output):
+    with display_state.ThinkingStatus(output):
         pass
 
     assert output.getvalue() == ""
@@ -643,7 +644,7 @@ def test_sigil_display_thinking_status_renders_reasoning_tail(monkeypatch) -> No
     monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
 
-    with display_render.ThinkingStatus(output, interval=60, clock=lambda: 0.0) as s:
+    with display_state.ThinkingStatus(output, interval=60, clock=lambda: 0.0) as s:
         s.reasoning_delta("the user wants a summary\nso check ")
         s.reasoning_delta("the recent diff")
         s.refresh()
@@ -659,7 +660,7 @@ def test_sigil_display_thinking_status_shows_prefill_before_reasoning(
     monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
 
-    with display_render.ThinkingStatus(output, interval=60, clock=lambda: 0.0) as s:
+    with display_state.ThinkingStatus(output, interval=60, clock=lambda: 0.0) as s:
         assert "  prefill 0s" in output.getvalue()
         assert "thinking 0s" not in output.getvalue()
         s.reasoning_delta("checking the request")
@@ -673,7 +674,7 @@ def test_sigil_display_thinking_status_tail_keeps_last_lines(monkeypatch) -> Non
     monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
 
-    with display_render.ThinkingStatus(
+    with display_state.ThinkingStatus(
         output, interval=60, clock=lambda: 0.0, reasoning_lines=3
     ) as s:
         s.reasoning_delta("\n".join(f"step-{i}" for i in range(1, 9)))
@@ -691,7 +692,7 @@ def test_sigil_display_thinking_status_truncates_long_reasoning_lines(
     monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
 
-    with display_render.ThinkingStatus(
+    with display_state.ThinkingStatus(
         output, interval=60, clock=lambda: 0.0, width=20
     ) as s:
         s.reasoning_delta("a reasoning line far longer than the terminal width")
@@ -710,7 +711,7 @@ def test_sigil_display_thinking_tail_renders_iris_italic(monkeypatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
     output = TtyBuffer()
 
-    with display_render.ThinkingStatus(output, interval=60, clock=lambda: 0.0) as s:
+    with display_state.ThinkingStatus(output, interval=60, clock=lambda: 0.0) as s:
         s.reasoning_delta("pondering")
         s.refresh()
 
@@ -723,7 +724,7 @@ def test_sigil_display_thinking_status_repaints_on_new_reasoning(monkeypatch) ->
     monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
 
-    with display_render.ThinkingStatus(output, interval=60, clock=lambda: 0.0) as s:
+    with display_state.ThinkingStatus(output, interval=60, clock=lambda: 0.0) as s:
         s.reasoning_delta("first thought")
         s.refresh()
         s.reasoning_delta("\nsecond thought")
@@ -741,7 +742,7 @@ def test_sigil_display_thinking_status_erases_reasoning_without_summary(
     output = TtyBuffer()
     now = 0.0
 
-    with display_render.ThinkingStatus(output, interval=60, clock=lambda: now) as s:
+    with display_state.ThinkingStatus(output, interval=60, clock=lambda: now) as s:
         s.reasoning_delta("hmm")
         now = 12.3
         s.refresh()
@@ -758,7 +759,7 @@ def test_sigil_display_thinking_status_no_summary_without_reasoning(
     monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
 
-    with display_render.ThinkingStatus(output, interval=60):
+    with display_state.ThinkingStatus(output, interval=60):
         pass
 
     assert "thought for" not in output.getvalue()
@@ -769,7 +770,7 @@ def test_sigil_display_thinking_status_no_summary_on_error_exit(monkeypatch) -> 
     output = TtyBuffer()
 
     with pytest.raises(RuntimeError):
-        with display_render.ThinkingStatus(output, interval=60) as s:
+        with display_state.ThinkingStatus(output, interval=60) as s:
             s.reasoning_delta("hmm")
             raise RuntimeError("aborted")
 
@@ -784,7 +785,7 @@ def test_sigil_display_thinking_trace_opt_out(monkeypatch) -> None:
     output = TtyBuffer()
     now = 0.0
 
-    with display_render.ThinkingStatus(output, interval=60, clock=lambda: now) as s:
+    with display_state.ThinkingStatus(output, interval=60, clock=lambda: now) as s:
         s.reasoning_delta("secret reasoning")
         now = 5.0
         s.refresh()

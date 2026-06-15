@@ -34,7 +34,8 @@ from zeta.trace import (
     warn_trace_failure_once,
 )
 
-from .display.render import (
+from .display.render import render_tool_start
+from .display.state import (
     PROGRESS_MODE_TRACE,
     ContextUsageFooter,
     TerminalDigestRenderer,
@@ -42,7 +43,6 @@ from .display.render import (
     TraceRenderState,
     create_stream_renderer,
     progress_mode_from_env,
-    render_tool_start,
 )
 from .ledger import append_effect_record, append_turn_record, ledger_event_record
 from .protocols import (
