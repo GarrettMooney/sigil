@@ -563,8 +563,8 @@ def test_sigil_display_thinking_status_updates_and_clears(monkeypatch) -> None:
         status.refresh()
 
     text = output.getvalue()
-    assert "\n\r\x1b[2K  thinking 0s" in text
-    assert "\n\r\x1b[2K  thinking 10s" in text
+    assert "\n\r\x1b[2K  prefill 0s" in text
+    assert "\n\r\x1b[2K  prefill 10s" in text
     assert text.endswith("\r\x1b[2K\x1b[1A\r\x1b[2K")
 
 
@@ -575,7 +575,7 @@ def test_sigil_display_thinking_status_is_muted(monkeypatch) -> None:
     with display_render.ThinkingStatus(output, interval=60):
         pass
 
-    assert f"{MUTED}  thinking 0s{RESET}" in (output.getvalue())
+    assert f"{MUTED}  prefill 0s{RESET}" in (output.getvalue())
 
 
 def test_sigil_display_thinking_status_includes_context_detail(
@@ -592,7 +592,7 @@ def test_sigil_display_thinking_status_includes_context_detail(
         pass
 
     assert (
-        "\n\r\x1b[2K  context  [█░░░░░░░░░░░░░░░░░░░] 7%\n  thinking 0s"
+        "\n\r\x1b[2K  context  [█░░░░░░░░░░░░░░░░░░░] 7%\n  prefill 0s"
         in output.getvalue()
     )
     assert output.getvalue().endswith("\r\x1b[2K\x1b[1A\r\x1b[2K\x1b[1A\r\x1b[2K")
@@ -619,6 +619,22 @@ def test_sigil_display_thinking_status_renders_reasoning_tail(monkeypatch) -> No
     text = output.getvalue()
     assert "  the user wants a summary\n" in text
     assert "  so check the recent diff\n\n  thinking 0s" in text
+
+
+def test_sigil_display_thinking_status_shows_prefill_before_reasoning(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    output = TtyBuffer()
+
+    with display_render.ThinkingStatus(output, interval=60, clock=lambda: 0.0) as s:
+        assert "  prefill 0s" in output.getvalue()
+        assert "thinking 0s" not in output.getvalue()
+        s.reasoning_delta("checking the request")
+        s.refresh()
+
+    text = output.getvalue()
+    assert "  checking the request\n\n  thinking 0s" in text
 
 
 def test_sigil_display_thinking_status_tail_keeps_last_lines(monkeypatch) -> None:

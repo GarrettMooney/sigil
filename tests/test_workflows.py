@@ -768,7 +768,7 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
     trace_text = visible_terminal_text(output.getvalue())
     assert "✓ read README.md · 1 lines" in trace_text
     assert "mapping repo · 1 events · last: README.md" in trace_text
-    assert "thinking 0s" in trace_text
+    assert "prefill 0s" in trace_text
 
 
 def test_zeta_agent_step_prints_final_answer_after_direct_edit(

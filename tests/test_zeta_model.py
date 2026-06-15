@@ -993,6 +993,39 @@ def test_zeta_model_context_tokens_falls_back_to_selected_model(
     assert tokens == 65_536
 
 
+def test_zeta_model_context_tokens_reads_model_context_length(
+    monkeypatch,
+) -> None:
+    zeta_model._MODEL_CONTEXT_TOKENS_CACHE.clear()
+
+    def fake_metadata(
+        path: str,
+        *,
+        selected_url: str | None = None,
+    ) -> dict[str, Any] | None:
+        del selected_url
+        if path == "/props":
+            return {"error": {"message": "unknown endpoint"}}
+        return {
+            "data": [
+                {
+                    "id": "deepseek-v4-flash",
+                    "context_length": 100_000,
+                    "top_provider": {"context_length": 100_000},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(zeta_model, "request_model_metadata", fake_metadata)
+
+    tokens = zeta_model.model_context_tokens(
+        "http://127.0.0.1:8000/v1/chat/completions",
+        "deepseek-v4-flash",
+    )
+
+    assert tokens == 100_000
+
+
 def test_zeta_model_context_tokens_returns_none_when_unavailable(
     monkeypatch,
 ) -> None:

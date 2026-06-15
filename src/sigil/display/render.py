@@ -998,11 +998,12 @@ class ThinkingStatus:
         """Stream one reasoning delta into the rolling tail."""
         if text and self.reasoning_observer is not None:
             self.reasoning_observer(text)
+        if text:
+            self.reasoning_seen = True
         if not text or not self.enabled or not self.trace_enabled:
             return
         with self.lock:
             self.reasoning_parts.append(text)
-            self.reasoning_seen = True
             self.reasoning_dirty = True
 
     def run(self) -> None:
@@ -1036,8 +1037,9 @@ class ThinkingStatus:
             lines.append(iris_italic(tail_line, enabled=color))
         if tail:
             lines.append("")
+        phase = "thinking" if self.reasoning_seen else "prefill"
         lines.append(
-            muted(thinking_status_text(seconds, self.left_padding), enabled=color)
+            muted(status_wait_text(phase, seconds, self.left_padding), enabled=color)
         )
         return "\n".join(lines)
 
@@ -1077,8 +1079,8 @@ class ThinkingStatus:
             print(text, file=self.output, end="", flush=True)
 
 
-def thinking_status_text(seconds: int, left_padding: int = 0) -> str:
-    return f"{' ' * left_padding}thinking {seconds}s"
+def status_wait_text(phase: str, seconds: int, left_padding: int = 0) -> str:
+    return f"{' ' * left_padding}{phase} {seconds}s"
 
 
 def thinking_trace_enabled(env: Mapping[str, str] | None = None) -> bool:

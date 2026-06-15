@@ -258,6 +258,14 @@ def context_tokens_from_model_entry(model: dict[str, Any]) -> int | None:
             tokens = positive_int(value.get("n_ctx"))
             if tokens is not None:
                 return tokens
+    tokens = positive_int(model.get("context_length"))
+    if tokens is not None:
+        return tokens
+    top_provider = model.get("top_provider")
+    if isinstance(top_provider, dict):
+        tokens = positive_int(top_provider.get("context_length"))
+        if tokens is not None:
+            return tokens
     return positive_int(model.get("n_ctx"))
 
 
