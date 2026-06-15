@@ -4,6 +4,8 @@ from __future__ import annotations
 
 
 def zeta_context_for_sigil():
+    configure_zeta_for_sigil()
+
     from zeta.context import ZetaContext
     from zeta.events import event_store
     from zeta.tools.registry import registry

@@ -13,8 +13,6 @@ from typing import BinaryIO, Protocol
 
 import click
 
-from zeta.timeline import current_timeline
-
 from ..handoff import matching_pending_handoff
 from ..session import record_turn
 from ._base import (
@@ -175,7 +173,14 @@ def write_handoff_resume(path: Path | None, command: str, status: int) -> None:
     """
     if path is None or status == EXIT_INTERRUPTED:
         return
-    if not matching_pending_handoff(command, current_timeline()):
+    from zeta.timeline import current_timeline
+
+    from .. import zeta_context_for_sigil
+
+    if not matching_pending_handoff(
+        command,
+        current_timeline(runtime_context=zeta_context_for_sigil()),
+    ):
         return
     path.write_text(command + "\n", encoding="utf-8")
 
