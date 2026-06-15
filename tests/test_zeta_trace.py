@@ -359,7 +359,7 @@ def test_sigil_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
         )
     )
     store.set_ref("prompt/current", prompt_id)
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     runner = CliRunner()
     show = runner.invoke(sigil_cli, ["trace", "show", "--json", prompt_id])
@@ -388,7 +388,7 @@ def test_sigil_zeta_trace_cli_smoke_with_sqlite_store(
     store.record_derivation(
         zeta_trace.Derivation(producer="unit:test", output_id=prompt_id)
     )
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(sigil_cli, ["trace", "prompts"])
 
@@ -1309,7 +1309,7 @@ def prompt_diff_store() -> tuple[zeta_trace.InMemoryStore, dict[str, str]]:
 
 def test_sigil_zeta_trace_diff_reports_component_changes(monkeypatch) -> None:
     store, ids = prompt_diff_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(
         sigil_cli, ["trace", "diff", ids["prompt_a"], ids["prompt_b"]]
@@ -1334,7 +1334,7 @@ def test_sigil_zeta_trace_diff_reports_component_changes(monkeypatch) -> None:
 
 def test_sigil_zeta_trace_diff_stat_keeps_one_line_per_change(monkeypatch) -> None:
     store, ids = prompt_diff_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(
         sigil_cli,
@@ -1349,7 +1349,7 @@ def test_sigil_zeta_trace_diff_stat_keeps_one_line_per_change(monkeypatch) -> No
 
 def test_sigil_zeta_trace_diff_requires_prompt_objects(monkeypatch) -> None:
     store, ids = prompt_diff_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(
         sigil_cli, ["trace", "diff", ids["prompt_a"], ids["system"]]
@@ -1361,7 +1361,7 @@ def test_sigil_zeta_trace_diff_requires_prompt_objects(monkeypatch) -> None:
 
 def test_sigil_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
     captured: dict[str, object] = {}
 
     def fake_chat(messages, **kwargs):
@@ -1393,7 +1393,7 @@ def test_sigil_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
 
 def test_sigil_zeta_trace_replay_diffs_old_and_new(monkeypatch) -> None:
     store, _, prompt_id, _ = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
     monkeypatch.setattr(
         "sigil.cli.trace.chat_completion_messages",
         lambda messages, **kwargs: {"role": "assistant", "content": "a fresh answer"},
@@ -1408,7 +1408,7 @@ def test_sigil_zeta_trace_replay_diffs_old_and_new(monkeypatch) -> None:
 
 def test_sigil_zeta_trace_replay_renders_tool_call_answers(monkeypatch) -> None:
     store, _, prompt_id, _ = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
     monkeypatch.setattr(
         "sigil.cli.trace.chat_completion_messages",
         lambda messages, **kwargs: {
@@ -1432,7 +1432,7 @@ def test_sigil_zeta_trace_replay_renders_tool_call_answers(monkeypatch) -> None:
 
 def test_sigil_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
     store, _, prompt_id, _ = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
     captured: dict[str, object] = {}
 
     def fake_chat(messages, **kwargs):
@@ -1469,7 +1469,7 @@ def test_sigil_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
 
 def test_sigil_zeta_trace_log_defaults_to_the_narrative_kinds(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(sigil_cli, ["trace", "log"])
 
@@ -1486,7 +1486,7 @@ def test_sigil_zeta_trace_log_defaults_to_the_narrative_kinds(monkeypatch) -> No
 
 def test_sigil_zeta_trace_log_widens_with_kind_and_all(monkeypatch) -> None:
     store, component_id, _, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
     runner = CliRunner()
 
     only_components = runner.invoke(
@@ -1559,7 +1559,7 @@ def test_sigil_zeta_trace_tools_json_joins_calls_and_results(monkeypatch) -> Non
             links=(failed_call_id,),
         )
     )
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--json"])
 
@@ -1612,7 +1612,7 @@ def test_sigil_zeta_trace_tools_failed_filters_json(monkeypatch) -> None:
             links=(failed_call_id,),
         )
     )
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--failed", "--json"])
 
@@ -1657,7 +1657,7 @@ def test_sigil_zeta_trace_tools_successful_filters_json(monkeypatch) -> None:
             },
         )
     )
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--successful", "--json"])
 
@@ -1741,7 +1741,7 @@ def zeta_trace_short(object_id: str) -> str:
 
 def test_sigil_zeta_trace_tree_walks_producers_by_default(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(sigil_cli, ["trace", "tree", answer_id])
 
@@ -1757,7 +1757,7 @@ def test_sigil_zeta_trace_tree_walks_producers_by_default(monkeypatch) -> None:
 
 def test_sigil_zeta_trace_tree_walks_consumers_with_down(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(sigil_cli, ["trace", "tree", "--down", component_id])
 
@@ -1772,7 +1772,7 @@ def test_sigil_zeta_trace_tree_walks_consumers_with_down(monkeypatch) -> None:
 
 def test_sigil_zeta_trace_tree_respects_depth(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(sigil_cli, ["trace", "tree", "--depth", "1", answer_id])
 
@@ -1783,7 +1783,7 @@ def test_sigil_zeta_trace_tree_respects_depth(monkeypatch) -> None:
 
 def test_sigil_zeta_trace_show_renders_humans_first(monkeypatch) -> None:
     store, component_id, prompt_id, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(sigil_cli, ["trace", "show", prompt_id])
 
@@ -1805,7 +1805,7 @@ def test_sigil_zeta_trace_show_renders_humans_first(monkeypatch) -> None:
 
 def test_sigil_zeta_trace_show_renders_message_bodies(monkeypatch) -> None:
     store, _, _, answer_id = narrative_log_store()
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     result = CliRunner().invoke(sigil_cli, ["trace", "show", answer_id])
 
@@ -1822,7 +1822,7 @@ def test_sigil_zeta_trace_cli_resolves_refs_and_prefixes(monkeypatch) -> None:
     )
     store.set_ref("prompt/current", prompt_id)
     digest_prefix = prompt_id.removeprefix("sha256:")[:8]
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     runner = CliRunner()
     by_ref = runner.invoke(sigil_cli, ["trace", "show", "--json", "prompt/current"])
@@ -1843,7 +1843,7 @@ def test_sigil_zeta_trace_cli_reports_ambiguous_and_unknown_ids(
     obj = zeta_trace.Object(kind="prompt", schema="v1", data={"n": 1})
     store._objects["sha256:aaaa1111"] = obj
     store._objects["sha256:aaaa2222"] = obj
-    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     runner = CliRunner()
     ambiguous = runner.invoke(sigil_cli, ["trace", "show", "aaaa"])

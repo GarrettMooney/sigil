@@ -18,6 +18,7 @@ from _zeta_helpers import (
 )
 from click.testing import CliRunner
 
+import sigil
 import sigil.display.render as display_render
 from sigil import agent_io
 from sigil import handoff as sigil_handoff
@@ -2205,11 +2206,23 @@ def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
 
 
 def test_turn_bridge_failure_does_not_break_the_step(monkeypatch) -> None:
-    def broken_store() -> zeta_trace.SqliteStore:
-        raise RuntimeError("trace store unavailable")
+    class BrokenContext:
+        def __init__(self, base) -> None:
+            self.session_id = base.session_id
+            self.event_sink = base.event_sink
+            self.tool_registry = base.tool_registry
+            self.state_dir = base.state_dir
+            self.session_dir = base.session_dir
+
+        @property
+        def trace_store(self) -> zeta_trace.SqliteStore:
+            raise RuntimeError("trace store unavailable")
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(agent_io, "default_store", broken_store)
+    base_context = sigil.zeta_context_for_sigil()
+    monkeypatch.setattr(
+        sigil, "zeta_context_for_sigil", lambda: BrokenContext(base_context)
+    )
     monkeypatch.setattr(
         zeta_runner,
         "run_agent_turn",

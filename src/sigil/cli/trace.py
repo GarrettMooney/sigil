@@ -88,10 +88,16 @@ def scoped_store(ctx: click.Context) -> Store:
     """
     scope = trace_session_scope(ctx)
     if scope is None:
-        return default_store()
+        return current_store()
     store = open_session_store(scope)
     ctx.call_on_close(store.close)
     return store
+
+
+def current_store() -> Store:
+    from .. import zeta_context_for_sigil
+
+    return zeta_context_for_sigil().trace_store
 
 
 def open_session_store(session_id: str) -> SqliteStore:
@@ -499,7 +505,7 @@ def render_trace_object(
     store: Store | None = None,
 ) -> list[str] | None:
     """Render one trace object as human-readable lines."""
-    active_store = store or default_store()
+    active_store = store or current_store()
     obj = active_store.get_object(object_id)
     if obj is None:
         return None
@@ -624,7 +630,7 @@ def render_trace_tree(
     store: Store | None = None,
 ) -> list[str]:
     """Render the derivation tree as indented lines with producer edges."""
-    active_store = store or default_store()
+    active_store = store or current_store()
     lines: list[str] = []
     visited: set[ObjectId] = {object_id}
 
@@ -675,7 +681,7 @@ def render_trace_tree(
 def resolve_cli_object_id(token: str, *, store: Store | None = None) -> ObjectId:
     """Resolve a CLI id token, mapping resolver errors onto CLI errors."""
     try:
-        return resolve_object_id(store or default_store(), token)
+        return resolve_object_id(store or current_store(), token)
     except AmbiguousIdError as error:
         candidates = "\n  ".join(error.candidates)
         raise click.ClickException(
@@ -1042,7 +1048,7 @@ def get_trace_object(
     *,
     store: Store | None = None,
 ) -> dict[str, Any] | None:
-    active_store = store or default_store()
+    active_store = store or current_store()
     obj = active_store.get_object(object_id)
     if obj is None:
         return None
@@ -1061,7 +1067,7 @@ def list_trace_closure(
     *,
     store: Store | None = None,
 ) -> list[dict[str, Any]]:
-    active_store = store or default_store()
+    active_store = store or current_store()
     closure = active_store.graph_closure([object_id])
     return [
         {"id": closure_id, "kind": obj.kind, "schema": obj.schema}
@@ -1071,11 +1077,11 @@ def list_trace_closure(
 
 
 def list_trace_refs(*, store: Store | None = None) -> dict[str, ObjectId]:
-    return dict((store or default_store()).refs())
+    return dict((store or current_store()).refs())
 
 
 def list_trace_prompts(*, store: Store | None = None) -> list[dict[str, Any]]:
-    active_store = store or default_store()
+    active_store = store or current_store()
     prompts = []
     for prompt_id in active_store.prompt_object_ids():
         obj = active_store.get_object(prompt_id)

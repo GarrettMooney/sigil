@@ -31,7 +31,6 @@ from zeta.trace import (
     Derivation,
     Object,
     PromptTrace,
-    default_store,
     warn_trace_failure_once,
 )
 
@@ -122,12 +121,14 @@ class TurnLedger:
     def __init__(
         self,
         *,
+        runtime_context: ZetaContext,
         workflow: str,
         objective: str,
         allowed_tools: Iterable[str],
         staged: bool,
         agent: dict[str, str] | None = None,
     ) -> None:
+        self.runtime_context = runtime_context
         self.turn_id = str(uuid.uuid4())
         self.workflow = workflow
         self.objective = objective
@@ -204,7 +205,12 @@ class TurnLedger:
             record["caused_by"] = caused_by
         event = append_turn_record(record)
         payload = ledger_event_record(event)
-        record_turn_trace_object(payload, self.effects, self.effect_object_ids)
+        record_turn_trace_object(
+            payload,
+            self.effects,
+            self.effect_object_ids,
+            runtime_context=self.runtime_context,
+        )
         return payload
 
     def cost(self) -> dict[str, int]:
@@ -231,6 +237,8 @@ def record_turn_trace_object(
     payload: dict[str, Any],
     effects: list[dict[str, Any]],
     effect_object_ids: list[str],
+    *,
+    runtime_context: ZetaContext,
 ) -> None:
     """Bridge one turn record into the session trace graph, fail-open.
 
@@ -240,10 +248,7 @@ def record_turn_trace_object(
     `turn/<turn_id>` ref makes ledger ids resolve like trace ids.
     """
     try:
-        from . import configure_zeta_for_sigil
-
-        configure_zeta_for_sigil(responses=True)
-        store = default_store()
+        store = runtime_context.trace_store
         prompt_ids = payload.get("prompt_object_ids")
         links: list[str] = []
         for object_id in [
@@ -537,6 +542,7 @@ def run_zeta_rpc_session(
     )
     execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
     ledger = TurnLedger(
+        runtime_context=runtime_context,
         workflow=workflow,
         objective=objective,
         allowed_tools=enabled_tools,

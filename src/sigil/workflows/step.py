@@ -124,6 +124,7 @@ def step(
         tool_registry=runtime_context.tool_registry,
     )
     ledger = TurnLedger(
+        runtime_context=runtime_context,
         workflow=workflow,
         objective=objective,
         allowed_tools=enabled_tools,
