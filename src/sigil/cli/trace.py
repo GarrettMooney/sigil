@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import difflib
 import json
 import sqlite3
 from collections.abc import Callable
@@ -12,44 +11,49 @@ from typing import Any
 import click
 
 from zeta.events import EVENT_STORE_NAME, Event, SqliteEventStore, row_to_event
-from zeta.models import (
-    ModelSelection,
-    chat_completion_messages,
-    resolve_active_model,
-    resolve_model_profile,
-)
+from zeta.models import chat_completion_messages
 from zeta.prompt import reconstructed_prompt_request
 from zeta.trace import (
     DEFAULT_SQLITE_NAME,
-    AmbiguousIdError,
     Derivation,
     Object,
-    ObjectId,
     SqliteStore,
     Store,
-    UnknownIdError,
     UnknownSessionError,
     available_session_ids,
-    derivation_payload,
-    object_payload,
-    resolve_object_id,
     trace_state_dir,
-    warn_trace_failure_once,
     zeta_sqlite_path,
 )
 
-from ..display.summarize import (
-    assistant_trace_summary,
-    estimated_prompt_tokens,
-    short_trace_id,
-    text_content,
-    trace_object_summary,
+from ..trace.diff import render_prompt_diff
+from ..trace.query import (
+    get_trace_object,
+    list_trace_closure,
+    list_trace_prompts,
+    list_trace_refs,
+    resolve_cli_object_id,
+    resolve_cli_prompt,
+)
+from ..trace.render import (
+    object_listing_lines,
+    render_trace_object,
+    render_trace_tree,
+)
+from ..trace.replay import (
+    answer_display_text,
+    latest_model_answer,
+    record_replay,
+    render_replay,
+    replay_model_selection,
+)
+from ..trace.tools import (
+    tool_call_rows,
+    tool_failure_detail,
 )
 from ._base import cli, examples
 from ._shared import pretty_print_json
 
 NARRATIVE_KINDS = ("prompt", "assistant_message")
-BODY_LINE_LIMIT = 8
 
 
 @cli.group(
@@ -424,10 +428,7 @@ def trace_tools(
         status = "ok" if row.get("ok") is True else "failed"
         if row.get("ok") is None:
             status = "pending"
-        error = row.get("error")
-        detail = ""
-        if isinstance(error, dict) and error:
-            detail = f" · {error.get('code')}: {error.get('message')}"
+        detail = tool_failure_detail(row)
         session = row.get("session")
         prefix = f"{session}  " if isinstance(session, str) and session else ""
         click.echo(
@@ -530,120 +531,6 @@ def scope_tool_rows(
     return rows[:limit]
 
 
-def tool_call_rows(
-    store: Store,
-    *,
-    session: str | None,
-    failed: bool,
-    successful: bool,
-    limit: int,
-) -> list[dict[str, Any]]:
-    results = tool_results_by_call_id(store)
-    rows: list[dict[str, Any]] = []
-    for call_object_id, call in store.objects(("tool_call",), 10_000):
-        row = tool_call_row(
-            session=session,
-            call_object_id=call_object_id,
-            call=call,
-            result_record=results.get(tool_call_id(call)),
-        )
-        row["created_at"] = tool_row_created_at(
-            store,
-            result_object_id=row.get("tool_result_object_id"),
-            call_object_id=call_object_id,
-        )
-        if failed and row.get("ok") is not False:
-            continue
-        if successful and row.get("ok") is not True:
-            continue
-        rows.append(row)
-        if len(rows) >= limit:
-            break
-    return rows
-
-
-def tool_results_by_call_id(
-    store: Store,
-) -> dict[str, tuple[ObjectId, Object]]:
-    results: dict[str, tuple[ObjectId, Object]] = {}
-    for result_object_id, result in store.objects(("tool_result",), 10_000):
-        call_id = tool_call_id(result)
-        if call_id and call_id not in results:
-            results[call_id] = (result_object_id, result)
-    return results
-
-
-def tool_call_row(
-    *,
-    session: str | None,
-    call_object_id: ObjectId,
-    call: Object,
-    result_record: tuple[ObjectId, Object] | None,
-) -> dict[str, Any]:
-    call_data = call.data if isinstance(call.data, dict) else {}
-    result_object_id = None
-    result_data: dict[str, Any] = {}
-    result_payload: dict[str, Any] | None = None
-    if result_record is not None:
-        result_object_id, result = result_record
-        result_data = result.data if isinstance(result.data, dict) else {}
-        payload = result_data.get("result")
-        if isinstance(payload, dict):
-            result_payload = payload
-    name = str(result_data.get("name") or call_data.get("name") or "")
-    row: dict[str, Any] = {
-        "session": session,
-        "tool_call_id": tool_call_id(call),
-        "name": name,
-        "input": call_data.get("input")
-        if isinstance(call_data.get("input"), dict)
-        else {},
-        "ok": result_payload.get("ok") if result_payload is not None else None,
-        "tool_call_object_id": call_object_id,
-        "tool_result_object_id": result_object_id,
-    }
-    if result_payload is not None:
-        row["result"] = result_payload
-        error = result_payload.get("error")
-        if isinstance(error, dict):
-            row["error"] = error
-    return row
-
-
-def tool_call_id(obj: Object) -> str:
-    data = obj.data if isinstance(obj.data, dict) else {}
-    return str(data.get("tool_call_id") or "")
-
-
-def tool_row_created_at(
-    store: Store,
-    *,
-    result_object_id: Any,
-    call_object_id: ObjectId,
-) -> float | None:
-    if not isinstance(store, SqliteStore):
-        return None
-    object_id_value = result_object_id if isinstance(result_object_id, str) else None
-    records = store.derivation_records_for_output(object_id_value or call_object_id)
-    if not records and object_id_value is not None:
-        records = store.derivation_records_for_output(call_object_id)
-    if not records:
-        return None
-    return max(float(record["created_at"]) for record in records)
-
-
-def object_listing_lines(
-    store: Store,
-    listed: list[tuple[ObjectId, Object]],
-) -> list[str]:
-    """Render store objects as one-line listings."""
-    lines = []
-    for object_id_value, obj in listed:
-        summary = trace_object_summary(obj, get_object=store.get_object)
-        lines.append(format_trace_line(object_id_value, obj.kind, summary))
-    return lines
-
-
 def scope_listing_lines(
     ctx: click.Context,
     all_sessions: bool,
@@ -666,11 +553,6 @@ def scope_listing_lines(
         finally:
             store.close()
     return lines
-
-
-def format_trace_line(object_id: ObjectId, kind: str, summary: str) -> str:
-    """Format the one-line listing shared by trace log and tree nodes."""
-    return f"{short_trace_id(object_id)}  {kind:<19} {summary}".rstrip()
 
 
 @trace_group.command(
@@ -702,80 +584,6 @@ def trace_show(ctx: click.Context, object_id: str, json_output: bool) -> int:
     for line in lines:
         click.echo(line)
     return 0
-
-
-def render_trace_object(
-    object_id: ObjectId,
-    *,
-    store: Store | None = None,
-) -> list[str] | None:
-    """Render one trace object as human-readable lines."""
-    active_store = store or current_store()
-    obj = active_store.get_object(object_id)
-    if obj is None:
-        return None
-    summary = trace_object_summary(obj, get_object=active_store.get_object)
-    lines = [
-        format_trace_line(object_id, obj.kind, summary),
-        f"id      {object_id}",
-        f"schema  {obj.schema}",
-    ]
-    body = trace_object_body(obj, active_store)
-    if body:
-        lines.extend(["", *body])
-    produced = active_store.derivations_for_output(object_id)
-    if produced:
-        lines.extend(["", "produced by"])
-        for derivation in produced:
-            inputs = " ".join(
-                short_trace_id(input_id) for input_id in derivation.input_ids
-            )
-            lines.append(
-                f"  {derivation.producer}" + (f" ← {inputs}" if inputs else "")
-            )
-    consumed = active_store.derivations_for_input(object_id)
-    if consumed:
-        lines.extend(["", "consumed by"])
-        for derivation in consumed:
-            output = active_store.get_object(derivation.output_id)
-            kind = output.kind if output is not None else "?"
-            lines.append(
-                f"  {derivation.producer} → "
-                f"{short_trace_id(derivation.output_id)} {kind}"
-            )
-    return lines
-
-
-def trace_object_body(obj: Object, store: Store) -> list[str]:
-    """Render the kind-specific body lines for a trace object."""
-    if obj.kind == "prompt":
-        lines = ["components"]
-        for link in obj.links:
-            component = store.get_object(link)
-            if component is None:
-                lines.append(f"  {short_trace_id(link)}  (missing)")
-                continue
-            summary = trace_object_summary(component, get_object=store.get_object)
-            lines.append("  " + format_trace_line(link, component.kind, summary))
-        return lines
-    text = trace_object_text(obj).strip()
-    if not text:
-        return []
-    body = text.splitlines()[:BODY_LINE_LIMIT]
-    if len(text.splitlines()) > BODY_LINE_LIMIT:
-        body.append("…")
-    return body
-
-
-def trace_object_text(obj: Object) -> str:
-    """Return the primary text carried by a trace object, if any."""
-    message = obj.data.get("message")
-    if isinstance(message, dict):
-        return str(message.get("content") or "")
-    result = obj.data.get("result")
-    if isinstance(result, dict):
-        return text_content(result)
-    return ""
 
 
 @trace_group.command(
@@ -827,85 +635,6 @@ def trace_tree(ctx: click.Context, object_id: str, down: bool, depth: int) -> in
     return 0
 
 
-def render_trace_tree(
-    object_id: ObjectId,
-    *,
-    down: bool,
-    depth: int,
-    store: Store | None = None,
-) -> list[str]:
-    """Render the derivation tree as indented lines with producer edges."""
-    active_store = store or current_store()
-    lines: list[str] = []
-    visited: set[ObjectId] = {object_id}
-
-    def node_line(node_id: ObjectId) -> str:
-        obj = active_store.get_object(node_id)
-        if obj is None:
-            return f"{short_trace_id(node_id)}  (missing)"
-        summary = trace_object_summary(obj, get_object=active_store.get_object)
-        return format_trace_line(node_id, obj.kind, summary)
-
-    def walk(node_id: ObjectId, prefix: str, remaining: int) -> None:
-        if remaining <= 0:
-            return
-        if down:
-            edges = [
-                (derivation.producer, [derivation.output_id])
-                for derivation in active_store.derivations_for_input(node_id)
-            ]
-        else:
-            edges = [
-                (derivation.producer, list(derivation.input_ids))
-                for derivation in active_store.derivations_for_output(node_id)
-            ]
-        for edge_index, (producer, child_ids) in enumerate(edges):
-            last_edge = edge_index == len(edges) - 1
-            lines.append(f"{prefix}{'└─' if last_edge else '├─'} {producer}")
-            child_prefix = prefix + ("   " if last_edge else "│  ")
-            for child_index, child_id in enumerate(child_ids):
-                last_child = child_index == len(child_ids) - 1
-                connector = "└─" if last_child else "├─"
-                seen = child_id in visited
-                marker = " …" if seen else ""
-                lines.append(f"{child_prefix}{connector} {node_line(child_id)}{marker}")
-                if seen:
-                    continue
-                visited.add(child_id)
-                walk(
-                    child_id,
-                    child_prefix + ("   " if last_child else "│  "),
-                    remaining - 1,
-                )
-
-    lines.append(node_line(object_id))
-    walk(object_id, "", depth)
-    return lines
-
-
-def resolve_cli_object_id(token: str, *, store: Store | None = None) -> ObjectId:
-    """Resolve a CLI id token, mapping resolver errors onto CLI errors."""
-    try:
-        return resolve_object_id(store or current_store(), token)
-    except AmbiguousIdError as error:
-        candidates = "\n  ".join(error.candidates)
-        raise click.ClickException(
-            f"ambiguous trace id '{token}' matches:\n  {candidates}"
-        ) from error
-    except UnknownIdError as error:
-        raise click.ClickException(f"trace object not found: {token}") from error
-
-
-def resolve_cli_prompt(store: Store, token: str) -> tuple[ObjectId, Object]:
-    """Resolve a CLI id token to a prompt object, or fail with its kind."""
-    object_id = resolve_cli_object_id(token, store=store)
-    obj = store.get_object(object_id)
-    if obj is None or obj.kind != "prompt":
-        kind = obj.kind if obj is not None else "missing"
-        raise click.ClickException(f"not a prompt: {token} ({kind})")
-    return object_id, obj
-
-
 @trace_group.command(
     "diff",
     epilog=examples(
@@ -935,97 +664,6 @@ def trace_diff(ctx: click.Context, old_id: str, new_id: str, stat_only: bool) ->
     for line in render_prompt_diff(store, old, new, stat_only=stat_only):
         click.echo(line)
     return 0
-
-
-def render_prompt_diff(
-    store: Store,
-    old: tuple[ObjectId, Object],
-    new: tuple[ObjectId, Object],
-    *,
-    stat_only: bool,
-) -> list[str]:
-    """Render the component-level changes between two prompts."""
-    old_id, old_prompt = old
-    new_id, new_prompt = new
-    shared = set(old_prompt.links) & set(new_prompt.links)
-    removed = [link for link in old_prompt.links if link not in shared]
-    added = [link for link in new_prompt.links if link not in shared]
-    changed = paired_component_changes(store, removed, added)
-    paired_old = {pair[0] for pair in changed}
-    paired_new = {pair[1] for pair in changed}
-    lines = [f"prompts {short_trace_id(old_id)} → {short_trace_id(new_id)}"]
-    for old_component_id, new_component_id in changed:
-        lines.append(
-            f"~ {component_kind(store, old_component_id):<19} "
-            f"{short_trace_id(old_component_id)} → {short_trace_id(new_component_id)}"
-        )
-        if not stat_only:
-            lines.extend(component_text_diff(store, old_component_id, new_component_id))
-    for link in removed:
-        if link not in paired_old:
-            lines.append(f"- {component_change_line(store, link)}")
-    for link in added:
-        if link not in paired_new:
-            lines.append(f"+ {component_change_line(store, link)}")
-    lines.append(f"= {len(shared)} unchanged")
-    return lines
-
-
-def paired_component_changes(
-    store: Store,
-    removed: list[ObjectId],
-    added: list[ObjectId],
-) -> list[tuple[ObjectId, ObjectId]]:
-    """Pair removed and added components of the same kind, in order."""
-    added_by_kind: dict[str, list[ObjectId]] = {}
-    for link in added:
-        added_by_kind.setdefault(component_kind(store, link), []).append(link)
-    pairs = []
-    for link in removed:
-        candidates = added_by_kind.get(component_kind(store, link))
-        if candidates:
-            pairs.append((link, candidates.pop(0)))
-    return pairs
-
-
-def component_kind(store: Store, object_id: ObjectId) -> str:
-    obj = store.get_object(object_id)
-    return obj.kind if obj is not None else "(missing)"
-
-
-def component_change_line(store: Store, object_id: ObjectId) -> str:
-    obj = store.get_object(object_id)
-    if obj is None:
-        return f"(missing) {short_trace_id(object_id)}"
-    summary = trace_object_summary(obj, get_object=store.get_object)
-    return f"{obj.kind:<19} {short_trace_id(object_id)}  {summary}".rstrip()
-
-
-def component_text_diff(
-    store: Store,
-    old_id: ObjectId,
-    new_id: ObjectId,
-) -> list[str]:
-    return [
-        f"  {line}"
-        for line in difflib.unified_diff(
-            component_message_text(store, old_id).splitlines(),
-            component_message_text(store, new_id).splitlines(),
-            fromfile=short_trace_id(old_id),
-            tofile=short_trace_id(new_id),
-            lineterm="",
-        )
-    ]
-
-
-def component_message_text(store: Store, object_id: ObjectId) -> str:
-    obj = store.get_object(object_id)
-    if obj is None:
-        return ""
-    message = obj.data.get("message")
-    if not isinstance(message, dict):
-        return ""
-    return str(message.get("content") or "")
 
 
 @trace_group.command(
@@ -1097,117 +735,6 @@ def trace_replay(
     return 0
 
 
-def replay_model_selection(model_profile: str | None) -> ModelSelection:
-    """Return the model a replay should use, honoring --model."""
-    if model_profile is None:
-        from ..state import session_dir
-
-        return resolve_active_model(session_dir=session_dir()).selection
-    selection = resolve_model_profile(model_profile)
-    if selection is None:
-        raise click.ClickException(f"unknown model profile: {model_profile}")
-    return selection
-
-
-def latest_model_answer(
-    store: Store,
-    prompt_id: ObjectId,
-) -> tuple[ObjectId, str] | None:
-    """Return the newest recorded assistant answer for a prompt."""
-    answer_ids = [
-        derivation.output_id
-        for derivation in store.derivations_for_input(prompt_id)
-        if derivation.producer == "ModelResponse"
-    ]
-    for answer_id in reversed(answer_ids):
-        obj = store.get_object(answer_id)
-        if obj is None:
-            continue
-        message = obj.data.get("message")
-        if isinstance(message, dict):
-            return answer_id, answer_display_text(message)
-    return None
-
-
-def answer_display_text(message: dict[str, Any]) -> str:
-    """Return an assistant message's text, or its tool calls when text-free."""
-    content = str(message.get("content") or "")
-    if content:
-        return content
-    return assistant_trace_summary({"message": message})
-
-
-def record_replay(
-    store: Store,
-    prompt_id: ObjectId,
-    message: dict[str, Any],
-    selection: ModelSelection,
-) -> ObjectId | None:
-    """Record the replay answer in the trace graph, fail-open."""
-    try:
-        with store.batch():
-            replay_id = store.put_object(
-                Object(
-                    kind="assistant_message",
-                    schema="zeta.assistant_output.v1",
-                    data={"message": message},
-                    links=(prompt_id,),
-                )
-            )
-            store.record_derivation(
-                Derivation(
-                    producer="ModelReplay",
-                    output_id=replay_id,
-                    input_ids=(prompt_id,),
-                    params={"profile": selection.profile, "model": selection.model},
-                )
-            )
-        return replay_id
-    except Exception as exc:
-        warn_trace_failure_once("trace_replay", exc)
-        return None
-
-
-def render_replay(
-    prompt_id: ObjectId,
-    payload_verified: bool,
-    selection: ModelSelection,
-    original: tuple[ObjectId, str] | None,
-    replay_id: ObjectId | None,
-    replay_content: str,
-    *,
-    diff_output: bool,
-) -> list[str]:
-    """Render the replay outcome as plain forensic lines."""
-    verification = "verified" if payload_verified else "differs from the recorded hash"
-    lines = [
-        f"prompt   {short_trace_id(prompt_id)}  payload {verification}",
-        f"model    {selection.profile} -> {selection.model} @ {selection.url}",
-        "",
-    ]
-    original_label = short_trace_id(original[0]) if original else "(none recorded)"
-    original_content = original[1] if original else ""
-    replay_label = short_trace_id(replay_id) if replay_id else "(unrecorded)"
-    if diff_output:
-        lines.extend(
-            difflib.unified_diff(
-                original_content.splitlines(),
-                replay_content.splitlines(),
-                fromfile=f"original {original_label}",
-                tofile=f"replay {replay_label}",
-                lineterm="",
-            )
-        )
-        return lines
-    lines.append(f"original {original_label}")
-    if original_content:
-        lines.append(original_content)
-    lines.extend(["", f"replay   {replay_label}"])
-    if replay_content:
-        lines.append(replay_content)
-    return lines
-
-
 @trace_group.command(
     "refs",
     epilog=examples("sigil trace refs"),
@@ -1246,59 +773,3 @@ def trace_prompts(ctx: click.Context) -> int:
         }
     )
     return 0
-
-
-def get_trace_object(
-    object_id: ObjectId,
-    *,
-    store: Store | None = None,
-) -> dict[str, Any] | None:
-    active_store = store or current_store()
-    obj = active_store.get_object(object_id)
-    if obj is None:
-        return None
-    return {
-        "id": object_id,
-        "object": object_payload(obj),
-        "derivations": [
-            derivation_payload(derivation)
-            for derivation in active_store.derivations_for_output(object_id)
-        ],
-    }
-
-
-def list_trace_closure(
-    object_id: ObjectId,
-    *,
-    store: Store | None = None,
-) -> list[dict[str, Any]]:
-    active_store = store or current_store()
-    closure = active_store.graph_closure([object_id])
-    return [
-        {"id": closure_id, "kind": obj.kind, "schema": obj.schema}
-        for closure_id, obj in closure.items()
-        if closure_id != object_id
-    ]
-
-
-def list_trace_refs(*, store: Store | None = None) -> dict[str, ObjectId]:
-    return dict((store or current_store()).refs())
-
-
-def list_trace_prompts(*, store: Store | None = None) -> list[dict[str, Any]]:
-    active_store = store or current_store()
-    prompts = []
-    for prompt_id in active_store.prompt_object_ids():
-        obj = active_store.get_object(prompt_id)
-        if obj is None:
-            continue
-        prompts.append(
-            {
-                "id": prompt_id,
-                "components": len(obj.links),
-                "estimated_tokens": estimated_prompt_tokens(
-                    obj.links, active_store.get_object
-                ),
-            }
-        )
-    return prompts

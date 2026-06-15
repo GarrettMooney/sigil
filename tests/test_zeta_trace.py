@@ -1511,7 +1511,7 @@ def test_sigil_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
 
     monkeypatch.setattr("sigil.cli.trace.chat_completion_messages", fake_chat)
     monkeypatch.setattr(
-        "sigil.cli.trace.resolve_model_profile",
+        "sigil.trace.replay.resolve_model_profile",
         lambda name: (
             zeta_models.ModelSelection(
                 profile=name,
@@ -1638,9 +1638,11 @@ def test_sigil_zeta_trace_tools_json_joins_calls_and_results(monkeypatch) -> Non
     assert [row["tool_call_id"] for row in rows] == ["call-fail", "call-ok"]
     assert rows[0]["ok"] is False
     assert rows[0]["error"]["code"] == "read-failed"
+    assert rows[0]["error"]["message"] == "missing.md"
     assert rows[0]["tool_call_object_id"] == failed_call_id
     assert rows[0]["tool_result_object_id"] == failed_result_id
     assert rows[1]["ok"] is True
+    assert "error" not in rows[1]
     assert rows[1]["input"] == {"path": "README.md"}
 
 
@@ -1691,6 +1693,135 @@ def test_sigil_zeta_trace_tools_failed_filters_json(monkeypatch) -> None:
     assert len(rows) == 1
     assert rows[0]["tool_call_id"] == "call-fail"
     assert rows[0]["ok"] is False
+
+
+def test_sigil_zeta_trace_tools_failed_json_recovers_content_error(
+    monkeypatch,
+) -> None:
+    store = zeta_trace.InMemoryStore()
+    call_id = store.put_object(
+        zeta_trace.Object(
+            kind="tool_call",
+            schema="zeta.tool_call.v1",
+            data={"tool_call_id": "call-fail", "name": "grep", "input": {}},
+        )
+    )
+    store.put_object(
+        zeta_trace.Object(
+            kind="tool_result",
+            schema="zeta.tool_result.v1",
+            data={
+                "tool_call_id": "call-fail",
+                "name": "grep",
+                "result": {
+                    "ok": False,
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "rg: src tests: No such file or directory" * 8,
+                        }
+                    ],
+                    "metadata": {"status": 2},
+                },
+            },
+            links=(call_id,),
+        )
+    )
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+
+    result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--failed", "--json"])
+
+    assert result.exit_code == 0
+    rows = json.loads(result.output)
+    assert rows[0]["error"]["code"] == "grep-failed"
+    assert rows[0]["error"]["message"].startswith(
+        "rg: src tests: No such file or directory"
+    )
+
+
+def test_sigil_zeta_trace_tools_failed_json_recovers_bash_error(
+    monkeypatch,
+) -> None:
+    store = zeta_trace.InMemoryStore()
+    call_id = store.put_object(
+        zeta_trace.Object(
+            kind="tool_call",
+            schema="zeta.tool_call.v1",
+            data={"tool_call_id": "call-fail", "name": "bash", "input": {}},
+        )
+    )
+    store.put_object(
+        zeta_trace.Object(
+            kind="tool_result",
+            schema="zeta.tool_result.v1",
+            data={
+                "tool_call_id": "call-fail",
+                "name": "bash",
+                "result": {
+                    "ok": False,
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "$ run something\nexit 1\nstderr:\nTraceback\nValueError: bad input",
+                        }
+                    ],
+                    "metadata": {"status": 1},
+                },
+            },
+            links=(call_id,),
+        )
+    )
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+
+    result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--failed", "--json"])
+
+    assert result.exit_code == 0
+    rows = json.loads(result.output)
+    assert rows[0]["error"] == {
+        "code": "bash-failed",
+        "message": "ValueError: bad input",
+    }
+
+
+def test_sigil_zeta_trace_tools_failed_plain_output_uses_uniform_error(
+    monkeypatch,
+) -> None:
+    store = zeta_trace.InMemoryStore()
+    call_id = store.put_object(
+        zeta_trace.Object(
+            kind="tool_call",
+            schema="zeta.tool_call.v1",
+            data={"tool_call_id": "call-fail", "name": "bash", "input": {}},
+        )
+    )
+    store.put_object(
+        zeta_trace.Object(
+            kind="tool_result",
+            schema="zeta.tool_result.v1",
+            data={
+                "tool_call_id": "call-fail",
+                "name": "bash",
+                "result": {
+                    "ok": False,
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "$ run something\nexit 1\nstderr:\nTraceback\nValueError: bad input",
+                        }
+                    ],
+                    "metadata": {"status": 1},
+                },
+            },
+            links=(call_id,),
+        )
+    )
+    monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
+
+    result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--failed"])
+
+    assert result.exit_code == 0
+    assert "failed · bash-failed: ValueError: bad input" in result.output
+    assert "$ run something" not in result.output
 
 
 def test_sigil_zeta_trace_tools_successful_filters_json(monkeypatch) -> None:
