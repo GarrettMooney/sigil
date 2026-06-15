@@ -7,7 +7,7 @@ def zeta_context_for_sigil():
     configure_zeta_for_sigil()
 
     from zeta.context import ZetaContext
-    from zeta.events import event_store
+    from zeta.events import EVENT_STORE_NAME, SqliteEventStore
     from zeta.tools.registry import registry
     from zeta.trace import default_store
 
@@ -17,7 +17,7 @@ def zeta_context_for_sigil():
     active_session = session_id()
     return ZetaContext(
         session_id=active_session,
-        event_sink=event_store(),
+        event_sink=SqliteEventStore(state_dir() / EVENT_STORE_NAME),
         trace_store=default_store(),
         tool_registry=registry,
         state_dir=state_dir(),
