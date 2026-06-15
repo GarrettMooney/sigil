@@ -24,9 +24,14 @@ from sigil.cli import cli
 from sigil.tools import ensure_builtin_tools_registered
 from zeta import agent as zeta_agent
 from zeta import cli as zeta_cli
+from zeta import context as zeta_context
+from zeta import events as zeta_events
 from zeta import prompt as zeta_prompt
+from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
 from zeta.models import chat_completions as zeta_model
+from zeta.tools.base import ToolImpl, ToolSpec
+from zeta.tools.registry import ToolRegistry
 
 ensure_builtin_tools_registered()
 
@@ -149,6 +154,63 @@ def test_zeta_rpc_cli_runs_pure_session_without_sigil_turn(monkeypatch) -> None:
     assert messages[-1]["result"]["final_text"] == "done"
 
 
+def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    trace_store = zeta_trace.InMemoryStore()
+    context = zeta_context.ZetaContext(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=trace_store,
+        tool_registry=ToolRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+    published: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {"content": "done"},
+    )
+
+    result = zeta_agent.run_rpc_session(
+        {"objective": "answer", "tools": [], "context": ""},
+        publish_event=published.append,
+        runtime_context=context,
+    )
+
+    assert result == {"outcome": "answered", "final_text": "done"}
+    assert [event["session"] for event in published] == [
+        "ctx-session",
+        "ctx-session",
+    ]
+    assert [
+        event.event_type for event in event_store.list_events(zeta_events.Filter())
+    ] == ["zeta.model.called"]
+    assert trace_store.get_ref(zeta_timeline.event_head_ref("ctx-session")) is not None
+
+
+def test_zeta_rpc_registers_client_tool_on_server_registry() -> None:
+    registry = ToolRegistry()
+    server = zeta_agent.JsonRpcServer(StringIO(), StringIO(), tool_registry=registry)
+
+    registered = server.register_client_tools(
+        [
+            {
+                "name": "ctx_read",
+                "description": "Read through the client.",
+                "schema": {"type": "object"},
+                "effects": ["read"],
+            }
+        ]
+    )
+
+    assert registered == ["ctx_read"]
+    assert registry.get("ctx_read") is not None
+    assert zeta_agent.tool_registry.get("ctx_read") is None
+
+
 def test_zeta_rpc_registers_client_tools_and_calls_client() -> None:
     input_stream = StringIO(
         json.dumps(
@@ -243,6 +305,68 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
     assert response["id"] == 1
     assert response["result"]["outcome"] == "answered"
     assert response["result"]["turn_id"]
+
+
+def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "ctx_echo",
+        ToolImpl(
+            ToolSpec(
+                "ctx_echo",
+                "Echo text.",
+                {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                    "additionalProperties": False,
+                },
+                effects=("read",),
+            ),
+            lambda params: {
+                "ok": True,
+                "content": [{"type": "text", "text": str(params["text"])}],
+            },
+        ),
+    )
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "ctx_echo",
+                            "arguments": '{"text":"hello"}',
+                        },
+                    }
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: next(responses),
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "echo",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("ctx_echo",), max_turns=2),
+        tool_registry=registry,
+    )
+
+    assert zeta_agent.tool_registry.get("ctx_echo") is None
+    assert result.final_text == "done"
+    assert [event.get("name") for event in result.events if "name" in event] == [
+        "ctx_echo",
+        "ctx_echo",
+    ]
 
 
 def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:

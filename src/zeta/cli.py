@@ -7,6 +7,7 @@ import sys
 import click
 
 from .agent import JsonRpcServer, run_rpc_session
+from .context import default_context
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -20,10 +21,16 @@ def rpc(stdio: bool) -> int:
     """Serve the Zeta JSON-RPC protocol."""
     if not stdio:
         raise click.UsageError("only --stdio is supported")
-    server = JsonRpcServer(sys.stdin, sys.stdout)
+    runtime_context = default_context()
+    server = JsonRpcServer(
+        sys.stdin,
+        sys.stdout,
+        tool_registry=runtime_context.tool_registry,
+    )
     server.session_runner = lambda params: run_rpc_session(
         params,
         publish_event=server.publish_event,
+        runtime_context=runtime_context,
     )
     server.serve()
     return 0

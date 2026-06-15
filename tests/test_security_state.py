@@ -362,8 +362,8 @@ def test_event_store_path_is_separate_from_trace_object_store() -> None:
     assert path == Path(tmp) / "events.sqlite3"
 
 
-def test_sqlite_event_store_deduplicates_idempotency_keys() -> None:
-    store = SqliteEventStore.in_memory()
+def test_sqlite_event_store_deduplicates_idempotency_keys(tmp_path: Path) -> None:
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
     draft = DraftEvent(
         event_type="sigil.turn.completed",
         source="test",
@@ -385,8 +385,8 @@ def test_sqlite_event_store_deduplicates_idempotency_keys() -> None:
 
 
 class RecordingEventSink:
-    def __init__(self) -> None:
-        self.store = SqliteEventStore.in_memory()
+    def __init__(self, path: Path) -> None:
+        self.store = SqliteEventStore(path)
         self.drafts: list[DraftEvent] = []
 
     def accept(self, draft: DraftEvent) -> AppendOutcome:
@@ -394,8 +394,8 @@ class RecordingEventSink:
         return self.store.accept(draft)
 
 
-def test_publish_event_uses_configured_event_sink() -> None:
-    sink = RecordingEventSink()
+def test_publish_event_uses_configured_event_sink(tmp_path: Path) -> None:
+    sink = RecordingEventSink(tmp_path / "events.sqlite3")
     outcome = publish_event(
         DraftEvent(
             event_type="test.published",
@@ -431,8 +431,8 @@ def test_publish_event_defaults_to_sqlite_event_store() -> None:
     assert stored == outcome.event
 
 
-def test_sqlite_event_store_filters_and_cursors() -> None:
-    store = SqliteEventStore.in_memory()
+def test_sqlite_event_store_filters_and_cursors(tmp_path: Path) -> None:
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
     first = store.accept(
         DraftEvent(
             event_type="zeta.model.called",
@@ -469,8 +469,8 @@ def test_sqlite_event_store_filters_and_cursors() -> None:
     ]
 
 
-def test_sqlite_event_store_traverses_causality() -> None:
-    store = SqliteEventStore.in_memory()
+def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
     prompt = store.accept(
         DraftEvent(
             event_type="sigil.prompt.submitted",
@@ -526,8 +526,8 @@ def test_sqlite_event_store_traverses_causality() -> None:
     ]
 
 
-def test_sqlite_event_store_causal_chain_stops_on_cycles() -> None:
-    store = SqliteEventStore.in_memory()
+def test_sqlite_event_store_causal_chain_stops_on_cycles(tmp_path: Path) -> None:
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
     store.accept(
         DraftEvent(
             event_type="cycle.a",
@@ -575,8 +575,8 @@ def test_default_event_query_helpers_use_event_store() -> None:
             assert events_for_turn("turn-1") == [prompt, model]
 
 
-def test_sqlite_event_store_events_for_turn_uses_turn_id_column() -> None:
-    store = SqliteEventStore.in_memory()
+def test_sqlite_event_store_events_for_turn_uses_turn_id_column(tmp_path: Path) -> None:
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
     column_match = store.accept(
         DraftEvent(
             event_type="zeta.model.called",
@@ -600,8 +600,8 @@ def test_sqlite_event_store_events_for_turn_uses_turn_id_column() -> None:
     assert store.events_for_turn("payload-turn") == []
 
 
-def test_sqlite_event_store_has_no_stream_projection_table() -> None:
-    store = SqliteEventStore.in_memory()
+def test_sqlite_event_store_has_no_stream_projection_table(tmp_path: Path) -> None:
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
     table = store.connection.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
         ("event_streams",),
@@ -672,8 +672,10 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
     assert not hasattr(durable_event, "tool_called")
 
 
-def test_durable_event_constructor_idempotency_deduplicates_replays() -> None:
-    store = SqliteEventStore.in_memory()
+def test_durable_event_constructor_idempotency_deduplicates_replays(
+    tmp_path: Path,
+) -> None:
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
     draft = durable_event.turn_completed(
         payload={"outcome": "answered"},
         turn_id="turn-1",
@@ -689,8 +691,10 @@ def test_durable_event_constructor_idempotency_deduplicates_replays() -> None:
     assert first.event.id.startswith("evt_")
 
 
-def test_sqlite_event_store_accepts_events_without_idempotency_keys() -> None:
-    store = SqliteEventStore.in_memory()
+def test_sqlite_event_store_accepts_events_without_idempotency_keys(
+    tmp_path: Path,
+) -> None:
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
     event = DraftEvent(
         event_type="sigil.command.accepted",
         source="test",

@@ -9,10 +9,12 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from .context import ZetaContext
 from .events import (
     DraftEvent,
-    EventPublisher,
+    EventSink,
     model_called_event,
+    publish_event,
     timestamp_micros_from_time,
     tool_called_event,
 )
@@ -29,17 +31,11 @@ from .trace import (
 RUN_EVENT_KIND = "run_event"
 RUN_HEAD_EVENT_TYPES = {"model", "tool_call", "tool_result"}
 NON_HEAD_EVENT_TYPES = {"model_usage"}
-_DURABLE_EVENT_PUBLISHER: EventPublisher | None = None
 _SESSION_ID_FACTORY: SessionIdFactory | None = None
 
 
 class SessionIdFactory(Protocol):
     def __call__(self) -> str: ...
-
-
-def set_durable_event_publisher(publisher: EventPublisher | None) -> None:
-    global _DURABLE_EVENT_PUBLISHER
-    _DURABLE_EVENT_PUBLISHER = publisher
 
 
 def set_session_id_factory(factory: SessionIdFactory | None) -> None:
@@ -56,14 +52,26 @@ class ChatMessageEntry:
     message: dict[str, Any]
 
 
-def record_event(event: dict[str, Any]) -> dict[str, Any]:
+def record_event(
+    event: dict[str, Any],
+    *,
+    runtime_context: ZetaContext | None = None,
+) -> dict[str, Any]:
     """Record a Zeta event in the trace store and advance the run head."""
-    payload = event_payload(event)
-    record_durable_event(payload)
+    scoped_event = dict(event)
+    if runtime_context is not None and "session" not in scoped_event:
+        scoped_event["session"] = runtime_context.session_id
+    payload = event_payload(scoped_event)
+    record_durable_event(
+        payload,
+        event_sink=runtime_context.event_sink if runtime_context else None,
+        session_id=runtime_context.session_id if runtime_context else None,
+    )
     try:
-        store = default_store()
+        store = runtime_context.trace_store if runtime_context else default_store()
+        run_id = runtime_context.session_id if runtime_context else None
         with store.batch():
-            previous_event_id = store.get_ref(event_head_ref())
+            previous_event_id = store.get_ref(event_head_ref(run_id))
             links = event_links(payload, previous_event_id)
             event_id = store.put_object(
                 Object(
@@ -84,20 +92,23 @@ def record_event(event: dict[str, Any]) -> dict[str, Any]:
                     params={"type": str(payload.get("type") or "")},
                 )
             )
-            store.set_ref(event_head_ref(), event_id)
+            store.set_ref(event_head_ref(run_id), event_id)
             head_id = event_domain_object_id(payload) or event_id
             if should_update_run_head(payload):
-                store.set_ref(run_head_ref(), head_id)
-            elif store.get_ref(run_head_ref()) is None:
-                store.set_ref(run_head_ref(), head_id)
+                store.set_ref(run_head_ref(run_id), head_id)
+            elif store.get_ref(run_head_ref(run_id)) is None:
+                store.set_ref(run_head_ref(run_id), head_id)
     except Exception as exc:
         warn_trace_failure_once("record_event", exc)
     return payload
 
 
-def record_durable_event(event: dict[str, Any]) -> None:
-    if _DURABLE_EVENT_PUBLISHER is None:
-        return
+def record_durable_event(
+    event: dict[str, Any],
+    *,
+    event_sink: EventSink | None = None,
+    session_id: str | None = None,
+) -> None:
     event_type = str(event.get("type") or "event")
     payload = durable_event_payload(event)
     if (
@@ -110,7 +121,7 @@ def record_durable_event(event: dict[str, Any]) -> None:
         event_type,
         payload=payload,
         turn_id=optional_event_str(event.get("turn_id")),
-        session_id=str(event.get("session") or timeline_session_id()),
+        session_id=str(event.get("session") or session_id or timeline_session_id()),
         caused_by=optional_event_str(event.get("caused_by")),
         event_id=durable_event_id(event_type, event),
         timestamp_micros=timestamp_micros_from_time(event.get("time")),
@@ -118,7 +129,10 @@ def record_durable_event(event: dict[str, Any]) -> None:
     if draft is None:
         return
     try:
-        _DURABLE_EVENT_PUBLISHER(draft)
+        if event_sink is not None:
+            publish_event(draft, sink=event_sink)
+        else:
+            publish_event(draft)
     except Exception as exc:
         warn_trace_failure_once("record_durable_event", exc)
 
@@ -261,12 +275,15 @@ def optional_event_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def current_timeline() -> list[dict[str, Any]]:
+def current_timeline(
+    *, runtime_context: ZetaContext | None = None
+) -> list[dict[str, Any]]:
     try:
-        store = default_store()
-        events = timeline_from_ref(run_head_ref(), store=store)
+        store = runtime_context.trace_store if runtime_context else default_store()
+        run_id = runtime_context.session_id if runtime_context else None
+        events = timeline_from_ref(run_head_ref(run_id), store=store)
         if not events:
-            events = timeline_from_ref(event_head_ref(), store=store)
+            events = timeline_from_ref(event_head_ref(run_id), store=store)
     except Exception as exc:
         warn_trace_failure_once("current_timeline", exc)
         return []

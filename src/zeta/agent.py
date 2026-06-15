@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, TextIO, cast
 
-from .context import load_project_context
+from .context import ZetaContext, default_context, load_project_context
 from .models import (
     CODEX_RESPONSES_API,
     ChatCompletionStreamSink,
@@ -21,8 +21,8 @@ from .prompt import PromptBuilder, prompt_transform_from_env
 from .prompt.system import model_tool_descriptors
 from .timeline import current_timeline, record_event
 from .tools.base import EFFECT_KINDS, EffectKind, ToolImpl, ToolSpec, proposed_effect
-from .tools.registry import ExecutionMode
-from .tools.registry import registry as tool_registry
+from .tools.registry import ExecutionMode, ToolRegistry
+from .tools.registry import registry as _runtime_tool_registry
 from .trace import PromptTrace, prompt_trace_payload
 
 AgentEventSink = Callable[[dict[str, Any]], None]
@@ -30,6 +30,7 @@ ModelStatusFactory = Callable[[], AbstractContextManager[object]]
 RpcSessionRunner = Callable[[dict[str, Any]], dict[str, Any]]
 
 DEFAULT_MAX_TURNS = 25
+tool_registry = _runtime_tool_registry
 
 
 @dataclass(frozen=True)
@@ -71,18 +72,20 @@ def run_agent_turn(
     model_status: ModelStatusFactory | None = None,
     stream_sink: ChatCompletionStreamSink | None = None,
     prompt_builder: PromptBuilder | None = None,
+    tool_registry: ToolRegistry | None = None,
     caused_by: str | None = None,
 ) -> AgentTurnResult:
     """Run an assistant/tool loop without mutating session state."""
     if not agent_model_endpoint_open(config):
         raise RuntimeError("model endpoint is not reachable")
-    allowed_tools = agent_allowed_tools(config)
+    active_tool_registry = tool_registry or _runtime_tool_registry
+    allowed_tools = agent_allowed_tools(config, tool_registry=active_tool_registry)
     events: list[dict[str, Any]] = []
     latest_model_telemetry: dict[str, Any] = {}
     model_telemetry_calls: list[dict[str, Any]] = []
     prompt_traces: list[PromptTrace] = []
     builder = prompt_builder or PromptBuilder(transform=prompt_transform_from_env())
-    tools = model_tool_descriptors(allowed_tools)
+    tools = model_tool_descriptors(allowed_tools, tool_registry=active_tool_registry)
     next_model_caused_by = caused_by
     for _ in turn_indices(config.max_turns):
         prepared_prompt = builder.build(
@@ -138,6 +141,7 @@ def run_agent_turn(
                 prompt_trace=prompt_trace,
                 prompt_builder=builder,
                 event_sink=event_sink,
+                tool_registry=active_tool_registry,
                 caused_by=assistant_event_id,
             )
             events.extend(result_event.events)
@@ -174,15 +178,24 @@ def agent_model_endpoint_open(config: AgentConfig) -> bool:
     return model_endpoint_open(config.model_url)
 
 
-def agent_allowed_tools(config: AgentConfig) -> tuple[str, ...]:
-    return registered_tools(config.allowed_tools)
+def agent_allowed_tools(
+    config: AgentConfig,
+    *,
+    tool_registry: ToolRegistry | None = None,
+) -> tuple[str, ...]:
+    return registered_tools(config.allowed_tools, tool_registry=tool_registry)
 
 
-def registered_tools(allowed_tools: Iterable[str] | None) -> tuple[str, ...]:
+def registered_tools(
+    allowed_tools: Iterable[str] | None,
+    *,
+    tool_registry: ToolRegistry | None = None,
+) -> tuple[str, ...]:
     """Filter to registered tools, preserving the caller's order."""
+    active_tool_registry = tool_registry or _runtime_tool_registry
     if allowed_tools is None:
-        return tuple(tool_registry.list_tool_names())
-    available = set(tool_registry.list_tool_names())
+        return tuple(active_tool_registry.list_tool_names())
+    available = set(active_tool_registry.list_tool_names())
     return tuple(name for name in allowed_tools if name in available)
 
 
@@ -191,8 +204,14 @@ def run_tool(
     params: dict[str, Any],
     *,
     execution_mode: ExecutionMode = "stage",
+    tool_registry: ToolRegistry | None = None,
 ) -> dict[str, Any]:
-    return tool_registry.run_tool(name, params, execution_mode=execution_mode)
+    active_tool_registry = tool_registry or _runtime_tool_registry
+    return active_tool_registry.run_tool(
+        name,
+        params,
+        execution_mode=execution_mode,
+    )
 
 
 def turn_indices(max_turns: int | None) -> Iterable[int]:
@@ -472,8 +491,10 @@ def handle_tool_call(
     prompt_trace: PromptTrace | None = None,
     prompt_builder: PromptBuilder | None = None,
     event_sink: AgentEventSink | None = None,
+    tool_registry: ToolRegistry | None = None,
     caused_by: str | None = None,
 ) -> ToolCallResult:
+    active_tool_registry = tool_registry or _runtime_tool_registry
     call_id = str(tool_call.get("id") or f"call-{index}")
     function = tool_call.get("function")
     if not isinstance(function, dict):
@@ -519,13 +540,13 @@ def handle_tool_call(
 
     if parse_error:
         return reject("invalid-json-args", parse_error)
-    if tool_registry.get(name) is None:
+    if active_tool_registry.get(name) is None:
         return reject("unknown-tool", f"unknown tool: {name}")
     if name not in allowed_tools:
         return reject(
             "disallowed-tool", f"tool is not allowed in this workflow: {name}"
         )
-    schema_errors = tool_registry.validate_tool_args(name, params)
+    schema_errors = active_tool_registry.validate_tool_args(name, params)
     if schema_errors:
         return reject("schema-mismatch", "; ".join(schema_errors))
     events: list[dict[str, Any]] = []
@@ -540,12 +561,17 @@ def handle_tool_call(
             name,
             params,
             execution_mode=execution_mode,
+            tool_registry=active_tool_registry,
         )
     except Exception as exc:
         result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
     staged_effect = (
         result_staged_effect(result)
-        if tool_call_stages_effect(name, execution_mode)
+        if tool_call_stages_effect(
+            name,
+            execution_mode,
+            tool_registry=active_tool_registry,
+        )
         else None
     )
     stop = bool(
@@ -692,10 +718,16 @@ def tool_error(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "error": {"code": code, "message": message}}
 
 
-def tool_call_stages_effect(name: str, execution_mode: ExecutionMode) -> bool:
+def tool_call_stages_effect(
+    name: str,
+    execution_mode: ExecutionMode,
+    *,
+    tool_registry: ToolRegistry | None = None,
+) -> bool:
     if execution_mode != "stage":
         return False
-    tool = tool_registry.get(name)
+    active_tool_registry = tool_registry or _runtime_tool_registry
+    tool = active_tool_registry.get(name)
     return tool is not None and tool.spec.mutates()
 
 
@@ -707,7 +739,9 @@ def run_rpc_session(
     params: dict[str, Any],
     *,
     publish_event: Callable[[dict[str, Any]], None],
+    runtime_context: ZetaContext | None = None,
 ) -> dict[str, Any]:
+    runtime_context = runtime_context or default_context()
     objective = str(params.get("objective") or "")
     if not objective:
         raise ValueError("session.run requires objective")
@@ -720,9 +754,12 @@ def run_rpc_session(
         if isinstance(requested_tools, list)
         else None
     )
-    enabled_tools = registered_tools(allowed_tools)
+    enabled_tools = registered_tools(
+        allowed_tools,
+        tool_registry=runtime_context.tool_registry,
+    )
     execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
-    prior_timeline = current_timeline()
+    prior_timeline = current_timeline(runtime_context=runtime_context)
     user_event = record_event(
         {
             "type": "user_message",
@@ -730,12 +767,13 @@ def run_rpc_session(
             "workflow": workflow,
             "runtime": "zeta-rpc",
             "available_tools": list(enabled_tools),
-        }
+        },
+        runtime_context=runtime_context,
     )
     publish_event(user_event)
 
     def sink(event: dict[str, Any]) -> None:
-        persisted = record_event(event)
+        persisted = record_event(event, runtime_context=runtime_context)
         publish_event(persisted)
 
     result = run_agent_turn(
@@ -766,6 +804,7 @@ def run_rpc_session(
             else load_project_context()
         ),
         event_sink=sink,
+        tool_registry=runtime_context.tool_registry,
         caused_by=str(user_event.get("id") or ""),
     )
     if result.staged_effect is not None:
@@ -787,10 +826,12 @@ class JsonRpcServer:
         output: TextIO,
         *,
         session_runner: RpcSessionRunner | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self.input = input
         self.output = output
         self.session_runner = session_runner
+        self.tool_registry = tool_registry or _runtime_tool_registry
         self.tool_responses: dict[str, dict[str, Any]] = {}
         self.client_tools: set[str] = set()
 
@@ -856,7 +897,7 @@ class JsonRpcServer:
         return registered
 
     def register_client_tool(self, name: str, item: dict[str, Any]) -> None:
-        existing = tool_registry.get(name)
+        existing = self.tool_registry.get(name)
         if existing is not None and name not in self.client_tools:
             raise ValueError(f"tool {name!r} is already registered")
         self.client_tools.add(name)
@@ -885,7 +926,7 @@ class JsonRpcServer:
         def run(params: dict[str, Any]) -> dict[str, Any]:
             return self.call_client_tool(str(uuid.uuid4()), name, params)
 
-        tool_registry.register(name, ToolImpl(spec, run, run))
+        self.tool_registry.register(name, ToolImpl(spec, run, run))
 
     def record_tool_response(self, params: dict[str, Any]) -> None:
         call_id = str(params.get("id") or "")

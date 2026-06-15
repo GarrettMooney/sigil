@@ -3,14 +3,56 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .events import EventSink
+    from .tools.registry import ToolRegistry
+    from .trace import Store
 
 MAX_CONTEXT_FILE_CHARS = 24_000
 MAX_CONTEXT_TOTAL_CHARS = 48_000
 
 
+@dataclass(frozen=True)
+class ZetaContext:
+    """Runtime dependencies for one Zeta host/session."""
+
+    session_id: str
+    event_sink: EventSink
+    trace_store: Store
+    tool_registry: ToolRegistry
+    state_dir: Path
+    session_dir: Path
+
+
+def default_context() -> ZetaContext:
+    """Return the default process context for pure Zeta runtime calls."""
+    from .events import event_store
+    from .tools.registry import registry as default_tool_registry
+    from .trace import default_store
+
+    state_dir = zeta_state_dir()
+    session_id = os.environ.get("ZETA_SESSION_ID") or "default"
+    return ZetaContext(
+        session_id=session_id,
+        event_sink=event_store(),
+        trace_store=default_store(),
+        tool_registry=default_tool_registry,
+        state_dir=state_dir,
+        session_dir=state_dir / "sessions" / session_id,
+    )
+
+
+def zeta_state_dir() -> Path:
+    root = os.environ.get("ZETA_STATE_DIR")
+    return Path(root).expanduser() if root else Path.home() / ".zeta"
+
+
 def _context_directories(current: Path) -> list[Path]:
-    global_directory = Path.home() / ".zeta"
+    global_directory = zeta_state_dir()
     return [global_directory, *reversed(current.parents), current]
 
 

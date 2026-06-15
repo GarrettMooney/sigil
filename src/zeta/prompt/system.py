@@ -9,7 +9,8 @@ from typing import Any
 from jinja2 import Environment, StrictUndefined
 
 from ..skills import Skill, available_skills
-from ..tools.registry import registry as tool_registry
+from ..tools.registry import ToolRegistry
+from ..tools.registry import registry as _runtime_tool_registry
 
 PROMPT_TEMPLATE_ENV = Environment(
     autoescape=False,
@@ -219,8 +220,16 @@ def render_prompt_template(template: str, **context: Any) -> str:
     return PROMPT_TEMPLATE_ENV.from_string(template).render(**context).strip()
 
 
-def enabled_tool_names(allowed_tools: Iterable[str] | None) -> tuple[str, ...]:
-    available = tool_registry.list_tool_names()
+tool_registry = _runtime_tool_registry
+
+
+def enabled_tool_names(
+    allowed_tools: Iterable[str] | None,
+    *,
+    tool_registry: ToolRegistry | None = None,
+) -> tuple[str, ...]:
+    active_tool_registry = tool_registry or _runtime_tool_registry
+    available = active_tool_registry.list_tool_names()
     if allowed_tools is None:
         return tuple(available)
     allowed = set(allowed_tools)
@@ -229,11 +238,14 @@ def enabled_tool_names(allowed_tools: Iterable[str] | None) -> tuple[str, ...]:
 
 def model_tool_descriptors(
     allowed_tools: Iterable[str] | None,
+    *,
+    tool_registry: ToolRegistry | None = None,
 ) -> list[dict[str, Any]]:
     """Return provider-facing tool descriptors for the model prompt."""
+    active_tool_registry = tool_registry or _runtime_tool_registry
     descriptors = []
-    for name in enabled_tool_names(allowed_tools):
-        tool = tool_registry.get(name)
+    for name in enabled_tool_names(allowed_tools, tool_registry=active_tool_registry):
+        tool = active_tool_registry.get(name)
         if tool is None:
             continue
         descriptors.append(

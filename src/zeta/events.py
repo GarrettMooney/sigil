@@ -115,12 +115,6 @@ class EventSink(Protocol):
         """Accept one draft event."""
 
 
-class EventPublisher(Protocol):
-    """Callable publisher for draft events."""
-
-    def __call__(self, draft: DraftEvent) -> object: ...
-
-
 @dataclass(frozen=True)
 class Filter:
     """Event listing filter."""
@@ -230,10 +224,6 @@ class SqliteEventStore:
             execute_with_retry(self.connection, "PRAGMA journal_mode=WAL")
             execute_with_retry(self.connection, "PRAGMA synchronous=NORMAL")
         self._init_schema()
-
-    @classmethod
-    def in_memory(cls) -> SqliteEventStore:
-        return cls(Path(":memory:"))
 
     def close(self) -> None:
         self.connection.close()
