@@ -13,6 +13,7 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
+from sigil.state import trace_store_path
 from zeta import prompt as zeta_prompt
 from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
@@ -124,6 +125,16 @@ def test_zeta_default_store_follows_the_session_path(
 def seed_session_store(session_id: str, text: str) -> str:
     """Write one prompt object into a named session's trace store."""
     path = zeta_trace.session_sqlite_path(session_id)
+    return seed_trace_store(path, text)
+
+
+def seed_sigil_session_store(session_id: str, text: str) -> str:
+    """Write one prompt object into a named Sigil session's trace store."""
+    return seed_trace_store(trace_store_path(session_id), text)
+
+
+def seed_trace_store(path: Path, text: str) -> str:
+    """Write one prompt object into a trace store path."""
     store = zeta_trace.SqliteStore(path)
     prompt_id = store.put_object(
         zeta_trace.Object(
@@ -194,7 +205,7 @@ def test_zeta_available_session_ids_lists_stores_sorted(monkeypatch) -> None:
 
 def test_sigil_zeta_trace_cli_session_scope_reads_other_store(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    prompt_id = seed_session_store("other", "scoped read")
+    prompt_id = seed_sigil_session_store("other", "scoped read")
 
     result = CliRunner().invoke(
         sigil_cli, ["trace", "--session", "other", "show", "--json", prompt_id]
@@ -206,7 +217,7 @@ def test_sigil_zeta_trace_cli_session_scope_reads_other_store(monkeypatch) -> No
 
 def test_sigil_zeta_trace_cli_unknown_session_lists_available(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    seed_session_store("known", "seed")
+    seed_sigil_session_store("known", "seed")
 
     result = CliRunner().invoke(sigil_cli, ["trace", "--session", "missing", "log"])
 
@@ -219,8 +230,8 @@ def test_sigil_zeta_trace_cli_log_all_sessions_prefixes_session_ids(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    seed_session_store("alpha", "alpha prompt")
-    seed_session_store("beta", "beta prompt")
+    seed_sigil_session_store("alpha", "alpha prompt")
+    seed_sigil_session_store("beta", "beta prompt")
 
     result = CliRunner().invoke(sigil_cli, ["trace", "log", "--all-sessions"])
 
@@ -289,8 +300,8 @@ def test_zeta_trace_in_memory_search_matches_case_insensitively() -> None:
 
 def test_sigil_zeta_trace_cli_grep_lists_matches(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    prompt_id = seed_session_store("current", "the missing deploy key")
-    seed_session_store("current", "unrelated")
+    prompt_id = seed_sigil_session_store("current", "the missing deploy key")
+    seed_sigil_session_store("current", "unrelated")
 
     result = CliRunner().invoke(sigil_cli, ["trace", "grep", "deploy key"])
 
@@ -304,8 +315,8 @@ def test_sigil_zeta_trace_cli_grep_all_sessions_names_the_session(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    seed_session_store("alpha", "asked about the rollback")
-    seed_session_store("beta", "something else")
+    seed_sigil_session_store("alpha", "asked about the rollback")
+    seed_sigil_session_store("beta", "something else")
 
     result = CliRunner().invoke(
         sigil_cli, ["trace", "grep", "rollback", "--all-sessions"]
@@ -318,7 +329,7 @@ def test_sigil_zeta_trace_cli_grep_all_sessions_names_the_session(
 
 def test_sigil_zeta_trace_cli_grep_reports_no_matches(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "current")
-    seed_session_store("current", "recorded")
+    seed_sigil_session_store("current", "recorded")
 
     result = CliRunner().invoke(sigil_cli, ["trace", "grep", "absent-token"])
 
@@ -1716,7 +1727,9 @@ def test_sigil_zeta_trace_tools_all_sessions_sorts_by_trace_time(
     seed_tool_result("old", "call-old", 10.0)
     seed_tool_result("new", "call-new", 20.0)
 
-    monkeypatch.setattr("sigil.cli.trace.available_session_ids", lambda: ["old", "new"])
+    monkeypatch.setattr(
+        "sigil.cli.trace.available_trace_session_ids", lambda: ["old", "new"]
+    )
     monkeypatch.setattr(
         "sigil.cli.trace.open_session_store",
         lambda session: zeta_trace.SqliteStore(

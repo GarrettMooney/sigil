@@ -10,13 +10,11 @@ from zeta.trace import (
     Object,
     SqliteStore,
     UnknownSessionError,
-    default_store,
-    session_sqlite_path,
 )
 
 from .ledger import LedgerIndex, ledger_index
 from .protocols import is_effect_record, is_turn_record
-from .state import sigil_event_store
+from .state import available_trace_session_ids, sigil_event_store, trace_store_path
 
 BUNDLE_VERSION = 1
 
@@ -54,7 +52,10 @@ def exported_session_graph(
     still exports its ledger records; only the graph section is absent.
     """
     try:
-        store = default_store(session_id=session_id)
+        path = trace_store_path(session_id)
+        if not path.exists():
+            raise UnknownSessionError(session_id, available_trace_session_ids())
+        store = SqliteStore(path, read_only=True)
     except UnknownSessionError:
         return None
     try:
@@ -173,7 +174,7 @@ def new_ledger_record(index: LedgerIndex, record: dict[str, Any]) -> bool:
 
 def import_session_graph(session_id: str, graph: dict[str, Any]) -> int:
     """Write one session's exported objects, derivations, and refs."""
-    store = SqliteStore(session_sqlite_path(session_id))
+    store = SqliteStore(trace_store_path(session_id))
     count = 0
     try:
         with store.batch():

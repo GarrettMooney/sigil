@@ -22,7 +22,13 @@ from sigil.protocols import (
     turn_record,
 )
 from sigil.session import clear_current_session, read_events
-from sigil.state import append_event, session_dir, sigil_event_store, state_dir
+from sigil.state import (
+    append_event,
+    session_dir,
+    sigil_event_store,
+    state_dir,
+    trace_store_path,
+)
 from zeta.events import DraftEvent, Event, publish_event
 
 
@@ -657,7 +663,7 @@ def seed_bundle_state(monkeypatch) -> dict[str, str]:
         )
     )
     sigil_ledger.ledger_index().index_event(turn)
-    store = zeta_trace.SqliteStore(zeta_trace.session_sqlite_path("bundle-src"))
+    store = zeta_trace.SqliteStore(trace_store_path("bundle-src"))
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",

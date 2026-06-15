@@ -1978,6 +1978,7 @@ def test_events_raw_requires_json() -> None:
 
 
 def test_session_transcript_renders_conversation() -> None:
+    from sigil import zeta_context_for_sigil
     from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -1985,11 +1986,14 @@ def test_session_transcript_renders_conversation() -> None:
             os.environ,
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
+            runtime_context = zeta_context_for_sigil()
             zeta_timeline.record_event(
-                {"type": "user_message", "content": "what is sigil?"}
+                {"type": "user_message", "content": "what is sigil?"},
+                runtime_context=runtime_context,
             )
             zeta_timeline.record_event(
-                {"type": "model", "content": "A shell assistant."}
+                {"type": "model", "content": "A shell assistant."},
+                runtime_context=runtime_context,
             )
 
             result = CliRunner().invoke(cli, ["session", "transcript"])
@@ -2000,6 +2004,7 @@ def test_session_transcript_renders_conversation() -> None:
 
 
 def test_session_transcript_limits_and_dumps_json() -> None:
+    from sigil import zeta_context_for_sigil
     from zeta import timeline as zeta_timeline
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -2007,8 +2012,15 @@ def test_session_transcript_limits_and_dumps_json() -> None:
             os.environ,
             {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
         ):
-            zeta_timeline.record_event({"type": "user_message", "content": "first"})
-            zeta_timeline.record_event({"type": "model", "content": "second"})
+            runtime_context = zeta_context_for_sigil()
+            zeta_timeline.record_event(
+                {"type": "user_message", "content": "first"},
+                runtime_context=runtime_context,
+            )
+            zeta_timeline.record_event(
+                {"type": "model", "content": "second"},
+                runtime_context=runtime_context,
+            )
 
             result = CliRunner().invoke(
                 cli, ["session", "transcript", "--limit", "1", "--json"]

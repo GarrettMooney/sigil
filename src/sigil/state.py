@@ -25,6 +25,7 @@ from zeta.events import (
     tool_called_event,
     turn_idempotency_key,
 )
+from zeta.trace import DEFAULT_SQLITE_NAME
 
 if TYPE_CHECKING:
     from zeta.events import Event
@@ -71,6 +72,19 @@ def session_dir(session_id: str | None = None) -> Path:
             return Path(base)
     raw = session_id or os.environ.get("SIGIL_SESSION_ID") or "default"
     return state_dir() / "sessions" / safe_session_id(raw)
+
+
+def trace_store_path(session_id: str | None = None) -> Path:
+    """Return the Zeta trace SQLite path for a Sigil session."""
+    return session_dir(session_id) / DEFAULT_SQLITE_NAME
+
+
+def available_trace_session_ids() -> list[str]:
+    """Return Sigil session ids with recorded Zeta trace stores."""
+    sessions_root = state_dir() / "sessions"
+    return sorted(
+        path.parent.name for path in sessions_root.glob(f"*/{DEFAULT_SQLITE_NAME}")
+    )
 
 
 def append_jsonl_line(path: Path, payload: dict[str, Any]) -> None:

@@ -180,14 +180,10 @@ def clear_current_session() -> list[str]:
     and the active-model selection must go too, or the next agent step resumes
     the conversation the user just cleared.
     """
-    # Imported lazily: `sigil.cli` must not load zeta at import time.
-    from zeta.trace import close_default_stores, trace_session_dir
-
-    roots = [session_dir(), trace_session_dir(session_id())]
+    roots = [session_dir()]
     existing_roots = [root for root in roots if root.exists()]
     if not existing_roots:
         return []
-    close_default_stores()
     removed = [
         str(path)
         for root in existing_roots

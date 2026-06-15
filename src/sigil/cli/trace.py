@@ -24,8 +24,6 @@ from zeta.trace import (
     Store,
     UnknownIdError,
     UnknownSessionError,
-    available_session_ids,
-    default_store,
     derivation_payload,
     object_payload,
     resolve_object_id,
@@ -39,6 +37,7 @@ from ..display.summarize import (
     text_content,
     trace_object_summary,
 )
+from ..state import available_trace_session_ids, trace_store_path
 from ._base import cli, examples
 from ._shared import pretty_print_json
 
@@ -103,7 +102,10 @@ def current_store() -> Store:
 def open_session_store(session_id: str) -> SqliteStore:
     """Open a named session's store, mapping lookup errors onto CLI errors."""
     try:
-        return default_store(session_id=session_id)
+        path = trace_store_path(session_id)
+        if not path.exists():
+            raise UnknownSessionError(session_id, available_trace_session_ids())
+        return SqliteStore(path, read_only=True)
     except UnknownSessionError as error:
         available = ", ".join(error.available) or "none recorded"
         raise click.ClickException(
@@ -307,7 +309,7 @@ def scope_tool_rows(
     if trace_session_scope(ctx) is not None:
         raise click.ClickException("--all-sessions conflicts with --session")
     rows: list[dict[str, Any]] = []
-    for session_id_value in available_session_ids():
+    for session_id_value in available_trace_session_ids():
         store = open_session_store(session_id_value)
         try:
             rows.extend(
@@ -454,7 +456,7 @@ def scope_listing_lines(
     if trace_session_scope(ctx) is not None:
         raise click.ClickException("--all-sessions conflicts with --session")
     lines = []
-    for session_id_value in available_session_ids():
+    for session_id_value in available_trace_session_ids():
         store = open_session_store(session_id_value)
         try:
             lines.extend(f"{session_id_value}  {line}" for line in render(store))
