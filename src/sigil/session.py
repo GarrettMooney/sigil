@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from zeta.events import Event, Filter, event_store, time_from_timestamp_micros
+from zeta.events import Event, time_from_timestamp_micros
 
 from .failure import (
     failure_context_prompt,
@@ -34,6 +34,8 @@ from .protocols import (
 )
 from .state import (
     append_jsonl_line,
+    event_store_path,
+    read_events,
     read_jsonl,
     session_dir,
     session_id,
@@ -57,8 +59,6 @@ TURN_SKIP_PREFIXES = (",", "sigil ", "__sigil_")
 
 def session_paths() -> dict[str, str]:
     """Return the global and current-session paths users need for debugging."""
-    from zeta.events import event_store_path
-
     return {
         "state": str(state_dir()),
         "session": str(session_dir()),
@@ -143,11 +143,6 @@ def read_session_file(path: Path) -> Any:
         except json.JSONDecodeError:
             return text
     return path.read_text(encoding="utf-8")
-
-
-def read_events() -> list[Event]:
-    """Read the global event journal."""
-    return event_store().list_events(Filter())
 
 
 def current_session_snapshot() -> dict[str, Any]:

@@ -35,7 +35,10 @@ from sigil.session import (
 )
 from sigil.state import (
     append_event,
+    causal_chain,
     durable_event,
+    event_children,
+    events_for_turn,
     session_dir,
     session_id,
     state_dir,
@@ -50,13 +53,9 @@ from zeta.events import (
     EventCursor,
     Filter,
     SqliteEventStore,
-    causal_chain,
-    event_children,
     event_store_path,
-    events_for_turn,
     model_called_event,
     publish_event,
-    set_event_store_path_factory,
     tool_called_event,
 )
 
@@ -353,16 +352,12 @@ def test_event_store_records_large_events_across_processes() -> None:
 
 
 def test_event_store_path_uses_zeta_state_dir() -> None:
-    try:
-        set_event_store_path_factory(None)
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch_dict(
-                os.environ,
-                {"ZETA_STATE_DIR": tmp},
-            ):
-                path = event_store_path()
-    finally:
-        set_event_store_path_factory(lambda: state_dir() / "events.sqlite3")
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"ZETA_STATE_DIR": tmp},
+        ):
+            path = event_store_path()
 
     assert path == Path(tmp) / "events.sqlite3"
 
@@ -416,25 +411,21 @@ def test_publish_event_uses_configured_event_sink(tmp_path: Path) -> None:
 
 
 def test_publish_event_defaults_to_zeta_sqlite_event_store() -> None:
-    try:
-        set_event_store_path_factory(None)
-        with tempfile.TemporaryDirectory() as tmp:
-            with patch_dict(
-                os.environ,
-                {"ZETA_STATE_DIR": tmp},
-            ):
-                outcome = publish_event(
-                    DraftEvent(
-                        event_type="test.default_sink",
-                        source="test",
-                        payload={"ok": True},
-                    )
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"ZETA_STATE_DIR": tmp},
+        ):
+            outcome = publish_event(
+                DraftEvent(
+                    event_type="test.default_sink",
+                    source="test",
+                    payload={"ok": True},
                 )
-                stored = SqliteEventStore(Path(tmp) / "events.sqlite3").get(
-                    outcome.event.id
-                )
-    finally:
-        set_event_store_path_factory(lambda: state_dir() / "events.sqlite3")
+            )
+            stored = SqliteEventStore(Path(tmp) / "events.sqlite3").get(
+                outcome.event.id
+            )
 
     assert outcome.inserted is True
     assert stored == outcome.event
@@ -562,7 +553,7 @@ def test_sqlite_event_store_causal_chain_stops_on_cycles(tmp_path: Path) -> None
     ]
 
 
-def test_default_event_query_helpers_use_event_store() -> None:
+def test_sigil_event_query_helpers_use_sigil_event_store() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,

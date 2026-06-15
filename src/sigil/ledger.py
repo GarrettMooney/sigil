@@ -14,14 +14,11 @@ from typing import Any
 
 from zeta.events import (
     Event,
-    Filter,
-    event_store,
-    event_store_path,
     time_from_timestamp_micros,
 )
 
 from .protocols import turn_event_type
-from .state import append_event, session_id
+from .state import append_event, event_store_path, read_events, session_id
 
 LOGGER = logging.getLogger("sigil.ledger")
 _WARNED_FAILURES: set[str] = set()
@@ -523,7 +520,7 @@ def reindex(index: LedgerIndex | None = None) -> tuple[int, int]:
     target.clear()
     turns = 0
     effects = 0
-    for event in event_store().list_events(Filter()):
+    for event in read_events():
         if event.event_type.startswith("sigil.turn."):
             target.index_turn_event(event)
             turns += 1

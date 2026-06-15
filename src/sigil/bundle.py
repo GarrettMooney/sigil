@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from zeta.events import Event, event_store, timestamp_micros_from_time
+from zeta.events import Event, timestamp_micros_from_time
 from zeta.trace import (
     Derivation,
     Object,
@@ -16,6 +16,7 @@ from zeta.trace import (
 
 from .ledger import LedgerIndex, ledger_index
 from .protocols import is_effect_record, is_turn_record
+from .state import sigil_event_store
 
 BUNDLE_VERSION = 1
 
@@ -124,7 +125,11 @@ def import_ledger_records(
             )
         else:
             event = event_from_record(record)
-            event_store().append(event)
+            store = sigil_event_store()
+            try:
+                store.append(event)
+            finally:
+                store.close()
             index.index_event(event)
         imported += 1
     return imported

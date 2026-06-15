@@ -22,7 +22,7 @@ from sigil.protocols import (
     turn_record,
 )
 from sigil.session import clear_current_session, read_events
-from sigil.state import append_event, session_dir, state_dir
+from sigil.state import append_event, session_dir, sigil_event_store, state_dir
 from zeta.events import DraftEvent, Event, publish_event
 
 
@@ -61,6 +61,14 @@ def append_indexed(record: dict[str, Any]) -> dict[str, Any]:
     event = append_event(record)
     sigil_ledger.ledger_index().index_event(event)
     return sigil_ledger.ledger_event_record(event)
+
+
+def publish_sigil_draft(draft: DraftEvent) -> None:
+    store = sigil_event_store()
+    try:
+        publish_event(draft, sink=store)
+    finally:
+        store.close()
 
 
 def test_ledger_append_turn_record_writes_log_and_index() -> None:
@@ -181,7 +189,7 @@ def test_ledger_append_survives_index_failure(monkeypatch) -> None:
 
 def test_ledger_reindex_reads_event_store() -> None:
     append_event(sample_turn_record("turn-old", time=100.0))
-    publish_event(
+    publish_sigil_draft(
         DraftEvent(
             event_type="zeta.tool.called",
             source="zeta",
@@ -218,7 +226,7 @@ def test_ledger_reindex_reads_event_store() -> None:
 
 
 def test_ledger_reindex_uses_event_metadata() -> None:
-    publish_event(
+    publish_sigil_draft(
         DraftEvent(
             event_type="sigil.turn.completed",
             source="test",
@@ -247,7 +255,7 @@ def test_ledger_reindex_uses_event_metadata() -> None:
 
 def test_ledger_reindex_is_idempotent() -> None:
     append_event(sample_turn_record())
-    publish_event(
+    publish_sigil_draft(
         DraftEvent(
             event_type="zeta.tool.called",
             source="zeta",
@@ -607,7 +615,7 @@ def test_sigil_blame_reports_untouched_files(monkeypatch) -> None:
 
 def test_ledger_cli_log_reindex_reports_counts() -> None:
     append_event(sample_turn_record())
-    publish_event(
+    publish_sigil_draft(
         DraftEvent(
             event_type="zeta.tool.called",
             source="zeta",

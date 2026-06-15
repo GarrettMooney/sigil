@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from zeta.events import (
+    EVENT_STORE_NAME,
     DraftEvent,
+    Filter,
+    SqliteEventStore,
     durable_event_draft,
     model_called_event,
     tool_called_event,
@@ -110,15 +113,56 @@ def _session_root() -> Path:
     return root
 
 
+def event_store_path() -> Path:
+    """Return Sigil's frontend event journal path."""
+    return state_dir() / EVENT_STORE_NAME
+
+
+def sigil_event_store() -> SqliteEventStore:
+    """Open Sigil's frontend event journal."""
+    return SqliteEventStore(event_store_path())
+
+
+def read_events() -> list[Event]:
+    """Read Sigil's frontend event journal."""
+    store = sigil_event_store()
+    try:
+        return store.list_events(Filter())
+    finally:
+        store.close()
+
+
+def event_children(event_id: str, *, limit: int | None = None) -> list[Event]:
+    store = sigil_event_store()
+    try:
+        return store.children(event_id, limit=limit)
+    finally:
+        store.close()
+
+
+def causal_chain(event_id: str) -> list[Event]:
+    store = sigil_event_store()
+    try:
+        return store.causal_chain(event_id)
+    finally:
+        store.close()
+
+
+def events_for_turn(turn_id: str) -> list[Event]:
+    store = sigil_event_store()
+    try:
+        return store.events_for_turn(turn_id)
+    finally:
+        store.close()
+
+
 def append_event(event: dict[str, Any]) -> Event:
     """Append a global audit/debug event with session metadata."""
     from zeta.events import (
         publish_event,
-        set_event_store_path_factory,
         timestamp_micros_from_time,
     )
 
-    set_event_store_path_factory(lambda: state_dir() / "events.sqlite3")
     payload = _with_envelope(event)
     event_id = payload.get("id") if isinstance(payload.get("id"), str) else None
     event_type = str(payload.get("type") or "event")
@@ -156,8 +200,12 @@ def append_event(event: dict[str, Any]) -> Event:
             timestamp_micros=event_timestamp,
             event_id=event_id,
         )
-    outcome = publish_event(draft)
-    return outcome.event
+    store = sigil_event_store()
+    try:
+        outcome = publish_event(draft, sink=store)
+        return outcome.event
+    finally:
+        store.close()
 
 
 def append_prompt_submitted_event(event: dict[str, Any]) -> Event:
