@@ -186,14 +186,21 @@ def clear_current_session() -> list[str]:
     the conversation the user just cleared.
     """
     # Imported lazily: `sigil.cli` must not load zeta at import time.
-    from zeta.trace import close_default_stores
+    from zeta.trace import close_default_stores, trace_session_dir
 
-    root = session_dir()
-    if not root.exists():
+    roots = [session_dir(), trace_session_dir(session_id())]
+    existing_roots = [root for root in roots if root.exists()]
+    if not existing_roots:
         return []
     close_default_stores()
-    removed = [str(path) for path in sorted(root.rglob("*")) if path.is_file()]
-    shutil.rmtree(root)
+    removed = [
+        str(path)
+        for root in existing_roots
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    ]
+    for root in existing_roots:
+        shutil.rmtree(root)
     return removed
 
 

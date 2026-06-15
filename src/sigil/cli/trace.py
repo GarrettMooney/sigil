@@ -161,6 +161,71 @@ def trace_log(
 
 
 @trace_group.command(
+    "tools",
+    epilog=examples(
+        "sigil trace tools --json",
+        "sigil trace tools --failed --json",
+        "sigil trace tools --all-sessions --limit 50 --json",
+    ),
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit rows as JSON.")
+@click.option("--failed", is_flag=True, help="Only include failed tool calls.")
+@click.option("--successful", is_flag=True, help="Only include successful tool calls.")
+@click.option(
+    "--limit",
+    default=20,
+    show_default=True,
+    type=int,
+    help="Maximum number of tool calls.",
+)
+@click.option(
+    "--all-sessions",
+    "all_sessions",
+    is_flag=True,
+    help="List every recorded session's store, grouped by session.",
+)
+@click.pass_context
+def trace_tools(
+    ctx: click.Context,
+    json_output: bool,
+    failed: bool,
+    successful: bool,
+    limit: int,
+    all_sessions: bool,
+) -> int:
+    """List tool calls joined with their results from the trace store."""
+    if failed and successful:
+        raise click.ClickException("--failed conflicts with --successful")
+    rows = scope_tool_rows(
+        ctx,
+        all_sessions,
+        failed=failed,
+        successful=successful,
+        limit=limit,
+    )
+    if json_output:
+        pretty_print_json(rows)
+        return 0
+    if not rows:
+        click.echo("no tool calls recorded", err=True)
+        return 0
+    for row in rows:
+        status = "ok" if row.get("ok") is True else "failed"
+        if row.get("ok") is None:
+            status = "pending"
+        error = row.get("error")
+        detail = ""
+        if isinstance(error, dict) and error:
+            detail = f" · {error.get('code')}: {error.get('message')}"
+        session = row.get("session")
+        prefix = f"{session}  " if isinstance(session, str) and session else ""
+        click.echo(
+            f"{prefix}{row.get('tool_call_id')}  {row.get('name')}  {status}{detail}"
+        )
+    return 0
+
+
+@trace_group.command(
     "grep",
     epilog=examples(
         'sigil trace grep "parser test" --kind prompt',
@@ -215,6 +280,145 @@ def trace_grep(
     for line in lines:
         click.echo(line)
     return 0
+
+
+def scope_tool_rows(
+    ctx: click.Context,
+    all_sessions: bool,
+    *,
+    failed: bool,
+    successful: bool,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if not all_sessions:
+        return tool_call_rows(
+            scoped_store(ctx),
+            session=trace_session_scope(ctx),
+            failed=failed,
+            successful=successful,
+            limit=limit,
+        )
+    if trace_session_scope(ctx) is not None:
+        raise click.ClickException("--all-sessions conflicts with --session")
+    rows: list[dict[str, Any]] = []
+    for session_id_value in available_session_ids():
+        store = open_session_store(session_id_value)
+        try:
+            rows.extend(
+                tool_call_rows(
+                    store,
+                    session=session_id_value,
+                    failed=failed,
+                    successful=successful,
+                    limit=max(limit, 1),
+                )
+            )
+        finally:
+            store.close()
+    rows.sort(key=lambda row: float(row.get("created_at") or 0), reverse=True)
+    return rows[:limit]
+
+
+def tool_call_rows(
+    store: Store,
+    *,
+    session: str | None,
+    failed: bool,
+    successful: bool,
+    limit: int,
+) -> list[dict[str, Any]]:
+    results = tool_results_by_call_id(store)
+    rows: list[dict[str, Any]] = []
+    for call_object_id, call in store.objects(("tool_call",), 10_000):
+        row = tool_call_row(
+            session=session,
+            call_object_id=call_object_id,
+            call=call,
+            result_record=results.get(tool_call_id(call)),
+        )
+        row["created_at"] = tool_row_created_at(
+            store,
+            result_object_id=row.get("tool_result_object_id"),
+            call_object_id=call_object_id,
+        )
+        if failed and row.get("ok") is not False:
+            continue
+        if successful and row.get("ok") is not True:
+            continue
+        rows.append(row)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def tool_results_by_call_id(
+    store: Store,
+) -> dict[str, tuple[ObjectId, Object]]:
+    results: dict[str, tuple[ObjectId, Object]] = {}
+    for result_object_id, result in store.objects(("tool_result",), 10_000):
+        call_id = tool_call_id(result)
+        if call_id and call_id not in results:
+            results[call_id] = (result_object_id, result)
+    return results
+
+
+def tool_call_row(
+    *,
+    session: str | None,
+    call_object_id: ObjectId,
+    call: Object,
+    result_record: tuple[ObjectId, Object] | None,
+) -> dict[str, Any]:
+    call_data = call.data if isinstance(call.data, dict) else {}
+    result_object_id = None
+    result_data: dict[str, Any] = {}
+    result_payload: dict[str, Any] | None = None
+    if result_record is not None:
+        result_object_id, result = result_record
+        result_data = result.data if isinstance(result.data, dict) else {}
+        payload = result_data.get("result")
+        if isinstance(payload, dict):
+            result_payload = payload
+    name = str(result_data.get("name") or call_data.get("name") or "")
+    row: dict[str, Any] = {
+        "session": session,
+        "tool_call_id": tool_call_id(call),
+        "name": name,
+        "input": call_data.get("input")
+        if isinstance(call_data.get("input"), dict)
+        else {},
+        "ok": result_payload.get("ok") if result_payload is not None else None,
+        "tool_call_object_id": call_object_id,
+        "tool_result_object_id": result_object_id,
+    }
+    if result_payload is not None:
+        row["result"] = result_payload
+        error = result_payload.get("error")
+        if isinstance(error, dict):
+            row["error"] = error
+    return row
+
+
+def tool_call_id(obj: Object) -> str:
+    data = obj.data if isinstance(obj.data, dict) else {}
+    return str(data.get("tool_call_id") or "")
+
+
+def tool_row_created_at(
+    store: Store,
+    *,
+    result_object_id: Any,
+    call_object_id: ObjectId,
+) -> float | None:
+    if not isinstance(store, SqliteStore):
+        return None
+    object_id_value = result_object_id if isinstance(result_object_id, str) else None
+    records = store.derivation_records_for_output(object_id_value or call_object_id)
+    if not records and object_id_value is not None:
+        records = store.derivation_records_for_output(call_object_id)
+    if not records:
+        return None
+    return max(float(record["created_at"]) for record in records)
 
 
 def object_listing_lines(

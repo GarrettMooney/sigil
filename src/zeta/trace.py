@@ -457,7 +457,10 @@ class SqliteStore(StoreBase):
         self.path = path
         self.read_only = read_only
         if read_only:
-            self.connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+            self.connection = sqlite3.connect(
+                f"{path.as_uri()}?mode=ro&immutable=1",
+                uri=True,
+            )
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.connection = sqlite3.connect(str(path))
@@ -473,6 +476,7 @@ class SqliteStore(StoreBase):
     @contextmanager
     def batch(self) -> Iterator[None]:
         """Group writes into one transaction committed at batch exit."""
+        self._ensure_writable()
         with self._write_lock:
             self._batch_depth += 1
             try:
@@ -485,6 +489,10 @@ class SqliteStore(StoreBase):
     def _commit(self) -> None:
         if self._batch_depth == 0:
             self.connection.commit()
+
+    def _ensure_writable(self) -> None:
+        if self.read_only:
+            raise sqlite3.OperationalError("trace store is read-only")
 
     def close(self) -> None:
         self.connection.close()
@@ -563,6 +571,7 @@ class SqliteStore(StoreBase):
         )
 
     def put_object(self, obj: Object) -> ObjectId:
+        self._ensure_writable()
         stored = normalize_object(obj)
         object_id_value = object_id(stored)
         with self._write_lock:
@@ -600,6 +609,7 @@ class SqliteStore(StoreBase):
         return [str(row["id"]) for row in rows]
 
     def set_ref(self, name: str, object_id: ObjectId) -> None:
+        self._ensure_writable()
         with self._write_lock:
             self.connection.execute(
                 """
@@ -620,6 +630,7 @@ class SqliteStore(StoreBase):
         return str(row["object_id"])
 
     def record_derivation(self, derivation: Derivation) -> str:
+        self._ensure_writable()
         stored = normalize_derivation(derivation)
         id_value = derivation_id(stored)
         with self._write_lock:
@@ -690,6 +701,7 @@ class SqliteStore(StoreBase):
         hashing rules ever differ between the exporting and importing
         versions.
         """
+        self._ensure_writable()
         stored = normalize_object(obj)
         with self._write_lock:
             self.connection.execute(
@@ -715,6 +727,7 @@ class SqliteStore(StoreBase):
         created_at: float,
     ) -> None:
         """Insert an exported derivation, preserving its original timestamp."""
+        self._ensure_writable()
         stored = normalize_derivation(derivation)
         with self._write_lock:
             self.connection.execute(

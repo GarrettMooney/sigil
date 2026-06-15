@@ -56,6 +56,7 @@ from zeta.events import (
     events_for_turn,
     model_called_event,
     publish_event,
+    set_event_store_path_factory,
     tool_called_event,
 )
 
@@ -351,13 +352,17 @@ def test_event_store_records_large_events_across_processes() -> None:
         assert set(payload) in ({"a"}, {"b"})
 
 
-def test_event_store_path_is_separate_from_trace_object_store() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            path = event_store_path()
+def test_event_store_path_uses_zeta_state_dir() -> None:
+    try:
+        set_event_store_path_factory(None)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch_dict(
+                os.environ,
+                {"ZETA_STATE_DIR": tmp},
+            ):
+                path = event_store_path()
+    finally:
+        set_event_store_path_factory(lambda: state_dir() / "events.sqlite3")
 
     assert path == Path(tmp) / "events.sqlite3"
 
@@ -410,22 +415,26 @@ def test_publish_event_uses_configured_event_sink(tmp_path: Path) -> None:
     assert sink.store.get(outcome.event.id) == outcome.event
 
 
-def test_publish_event_defaults_to_sqlite_event_store() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            outcome = publish_event(
-                DraftEvent(
-                    event_type="test.default_sink",
-                    source="test",
-                    payload={"ok": True},
+def test_publish_event_defaults_to_zeta_sqlite_event_store() -> None:
+    try:
+        set_event_store_path_factory(None)
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch_dict(
+                os.environ,
+                {"ZETA_STATE_DIR": tmp},
+            ):
+                outcome = publish_event(
+                    DraftEvent(
+                        event_type="test.default_sink",
+                        source="test",
+                        payload={"ok": True},
+                    )
                 )
-            )
-            stored = SqliteEventStore(Path(tmp) / "events.sqlite3").get(
-                outcome.event.id
-            )
+                stored = SqliteEventStore(Path(tmp) / "events.sqlite3").get(
+                    outcome.event.id
+                )
+    finally:
+        set_event_store_path_factory(lambda: state_dir() / "events.sqlite3")
 
     assert outcome.inserted is True
     assert stored == outcome.event

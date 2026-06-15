@@ -113,7 +113,7 @@ def test_zeta_default_store_follows_the_session_path(
     tmp_path: Path,
 ) -> None:
     first = zeta_trace.default_store()
-    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "other-state"))
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / "other-state"))
 
     second = zeta_trace.default_store()
 
@@ -1506,6 +1506,233 @@ def test_sigil_zeta_trace_log_widens_with_kind_and_all(monkeypatch) -> None:
     assert limited.exit_code == 0
     assert len(limited.output.splitlines()) == 1
     assert limited.output.startswith(zeta_trace_short(answer_id))
+
+
+def test_sigil_zeta_trace_tools_json_joins_calls_and_results(monkeypatch) -> None:
+    store = zeta_trace.InMemoryStore()
+    ok_call_id = store.put_object(
+        zeta_trace.Object(
+            kind="tool_call",
+            schema="zeta.tool_call.v1",
+            data={
+                "tool_call_id": "call-ok",
+                "name": "read",
+                "input": {"path": "README.md"},
+            },
+        )
+    )
+    store.put_object(
+        zeta_trace.Object(
+            kind="tool_result",
+            schema="zeta.tool_result.v1",
+            data={
+                "tool_call_id": "call-ok",
+                "name": "read",
+                "result": {"ok": True, "metadata": {"path": "README.md"}},
+            },
+            links=(ok_call_id,),
+        )
+    )
+    failed_call_id = store.put_object(
+        zeta_trace.Object(
+            kind="tool_call",
+            schema="zeta.tool_call.v1",
+            data={
+                "tool_call_id": "call-fail",
+                "name": "read",
+                "input": {"path": "missing.md"},
+            },
+        )
+    )
+    failed_result_id = store.put_object(
+        zeta_trace.Object(
+            kind="tool_result",
+            schema="zeta.tool_result.v1",
+            data={
+                "tool_call_id": "call-fail",
+                "name": "read",
+                "result": {
+                    "ok": False,
+                    "error": {"code": "read-failed", "message": "missing.md"},
+                },
+            },
+            links=(failed_call_id,),
+        )
+    )
+    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+
+    result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--json"])
+
+    assert result.exit_code == 0
+    rows = json.loads(result.output)
+    assert [row["tool_call_id"] for row in rows] == ["call-fail", "call-ok"]
+    assert rows[0]["ok"] is False
+    assert rows[0]["error"]["code"] == "read-failed"
+    assert rows[0]["tool_call_object_id"] == failed_call_id
+    assert rows[0]["tool_result_object_id"] == failed_result_id
+    assert rows[1]["ok"] is True
+    assert rows[1]["input"] == {"path": "README.md"}
+
+
+def test_sigil_zeta_trace_tools_failed_filters_json(monkeypatch) -> None:
+    store = zeta_trace.InMemoryStore()
+    store.put_object(
+        zeta_trace.Object(
+            kind="tool_call",
+            schema="zeta.tool_call.v1",
+            data={"tool_call_id": "call-ok", "name": "grep", "input": {}},
+        )
+    )
+    store.put_object(
+        zeta_trace.Object(
+            kind="tool_result",
+            schema="zeta.tool_result.v1",
+            data={"tool_call_id": "call-ok", "name": "grep", "result": {"ok": True}},
+        )
+    )
+    failed_call_id = store.put_object(
+        zeta_trace.Object(
+            kind="tool_call",
+            schema="zeta.tool_call.v1",
+            data={"tool_call_id": "call-fail", "name": "edit", "input": {}},
+        )
+    )
+    store.put_object(
+        zeta_trace.Object(
+            kind="tool_result",
+            schema="zeta.tool_result.v1",
+            data={
+                "tool_call_id": "call-fail",
+                "name": "edit",
+                "result": {
+                    "ok": False,
+                    "error": {"code": "old-text-not-found", "message": "missing"},
+                },
+            },
+            links=(failed_call_id,),
+        )
+    )
+    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+
+    result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--failed", "--json"])
+
+    assert result.exit_code == 0
+    rows = json.loads(result.output)
+    assert len(rows) == 1
+    assert rows[0]["tool_call_id"] == "call-fail"
+    assert rows[0]["ok"] is False
+
+
+def test_sigil_zeta_trace_tools_successful_filters_json(monkeypatch) -> None:
+    store = zeta_trace.InMemoryStore()
+    store.put_object(
+        zeta_trace.Object(
+            kind="tool_call",
+            schema="zeta.tool_call.v1",
+            data={"tool_call_id": "call-ok", "name": "read", "input": {}},
+        )
+    )
+    store.put_object(
+        zeta_trace.Object(
+            kind="tool_result",
+            schema="zeta.tool_result.v1",
+            data={"tool_call_id": "call-ok", "name": "read", "result": {"ok": True}},
+        )
+    )
+    store.put_object(
+        zeta_trace.Object(
+            kind="tool_call",
+            schema="zeta.tool_call.v1",
+            data={"tool_call_id": "call-fail", "name": "read", "input": {}},
+        )
+    )
+    store.put_object(
+        zeta_trace.Object(
+            kind="tool_result",
+            schema="zeta.tool_result.v1",
+            data={
+                "tool_call_id": "call-fail",
+                "name": "read",
+                "result": {"ok": False},
+            },
+        )
+    )
+    monkeypatch.setattr("sigil.cli.trace.default_store", lambda: store)
+
+    result = CliRunner().invoke(sigil_cli, ["trace", "tools", "--successful", "--json"])
+
+    assert result.exit_code == 0
+    rows = json.loads(result.output)
+    assert len(rows) == 1
+    assert rows[0]["tool_call_id"] == "call-ok"
+    assert rows[0]["ok"] is True
+
+
+def test_sigil_zeta_trace_tools_status_filters_conflict() -> None:
+    result = CliRunner().invoke(
+        sigil_cli, ["trace", "tools", "--failed", "--successful"]
+    )
+
+    assert result.exit_code != 0
+    assert "--failed conflicts with --successful" in result.output
+
+
+def test_sigil_zeta_trace_tools_all_sessions_sorts_by_trace_time(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    def seed_tool_result(session: str, call_id: str, created_at: float) -> None:
+        store = zeta_trace.SqliteStore(tmp_path / session / "zeta-trace.sqlite3")
+        call_object_id = store.put_object(
+            zeta_trace.Object(
+                kind="tool_call",
+                schema="zeta.tool_call.v1",
+                data={"tool_call_id": call_id, "name": "read", "input": {}},
+            )
+        )
+        result_object_id = store.put_object(
+            zeta_trace.Object(
+                kind="tool_result",
+                schema="zeta.tool_result.v1",
+                data={
+                    "tool_call_id": call_id,
+                    "name": "read",
+                    "result": {"ok": True},
+                },
+                links=(call_object_id,),
+            )
+        )
+        store.import_derivation(
+            f"derivation:{call_id}",
+            zeta_trace.Derivation(
+                producer="unit:test",
+                output_id=result_object_id,
+                input_ids=(call_object_id,),
+            ),
+            created_at,
+        )
+        store.close()
+
+    seed_tool_result("old", "call-old", 10.0)
+    seed_tool_result("new", "call-new", 20.0)
+
+    monkeypatch.setattr("sigil.cli.trace.available_session_ids", lambda: ["old", "new"])
+    monkeypatch.setattr(
+        "sigil.cli.trace.open_session_store",
+        lambda session: zeta_trace.SqliteStore(
+            tmp_path / session / "zeta-trace.sqlite3",
+            read_only=True,
+        ),
+    )
+
+    result = CliRunner().invoke(
+        sigil_cli,
+        ["trace", "tools", "--all-sessions", "--json", "--limit", "2"],
+    )
+
+    assert result.exit_code == 0
+    rows = json.loads(result.output)
+    assert [row["tool_call_id"] for row in rows] == ["call-new", "call-old"]
 
 
 def zeta_trace_short(object_id: str) -> str:
