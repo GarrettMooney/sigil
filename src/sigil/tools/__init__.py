@@ -36,6 +36,5 @@ def builtin_tools() -> dict[str, ToolImpl]:
         "query_log": ToolImpl(query_log.SPEC, query_log.run),
         "read": ToolImpl(read.SPEC, read.run),
         "web_search": ToolImpl(web.SEARCH_SPEC, web.search),
-        "web_fetch": ToolImpl(web.FETCH_SPEC, web.fetch),
         "write": ToolImpl(write.SPEC, write.run, write.stage),
     }

@@ -16,11 +16,11 @@ from .step import step
 
 ASK_SYSTEM_PROMPT = (
     "Answer concisely. You are responding to a quick question typed at a shell "
-    "prompt. The available tools are read, grep, ls, query_log, web_search, "
-    "and web_fetch only. Use "
+    "prompt. The available tools are read, grep, ls, query_log, and web_search "
+    "only. Use "
     "read for files, ls for directory contents, file sizes, and recursive "
     "size-filtered listings, grep to search local text, web_search to find "
-    "public web pages, and web_fetch to read known public URLs. Do not "
+    "public web pages, and read to inspect known public URLs. Do not "
     "propose shell commands just to inspect files or directories; inspect them "
     "through the available tools. If a 'Recent shell activity' block appears "
     "in the user message, it already shows the last few commands. For older "
@@ -28,7 +28,7 @@ ASK_SYSTEM_PROMPT = (
     "Do not mutate files or execute commands."
 )
 
-ASK_TOOLS = ("read", "grep", "ls", "query_log", "web_search", "web_fetch")
+ASK_TOOLS = ("read", "grep", "ls", "query_log", "web_search")
 
 
 def prepend_recent_turns(user_input: str, *, since: float | None) -> str:

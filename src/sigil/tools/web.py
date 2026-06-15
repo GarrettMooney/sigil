@@ -1,60 +1,42 @@
-"""Parallel-backed public web tools."""
+"""Codex-backed public web search tool."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from typing import Any
 
-from zeta.tools.base import ToolSpec, error_result, write_temp
+from zeta.models.chat_completions import iter_sse_data
+from zeta.models.codex_auth import CodexCredentials, load_codex_credentials
+from zeta.models.responses import codex_request_headers, codex_responses_url
+from zeta.tools.base import ToolSpec, error_result
 
-DEFAULT_BASE_URL = "https://api.parallel.ai"
-DEFAULT_SEARCH_MODE = "basic"
 DEFAULT_TIMEOUT_SEC = 30.0
 DEFAULT_MAX_PREVIEW_BYTES = 8 * 1024
 DEFAULT_MAX_PREVIEW_LINES = 100
-DEFAULT_MAX_CHARS_TOTAL = 24_000
+DEFAULT_SEARCH_MODEL = "gpt-5.5"
+DEFAULT_LIMIT = 10
+DEFAULT_SEARCH_CONTEXT_SIZE = "high"
 
 SEARCH_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["objective", "search_queries"],
+    "required": ["query"],
     "properties": {
-        "objective": {
+        "query": {
             "type": "string",
-            "description": "Self-contained natural-language search objective.",
+            "description": "Self-contained public web search query.",
         },
-        "search_queries": {
-            "type": "array",
-            "description": "2-3 diverse keyword search queries, each 3-6 words.",
-            "items": {"type": "string"},
-            "minItems": 2,
-            "maxItems": 3,
-        },
-    },
-}
-
-FETCH_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["urls"],
-    "properties": {
-        "urls": {
-            "type": "array",
-            "description": "Public URLs to fetch.",
-            "items": {"type": "string"},
-            "minItems": 1,
-            "maxItems": 20,
-        },
-        "objective": {
-            "type": "string",
-            "description": (
-                "Optional natural-language description of what to extract from "
-                "the pages."
-            ),
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "description": "Maximum number of source URLs to return.",
         },
     },
 }
@@ -62,32 +44,39 @@ FETCH_SCHEMA: dict[str, Any] = {
 SEARCH_SPEC = ToolSpec(
     "web_search",
     (
-        "Search public web pages using Parallel. Provide a self-contained "
-        "objective and 2-3 keyword queries."
+        "Search public web pages using Codex hosted web search. Provide one "
+        "self-contained query; use read for URLs returned by the search."
     ),
     SEARCH_SCHEMA,
     effects=("search",),
 )
 
-FETCH_SPEC = ToolSpec(
-    "web_fetch",
-    (
-        "Fetch public URLs using Parallel and return clean Markdown. Use for "
-        "known URLs; authenticated or private pages may fail."
-    ),
-    FETCH_SCHEMA,
-    effects=("search",),
-)
+
+@dataclass(frozen=True)
+class SearchSource:
+    title: str
+    url: str
+    snippet: str = ""
+
+
+@dataclass(frozen=True)
+class CodexSearch:
+    answer: str
+    sources: list[SearchSource]
+    request_id: str | None = None
+    model: str | None = None
+    usage: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
 class WebConfig:
-    api_key: str
-    base_url: str = DEFAULT_BASE_URL
+    credentials: CodexCredentials
+    model: str = DEFAULT_SEARCH_MODEL
     timeout_sec: float = DEFAULT_TIMEOUT_SEC
     max_preview_bytes: int = DEFAULT_MAX_PREVIEW_BYTES
     max_preview_lines: int = DEFAULT_MAX_PREVIEW_LINES
-    search_mode: str = DEFAULT_SEARCH_MODE
+    limit: int = DEFAULT_LIMIT
+    selected_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,122 +85,64 @@ class Preview:
     truncated: bool
 
 
+@dataclass
+class CodexSearchAccumulator:
+    text_parts: list[str] = field(default_factory=list)
+    streamed_parts: list[str] = field(default_factory=list)
+    sources: list[SearchSource] = field(default_factory=list)
+    request_id: str | None = None
+    model: str | None = None
+    usage: dict[str, int] | None = None
+
+    def answer(self) -> str:
+        answer = "\n\n".join(part for part in self.text_parts if part).strip()
+        return answer or "".join(self.streamed_parts).strip()
+
+
 def search(params: dict[str, Any]) -> dict[str, Any]:
-    config = config_from_env()
-    if config is None:
-        return missing_key_error()
-    objective = str(params.get("objective") or "").strip()
-    search_queries = string_list(params.get("search_queries"))
-    if not objective:
-        return error_result("missing-objective", "web_search requires objective")
-    if len(search_queries) < 2 or len(search_queries) > 3:
-        return error_result(
-            "invalid-search-queries",
-            "web_search requires 2-3 search_queries",
-        )
-    payload: dict[str, Any] = {
-        "objective": objective,
-        "search_queries": search_queries,
-        "mode": config.search_mode,
-        "max_chars_total": DEFAULT_MAX_CHARS_TOTAL,
-    }
-    response = request_or_error("/v1/search", payload, config)
+    query = str(params.get("query") or "").strip()
+    if not query:
+        return error_result("missing-query", "web_search requires query")
+    limit = int(params.get("limit") or DEFAULT_LIMIT)
+    if limit < 1 or limit > 20:
+        return error_result("invalid-limit", "web_search limit must be 1-20")
+    try:
+        config = config_from_env(limit=limit)
+    except RuntimeError as exc:
+        return error_result("codex-auth-missing", str(exc))
+    response = request_or_error(query, config)
     if response.get("ok") is False:
         return response
-    results = search_results(response)
-    text = format_search_markdown(objective, results)
+    result = response["result"]
+    if not isinstance(result, CodexSearch):
+        return error_result("codex-bad-response", "Codex search response was invalid")
+    sources = result.sources[:limit]
+    text = format_search_markdown(query, result.answer, sources)
     preview = bounded_preview(
         text,
         max_bytes=config.max_preview_bytes,
         max_lines=config.max_preview_lines,
     )
-    metadata = {
-        "objective": objective,
-        "search_queries": search_queries,
-        "provider": "parallel",
-        "search_id": text_or_none(response.get("search_id") or response.get("id")),
-        "session_id": text_or_none(response.get("session_id")),
-        "result_count": len(results),
-        "truncated": preview.truncated,
-    }
     return {
         "ok": True,
         "content": [{"type": "text", "text": preview.text}],
-        "metadata": metadata,
+        "metadata": {
+            "query": query,
+            "provider": "codex",
+            "request_id": result.request_id,
+            "model": result.model,
+            "result_count": len(sources),
+            "truncated": preview.truncated,
+            "usage": result.usage,
+        },
     }
 
 
-def fetch(params: dict[str, Any]) -> dict[str, Any]:
-    config = config_from_env()
-    if config is None:
-        return missing_key_error()
-    urls = string_list(params.get("urls"))
-    if not urls or len(urls) > 20:
-        return error_result("invalid-urls", "web_fetch requires 1-20 urls")
-    objective = str(params.get("objective") or "").strip()
-    payload: dict[str, Any] = {
-        "urls": urls,
-        "max_chars_total": DEFAULT_MAX_CHARS_TOTAL,
-    }
-    if objective:
-        payload["objective"] = objective
-    response = request_or_error("/v1/extract", payload, config)
-    if response.get("ok") is False:
-        return response
-    pages = fetched_pages(response)
-    url_errors = extract_errors(response)
-    text = format_fetch_markdown(pages, url_errors)
-    lines = count_lines(text)
-    byte_count = len(text.encode("utf-8"))
-    preview = bounded_preview(
-        text,
-        max_bytes=config.max_preview_bytes,
-        max_lines=config.max_preview_lines,
-    )
-    metadata: dict[str, Any] = {
-        "urls": urls,
-        "provider": "parallel",
-        "extract_id": text_or_none(response.get("extract_id") or response.get("id")),
-        "session_id": text_or_none(response.get("session_id")),
-        "bytes": byte_count,
-        "lines": lines,
-        "url_errors": url_errors,
-        "truncated": preview.truncated,
-    }
-    if preview.truncated:
-        path = write_temp("sigil_web_", ".md", text)
-        metadata["output_path"] = str(path)
-        shown = count_lines(preview.text)
-        body = (
-            f"web_fetch urls={', '.join(urls)}\n"
-            f"output_path={path}\n\n"
-            f"<head -{shown} {path}>\n"
-            f"{preview.text}"
-        )
-        if body and not body.endswith("\n"):
-            body += "\n"
-        body += (
-            "</head>\n"
-            "Use read path=<output_path> start_line=<line> max_lines=<count> "
-            "raw=true to inspect more."
-        )
-        content_text = body
-    else:
-        content_text = text
-    return {
-        "ok": True,
-        "content": [{"type": "text", "text": content_text}],
-        "metadata": metadata,
-    }
-
-
-def config_from_env() -> WebConfig | None:
-    api_key = os.environ.get("PARALLEL_API_KEY", "").strip()
-    if not api_key:
-        return None
+def config_from_env(*, limit: int) -> WebConfig:
+    credentials = load_codex_credentials()
     return WebConfig(
-        api_key=api_key,
-        base_url=os.environ.get("PARALLEL_BASE_URL", DEFAULT_BASE_URL).rstrip("/"),
+        credentials=credentials,
+        model=os.environ.get("SIGIL_WEB_SEARCH_MODEL", DEFAULT_SEARCH_MODEL),
         timeout_sec=float(os.environ.get("SIGIL_WEB_TIMEOUT_SEC", DEFAULT_TIMEOUT_SEC)),
         max_preview_bytes=int(
             os.environ.get("SIGIL_WEB_MAX_PREVIEW_BYTES", DEFAULT_MAX_PREVIEW_BYTES)
@@ -219,43 +150,55 @@ def config_from_env() -> WebConfig | None:
         max_preview_lines=int(
             os.environ.get("SIGIL_WEB_MAX_PREVIEW_LINES", DEFAULT_MAX_PREVIEW_LINES)
         ),
-        search_mode=os.environ.get("SIGIL_WEB_SEARCH_MODE", DEFAULT_SEARCH_MODE),
+        limit=limit,
+        selected_url=os.environ.get("SIGIL_CODEX_BASE_URL"),
     )
 
 
-def missing_key_error() -> dict[str, Any]:
-    return error_result("parallel-api-key-missing", "PARALLEL_API_KEY is not set")
-
-
-def request_or_error(
-    endpoint: str, payload: dict[str, Any], config: WebConfig
-) -> dict[str, Any]:
+def request_or_error(query: str, config: WebConfig) -> dict[str, Any]:
     try:
-        return parallel_request(endpoint, payload, config)
+        return {"ok": True, "result": codex_search(query, config)}
     except TimeoutError as exc:
-        return error_result("parallel-timeout", str(exc))
+        return error_result("codex-timeout", str(exc))
     except OSError as exc:
-        return error_result("parallel-request-failed", str(exc))
+        return error_result("codex-request-failed", str(exc))
     except ValueError as exc:
-        return error_result("parallel-bad-response", str(exc))
+        return error_result("codex-bad-response", str(exc))
 
 
-def parallel_request(
-    endpoint: str, payload: dict[str, Any], config: WebConfig
-) -> dict[str, Any]:
-    body = json.dumps(payload).encode("utf-8")
+def codex_search(query: str, config: WebConfig) -> CodexSearch:
+    body = {
+        "model": config.model,
+        "stream": True,
+        "store": False,
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": query}],
+            }
+        ],
+        "tools": [
+            {
+                "type": "web_search",
+                "search_context_size": DEFAULT_SEARCH_CONTEXT_SIZE,
+            }
+        ],
+        "tool_choice": {"type": "web_search"},
+        "instructions": (
+            "Search the public web and answer concisely. Cite sources with "
+            "URL citations when possible."
+        ),
+    }
     request = urllib.request.Request(
-        config.base_url + endpoint,
-        data=body,
-        headers={
-            "content-type": "application/json",
-            "x-api-key": config.api_key,
-        },
+        codex_responses_url(config.selected_url),
+        data=json.dumps(body).encode("utf-8"),
+        headers=codex_request_headers(config.credentials, "sigil-web-search"),
         method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=config.timeout_sec) as response:
-            raw = response.read()
+            return parse_codex_search_events(response)
     except urllib.error.HTTPError as exc:
         message = exc.reason
         try:
@@ -264,122 +207,174 @@ def parallel_request(
             error_body = ""
         if error_body:
             message = error_body
-        raise OSError(f"Parallel HTTP {exc.code}: {message}") from exc
-    data = json.loads(raw.decode("utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError("Parallel response was not a JSON object")
-    return data
+        raise OSError(f"Codex HTTP {exc.code}: {message}") from exc
 
 
-def search_results(response: dict[str, Any]) -> list[dict[str, str]]:
-    raw_results = response.get("results")
-    if not isinstance(raw_results, list):
-        return []
-    results = []
-    for raw in raw_results:
-        if not isinstance(raw, dict):
+def parse_codex_search_events(chunks: Iterable[bytes]) -> CodexSearch:
+    acc = CodexSearchAccumulator()
+    for payload in iter_sse_data(chunks):
+        if payload == "[DONE]":
+            break
+        handle_codex_event(load_codex_event(payload), acc)
+    answer = acc.answer()
+    if not answer and not acc.sources:
+        raise ValueError("Codex search returned no answer or sources")
+    sources = acc.sources or extract_text_sources(answer)
+    return CodexSearch(
+        answer=answer,
+        sources=sources,
+        request_id=acc.request_id,
+        model=acc.model,
+        usage=acc.usage,
+    )
+
+
+def load_codex_event(payload: str) -> dict[str, Any]:
+    event = json.loads(payload)
+    if not isinstance(event, dict):
+        raise ValueError("Codex stream event was not a JSON object")
+    return event
+
+
+def handle_codex_event(event: dict[str, Any], acc: CodexSearchAccumulator) -> None:
+    event_type = str(event.get("type") or "")
+    if event_type == "error":
+        raise ValueError(format_event_error(event))
+    if event_type == "response.failed":
+        raise ValueError(format_response_failure(event))
+    if event_type == "response.output_text.delta":
+        collect_streamed_delta(event, acc)
+    elif event_type == "response.output_item.done":
+        collect_output_item(event.get("item"), acc.text_parts, acc.sources)
+    elif event_type in {"response.completed", "response.done"}:
+        collect_response_metadata(event, acc)
+
+
+def collect_streamed_delta(
+    event: dict[str, Any],
+    acc: CodexSearchAccumulator,
+) -> None:
+    delta = event.get("delta")
+    if isinstance(delta, str):
+        acc.streamed_parts.append(delta)
+
+
+def collect_response_metadata(
+    event: dict[str, Any],
+    acc: CodexSearchAccumulator,
+) -> None:
+    response = event.get("response")
+    if not isinstance(response, dict):
+        return
+    acc.request_id = text_or_none(response.get("id")) or acc.request_id
+    acc.model = text_or_none(response.get("model")) or acc.model
+    acc.usage = response_usage(response.get("usage")) or acc.usage
+
+
+def collect_output_item(
+    item: Any,
+    text_parts: list[str],
+    sources: list[SearchSource],
+) -> None:
+    if not isinstance(item, dict) or item.get("type") != "message":
+        return
+    content = item.get("content")
+    if not isinstance(content, list):
+        return
+    for part in content:
+        if not isinstance(part, dict):
             continue
-        url = first_text(raw, "url", "href", "link")
-        title = first_text(raw, "title", "name")
-        excerpt = result_excerpt(raw)
+        if part.get("type") == "output_text" and isinstance(part.get("text"), str):
+            text_parts.append(part["text"])
+        annotations = part.get("annotations")
+        if isinstance(annotations, list):
+            collect_annotations(annotations, sources)
+
+
+def collect_annotations(annotations: list[Any], sources: list[SearchSource]) -> None:
+    for annotation in annotations:
+        if not isinstance(annotation, dict):
+            continue
+        if annotation.get("type") != "url_citation":
+            continue
+        url = text_or_none(annotation.get("url"))
         if not url:
             continue
-        results.append({"url": url, "title": title or url, "excerpt": excerpt})
-    return results
+        title = text_or_none(annotation.get("title")) or url
+        add_source(sources, SearchSource(title=title, url=url))
 
 
-def result_excerpt(raw: dict[str, Any]) -> str:
-    for key in ("excerpt", "snippet", "summary", "text"):
-        value = raw.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    excerpts = raw.get("excerpts")
-    if isinstance(excerpts, list):
-        parts = []
-        for item in excerpts:
-            if isinstance(item, str):
-                parts.append(item.strip())
-            elif isinstance(item, dict):
-                text = first_text(item, "text", "excerpt", "snippet")
-                if text:
-                    parts.append(text)
-        return " ".join(part for part in parts if part)
-    return ""
-
-
-def format_search_markdown(objective: str, results: list[dict[str, str]]) -> str:
-    lines = ["# Web search results", "", f"Objective: {objective}", ""]
-    if not results:
-        lines.append("No results returned.")
-        return "\n".join(lines)
-    for index, result in enumerate(results, start=1):
-        lines.append(
-            f"{index}. [{escape_markdown_link(result['title'])}]({result['url']})"
-        )
-        if result["excerpt"]:
-            lines.append(f"   {normalize_ws(result['excerpt'])}")
-    return "\n".join(lines)
-
-
-def fetched_pages(response: dict[str, Any]) -> list[dict[str, str]]:
-    raw_results = response.get("results")
-    if not isinstance(raw_results, list):
-        return []
-    pages = []
-    for raw in raw_results:
-        if not isinstance(raw, dict):
-            continue
-        url = first_text(raw, "url", "href", "link")
-        title = first_text(raw, "title", "name")
-        content = first_text(raw, "content", "markdown", "text", "body")
-        if not content:
-            continue
-        pages.append(
-            {"url": url, "title": title or url or "Fetched page", "content": content}
-        )
-    return pages
-
-
-def extract_errors(response: dict[str, Any]) -> list[dict[str, str]]:
-    raw_errors = response.get("errors")
-    if not isinstance(raw_errors, list):
-        return []
-    errors = []
-    for raw in raw_errors:
-        if isinstance(raw, str):
-            errors.append({"url": "", "message": raw})
-        elif isinstance(raw, dict):
-            errors.append(
-                {
-                    "url": first_text(raw, "url", "href", "link"),
-                    "message": first_text(raw, "message", "error", "reason")
-                    or "failed",
-                }
-            )
-    return errors
-
-
-def format_fetch_markdown(
-    pages: list[dict[str, str]], errors: list[dict[str, str]]
+def format_search_markdown(
+    query: str,
+    answer: str,
+    sources: list[SearchSource],
 ) -> str:
-    lines: list[str] = []
-    for index, page in enumerate(pages):
-        if index:
-            lines.extend(["", "---", ""])
-        lines.append(f"# {page['title']}")
-        if page["url"]:
-            lines.extend(["", f"URL: {page['url']}"])
-        lines.extend(["", page["content"].strip()])
-    if errors:
-        if lines:
-            lines.append("")
-        lines.append("## Fetch errors")
-        for error in errors:
-            prefix = f"{error['url']}: " if error["url"] else ""
-            lines.append(f"- {prefix}{error['message']}")
-    if not lines:
-        return "No content returned."
+    lines = ["# Web search", "", f"Query: {query}", ""]
+    if answer:
+        lines.extend([answer.strip(), ""])
+    if sources:
+        lines.append("## Sources")
+        for index, source in enumerate(sources, start=1):
+            lines.append(
+                f"[{index}] [{escape_markdown_link(source.title)}]({source.url})"
+            )
+            if source.snippet:
+                lines.append(f"    {normalize_ws(source.snippet)[:240]}")
     return "\n".join(lines).strip() + "\n"
+
+
+def extract_text_sources(text: str) -> list[SearchSource]:
+    sources: list[SearchSource] = []
+    for match in re.finditer(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", text):
+        add_source(
+            sources, SearchSource(title=match.group(1), url=clean_url(match.group(2)))
+        )
+    for match in re.finditer(r"https?://\S+", text):
+        url = clean_url(match.group(0))
+        add_source(sources, SearchSource(title=url, url=url))
+    return sources
+
+
+def add_source(sources: list[SearchSource], source: SearchSource) -> None:
+    if not source.url or any(existing.url == source.url for existing in sources):
+        return
+    sources.append(source)
+
+
+def clean_url(value: str) -> str:
+    return value.rstrip('.,;:!?)"]}')
+
+
+def response_usage(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    keys = {
+        "input_tokens": "input_tokens",
+        "output_tokens": "output_tokens",
+        "total_tokens": "total_tokens",
+    }
+    usage = {
+        output: count
+        for key, output in keys.items()
+        if isinstance((count := value.get(key)), int) and not isinstance(count, bool)
+    }
+    return usage or None
+
+
+def format_event_error(event: dict[str, Any]) -> str:
+    message = event.get("message")
+    if isinstance(message, str) and message:
+        return message
+    return json.dumps(event, sort_keys=True)
+
+
+def format_response_failure(event: dict[str, Any]) -> str:
+    response = event.get("response")
+    response = response if isinstance(response, dict) else {}
+    error = response.get("error")
+    error = error if isinstance(error, dict) else {}
+    message = error.get("message")
+    return message if isinstance(message, str) and message else "Codex search failed"
 
 
 def bounded_preview(text: str, *, max_bytes: int, max_lines: int) -> Preview:
@@ -399,30 +394,10 @@ def bounded_preview(text: str, *, max_bytes: int, max_lines: int) -> Preview:
     return Preview("".join(chars), truncated or len(chars) < len(text))
 
 
-def string_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item).strip() for item in value if str(item).strip()]
-
-
-def first_text(raw: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = raw.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
-
-
 def text_or_none(value: Any) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
-
-
-def count_lines(text: str) -> int:
-    if not text:
-        return 0
-    return text.count("\n") + (not text.endswith("\n"))
 
 
 def normalize_ws(text: str) -> str:

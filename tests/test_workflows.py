@@ -2352,7 +2352,6 @@ def test_ask_records_answered_turn_record(monkeypatch, capsys) -> None:
         "ls",
         "query_log",
         "web_search",
-        "web_fetch",
     ]
     assert turn["prompt_object_ids"] == ["sha256:ask1"]
     assert turn["cost"]["model_calls"] == 1

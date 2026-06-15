@@ -872,7 +872,10 @@ def test_system_prompt_is_product_neutral_and_dynamic() -> None:
     assert "Tool protocol:" in prompt
     assert "staged effect" in prompt
     assert "Available tools:" in prompt
-    assert "- read(path, offset?, limit?): Read a UTF-8 text file." in prompt
+    assert (
+        "- read(path, offset?, limit?): Read a UTF-8 text file or public HTTP(S) URL."
+        in prompt
+    )
     assert "- ls(path?, limit?, recursive?, min_size_bytes?, exclude?):" in prompt
     assert "Use `grep` to locate occurrences" not in prompt
     assert (

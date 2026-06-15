@@ -157,6 +157,25 @@ def test_sigil_display_terminal_digest_keeps_short_turns_compact() -> None:
     assert renderer.status_detail() == "mapping repo · 1 events · last: README.md"
 
 
+def test_sigil_display_terminal_digest_quotes_web_search_query() -> None:
+    output = StringIO()
+    renderer = display_render.TerminalDigestRenderer(output, clock=lambda: 0.0)
+
+    renderer.observe_tool_call(
+        "web_search",
+        {"query": "Remi Louf .txt AI founder Outlines author"},
+    )
+    renderer.observe_tool_result(
+        "web_search",
+        {"ok": True, "metadata": {"result_count": 4}},
+    )
+
+    assert (
+        output.getvalue()
+        == '✓ web_search "Remi Louf .txt AI founder Outlines author" · 4 results\n'
+    )
+
+
 def test_sigil_display_terminal_digest_has_no_empty_status_detail() -> None:
     output = StringIO()
     renderer = display_render.TerminalDigestRenderer(output)
@@ -342,23 +361,10 @@ def test_sigil_display_renders_tool_paths_relative_to_cwd(
         display_summarize.summarize(
             "web_search",
             {
-                "objective": "Find concise public information about Remi Louf",
-                "search_queries": ["Remi Louf public profile", "Remi Louf dottxt"],
+                "query": "Remi Louf public profile",
             },
         )
-        == "Remi Louf public profile"
-    )
-    assert (
-        display_summarize.summarize(
-            "web_fetch",
-            {
-                "urls": [
-                    "https://dottxt.ai",
-                    "https://github.com/dottxt-ai",
-                ],
-            },
-        )
-        == "dottxt.ai +1"
+        == '"Remi Louf public profile"'
     )
     assert display_summarize.tool_result_summary(
         "write",
@@ -368,10 +374,6 @@ def test_sigil_display_renders_tool_paths_relative_to_cwd(
         "web_search",
         {"ok": True, "metadata": {"result_count": 8}},
     ) == ["8 results"]
-    assert display_summarize.tool_result_summary(
-        "web_fetch",
-        {"ok": True, "metadata": {"bytes": 12_345, "lines": 123}},
-    ) == ["12.1 KB · 123 lines"]
 
 
 def test_sigil_display_summarizes_current_context_estimate() -> None:

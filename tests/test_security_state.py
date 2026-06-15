@@ -100,7 +100,7 @@ def resolved_import_module(
 def test_question_system_prompt_points_zeta_at_query_log_for_older_history() -> None:
     assert "use query_log" in ASK_SYSTEM_PROMPT
     assert (
-        "available tools are read, grep, ls, query_log, web_search, and web_fetch only"
+        "available tools are read, grep, ls, query_log, and web_search only"
         in ASK_SYSTEM_PROMPT
     )
 
@@ -998,8 +998,8 @@ def test_question_workflows_record_glyph_and_local_tools() -> None:
             assert calls[0][1]["workflow"] == "ask"
             assert calls[0][1]["system"] == ASK_SYSTEM_PROMPT
             assert (
-                "available tools are read, grep, ls, query_log, web_search, "
-                "and web_fetch only" in calls[0][1]["system"]
+                "available tools are read, grep, ls, query_log, and web_search only"
+                in calls[0][1]["system"]
             )
             assert calls[0][1]["allowed_tools"] == (
                 "read",
@@ -1007,7 +1007,6 @@ def test_question_workflows_record_glyph_and_local_tools() -> None:
                 "ls",
                 "query_log",
                 "web_search",
-                "web_fetch",
             )
             assert calls[1][1]["allowed_tools"] == ("read", "grep", "ls")
             assert calls[1][1]["prompt"] == "what is sigil?"

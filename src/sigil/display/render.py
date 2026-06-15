@@ -381,6 +381,8 @@ def progress_subject(
     handoff = handoff if isinstance(handoff, dict) else {}
     if name == "ls":
         return ls_progress_subject(metadata, args)
+    if name == "web_search":
+        return summarize(name, args)
     for source in (metadata, effect, handoff, args):
         for key in progress_subject_fields(name):
             value = source.get(key)
