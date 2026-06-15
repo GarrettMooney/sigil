@@ -29,6 +29,7 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
 def builtin_tools() -> dict[str, ToolImpl]:
     return {
         "bash": ToolImpl(bash.SPEC, bash.run, bash.stage),
+        "ast_grep": ToolImpl(grep.AST_GREP_SPEC, grep.run_ast_grep),
         "edit": ToolImpl(edit.SPEC, edit.run, edit.stage),
         "grep": ToolImpl(grep.SPEC, grep.run),
         "ls": ToolImpl(ls.SPEC, ls.run),

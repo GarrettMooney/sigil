@@ -52,16 +52,23 @@ def test_sigil_registers_builtin_tools_explicitly() -> None:
 
     register_builtin_tools(registry)
 
-    assert {"read", "grep", "ls", "bash", "edit", "write", "query_log"} <= set(
-        registry.list_tool_names()
-    )
+    assert {
+        "ast_grep",
+        "read",
+        "grep",
+        "ls",
+        "bash",
+        "edit",
+        "write",
+        "query_log",
+    } <= set(registry.list_tool_names())
 
 
 def test_sigil_ensures_shared_zeta_registry_has_builtins() -> None:
     ensure_builtin_tools_registered()
 
     names = set(tool_registry.list_tool_names())
-    assert {"read", "grep", "ls", "bash", "edit", "write"} <= names
+    assert {"read", "grep", "ast_grep", "ls", "bash", "edit", "write"} <= names
 
 
 def test_zeta_tool_registry_does_not_import_sigil_tools() -> None:
@@ -93,6 +100,22 @@ def test_zeta_grep_metadata_guides_model_tool_choice() -> None:
     )
     assert schema["properties"]["limit"]["description"] == (
         "Maximum number of matching lines to return."
+    )
+
+
+def test_zeta_ast_grep_metadata_guides_model_tool_choice() -> None:
+    metadata = tool_metadata("ast_grep")
+    schema = metadata["schema"]
+
+    assert metadata["effects"] == ["search"]
+    assert metadata["description"] == (
+        "Search code structurally with ast-grep. Use when looking for syntax "
+        "patterns rather than plain text. Results include [path#tag] snapshot "
+        "headers and numbered matched lines for grounded edits."
+    )
+    assert schema["required"] == ["pattern", "lang"]
+    assert schema["properties"]["pattern"]["description"].startswith(
+        "ast-grep structural pattern"
     )
 
 
@@ -240,6 +263,63 @@ def test_zeta_tool_grep_tag_can_ground_hashline_edit(tmp_path: Path) -> None:
 
     assert data["ok"] is True
     assert target.read_text(encoding="utf-8") == "keep\nneedle new\nkeep\n"
+
+
+@pytest.mark.skipif(shutil.which("sg") is None, reason="ast-grep is not installed")
+def test_zeta_tool_ast_grep_returns_tagged_structural_matches(tmp_path: Path) -> None:
+    target = tmp_path / "sample.py"
+    target.write_text(
+        "import subprocess\n\n"
+        "def run_it():\n"
+        "    return subprocess.Popen(['echo', 'ok'])\n",
+        encoding="utf-8",
+    )
+
+    data = tool_registry.run_tool(
+        "ast_grep",
+        {
+            "path": str(target),
+            "lang": "python",
+            "pattern": "subprocess.Popen($$$ARGS)",
+        },
+    )
+
+    assert data["ok"] is True
+    tag = data["metadata"]["tags"][str(target)]
+    assert data["content"][0]["text"] == (
+        f"[{target}#{tag}]\n4:    return subprocess.Popen(['echo', 'ok'])"
+    )
+    assert data["metadata"]["matches"] == 1
+    assert data["metadata"]["files"] == 1
+
+
+@pytest.mark.skipif(shutil.which("sg") is None, reason="ast-grep is not installed")
+def test_zeta_tool_ast_grep_tag_can_ground_hashline_edit(tmp_path: Path) -> None:
+    target = tmp_path / "sample.py"
+    target.write_text(
+        "import subprocess\n\n"
+        "def run_it():\n"
+        "    return subprocess.Popen(['echo', 'ok'])\n",
+        encoding="utf-8",
+    )
+
+    result = tool_registry.run_tool(
+        "ast_grep",
+        {
+            "path": str(target),
+            "lang": "python",
+            "pattern": "subprocess.Popen($$$ARGS)",
+        },
+    )
+    tag = result["metadata"]["tags"][str(target)]
+    data = tool_registry.run_tool(
+        "edit",
+        {"input": f"[{target}#{tag}]\nSWAP 4..4:\n+    return 'ok'\n"},
+        execution_mode="direct",
+    )
+
+    assert data["ok"] is True
+    assert "return 'ok'\n" in target.read_text(encoding="utf-8")
 
 
 def test_zeta_tool_grep_fallback_stops_at_limit(tmp_path: Path, monkeypatch) -> None:
@@ -618,6 +698,7 @@ def test_zeta_builtin_metadata_declares_effects() -> None:
     assert tool_metadata("edit")["effects"] == ["write"]
     assert tool_metadata("read")["effects"] == ["read"]
     assert tool_metadata("grep")["effects"] == ["search"]
+    assert tool_metadata("ast_grep")["effects"] == ["search"]
     assert tool_metadata("ls")["effects"] == ["read"]
 
 

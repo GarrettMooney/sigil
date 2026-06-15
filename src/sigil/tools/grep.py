@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -40,6 +41,34 @@ SCHEMA: dict[str, Any] = {
     },
 }
 
+AST_GREP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["pattern", "lang"],
+    "properties": {
+        "pattern": {
+            "type": "string",
+            "description": "ast-grep structural pattern, such as 'subprocess.Popen($$$ARGS)'.",
+        },
+        "lang": {
+            "type": "string",
+            "description": "Language for ast-grep parsing, such as python, rust, typescript, or tsx.",
+        },
+        "path": {
+            "type": "string",
+            "description": (
+                "File or directory to search. Defaults to the current working "
+                "directory."
+            ),
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum number of structural matches to return.",
+        },
+    },
+}
+
 SPEC = ToolSpec(
     "grep",
     (
@@ -48,6 +77,17 @@ SPEC = ToolSpec(
         "[path#tag] snapshot headers and numbered lines for grounded edits."
     ),
     SCHEMA,
+    effects=("search",),
+)
+
+AST_GREP_SPEC = ToolSpec(
+    "ast_grep",
+    (
+        "Search code structurally with ast-grep. Use when looking for syntax "
+        "patterns rather than plain text. Results include [path#tag] snapshot "
+        "headers and numbered matched lines for grounded edits."
+    ),
+    AST_GREP_SCHEMA,
     effects=("search",),
 )
 
@@ -99,6 +139,99 @@ class GrepMatch:
     path: str
     line_number: int
     text: str
+
+
+@dataclass(frozen=True)
+class AstGrepMatch:
+    path: str
+    start_line: int
+    lines: tuple[str, ...]
+
+
+def run_ast_grep(params: dict[str, Any]) -> dict[str, Any]:
+    pattern = str(params.get("pattern") or "")
+    lang = str(params.get("lang") or "")
+    path = str(params.get("path") or ".")
+    limit = int(params.get("limit") or 100)
+    if not pattern:
+        return error_result("missing-pattern", "missing pattern")
+    if not lang:
+        return error_result("missing-lang", "missing lang")
+    try:
+        result = run_ast_grep_command(pattern, lang, path, limit)
+    except FileNotFoundError:
+        return error_result(
+            "ast-grep-missing", "ast-grep executable 'sg' was not found"
+        )
+    text, tags = ast_grep_result_text(result)
+    text, content_truncated = truncate_content(text)
+    truncated = result.truncated or content_truncated
+    return {
+        "ok": result.ok,
+        "content": [{"type": "text", "text": text}],
+        "metadata": {
+            "pattern": pattern,
+            "lang": lang,
+            "path": path,
+            "limit": limit,
+            "matches": result.matches,
+            "files": result.files,
+            "truncated": truncated,
+            "match_limit_reached": result.truncated,
+            "content_truncated": content_truncated,
+            "max_chars": MAX_TOOL_RESULT_CHARS,
+            "status": result.status,
+            "tags": tags,
+        },
+    }
+
+
+def run_ast_grep_command(pattern: str, lang: str, path: str, limit: int) -> GrepResult:
+    proc = subprocess.Popen(
+        [
+            "sg",
+            "run",
+            "--pattern",
+            pattern,
+            "--lang",
+            lang,
+            "--json=stream",
+            path,
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    assert proc.stdout is not None
+    lines = []
+    truncated = False
+    for line in proc.stdout:
+        if len(lines) >= limit:
+            truncated = True
+            proc.terminate()
+            break
+        lines.append(line.rstrip("\n"))
+    proc.stdout.close()
+    status = wait_for_exit(proc)
+    stderr = ""
+    if proc.stderr is not None:
+        stderr = proc.stderr.read()
+        proc.stderr.close()
+    if status not in {0, 1} and not truncated:
+        return GrepResult(stderr.strip(), 0, 0, False, ok=False, status=status)
+    files = {
+        match.path
+        for line in lines
+        if (match := parse_ast_grep_match(line)) is not None
+    }
+    return GrepResult(
+        "\n".join(lines),
+        matches=len(lines),
+        files=len(files),
+        truncated=truncated,
+        status=status,
+    )
 
 
 def run_ripgrep(pattern: str, path: str, limit: int) -> GrepResult:
@@ -215,6 +348,56 @@ def tagged_result_text(result: GrepResult) -> tuple[str, dict[str, str]]:
             current_path = match.path
         rendered.append(f"{match.line_number}:{match.text}")
     return "\n".join(rendered), tags
+
+
+def ast_grep_result_text(result: GrepResult) -> tuple[str, dict[str, str]]:
+    if not result.ok:
+        return result.text, {}
+    matches = [
+        match
+        for line in result.text.splitlines()
+        if (match := parse_ast_grep_match(line))
+    ]
+    if not matches:
+        return result.text, {}
+    tags: dict[str, str] = {}
+    rendered: list[str] = []
+    current_path: str | None = None
+    for match in matches:
+        if match.path != current_path:
+            tag = tag_for_path(match.path)
+            if tag is None:
+                continue
+            tags[match.path] = tag
+            rendered.append(f"[{match.path}#{tag}]")
+            current_path = match.path
+        for offset, line in enumerate(match.lines):
+            rendered.append(f"{match.start_line + offset}:{line}")
+    return "\n".join(rendered), tags
+
+
+def parse_ast_grep_match(line: str) -> AstGrepMatch | None:
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    path = payload.get("file")
+    lines = payload.get("lines")
+    range_payload = payload.get("range")
+    if not isinstance(path, str) or not isinstance(lines, str):
+        return None
+    if not isinstance(range_payload, dict):
+        return None
+    start = range_payload.get("start")
+    if not isinstance(start, dict) or not isinstance(start.get("line"), int):
+        return None
+    return AstGrepMatch(
+        path=path,
+        start_line=start["line"] + 1,
+        lines=tuple(lines.splitlines()),
+    )
 
 
 def parse_match(line: str) -> GrepMatch | None:
