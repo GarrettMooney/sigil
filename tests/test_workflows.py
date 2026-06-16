@@ -2325,6 +2325,24 @@ def test_zeta_step_records_aborted_turn_on_runtime_error(monkeypatch) -> None:
     assert turn["effect_ids"] == []
 
 
+def test_zeta_step_records_aborted_turn_on_keyboard_interrupt(monkeypatch) -> None:
+    def raise_keyboard_interrupt(*args, **kwargs) -> zeta_agent.AgentTurnResult:
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", raise_keyboard_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        zeta_runner.step("stop", workflow="propose")
+
+    timeline = current_sigil_timeline()
+    assert timeline[-1]["type"] == "turn_aborted"
+    assert timeline[-1]["reason"] == "keyboard_interrupt"
+    (turn,) = ledger_turns()
+    assert turn["outcome"] == TURN_OUTCOME_ABORTED
+    assert turn["caused_by"] == timeline[-1]["id"]
+
+
 def test_ask_records_answered_turn_record(monkeypatch, capsys) -> None:
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(

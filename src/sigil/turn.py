@@ -224,7 +224,7 @@ def event_id_value(event: dict[str, Any]) -> str | None:
 
 def is_durable_runtime_event(event: dict[str, Any]) -> bool:
     event_type = str(event.get("type") or "")
-    if event_type == "model":
+    if event_type in {"model", "turn_aborted"}:
         return True
     if event_type != "tool_result":
         return False

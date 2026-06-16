@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import threading
 import tomllib
 from collections.abc import Callable
 from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from _zeta_helpers import (
     DeltaSink,
     assert_tool_result_derivation_graph,
@@ -245,6 +247,52 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
         event.event_type for event in event_store.list_events(zeta_events.Filter())
     ] == ["zeta.user_message", "zeta.model.called"]
     assert trace_store.get_ref(zeta_timeline.event_head_ref("ctx-session")) is not None
+
+
+def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    context = zeta_context.ZetaContext(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=ToolRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+    published: list[dict[str, Any]] = []
+
+    def fail_chat_completion_messages(*args: object, **kwargs: object) -> dict:
+        raise AssertionError("expired turn must not request the model")
+
+    monkeypatch.setattr(zeta_agent, "time_monotonic", lambda: 10.0)
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fail_chat_completion_messages
+    )
+
+    result = zeta_rpc.run_rpc_session(
+        {
+            "objective": "answer",
+            "tools": [],
+            "context": "",
+            "max_wall_seconds": 0.0,
+        },
+        publish_event=published.append,
+        runtime_context=context,
+    )
+
+    assert result == {"outcome": "aborted", "final_text": ""}
+    assert [event["type"] for event in published] == [
+        "user_message",
+        "turn_aborted",
+    ]
+    assert published[-1]["reason"] == "deadline_exceeded"
+    assert [
+        event.event_type for event in event_store.list_events(zeta_events.Filter())
+    ] == ["zeta.user_message", "zeta.turn_aborted"]
 
 
 def test_zeta_rpc_registers_client_tool_on_server_registry() -> None:
@@ -1453,6 +1501,88 @@ def test_zeta_agent_turn_stops_after_default_max_turns(monkeypatch) -> None:
 
     assert requests == zeta_agent.DEFAULT_MAX_TURNS
     assert result.final_text == ""
+
+
+def test_zeta_agent_turn_aborts_before_model_when_cancelled(monkeypatch) -> None:
+    cancellation = threading.Event()
+    cancellation.set()
+    events: list[dict[str, Any]] = []
+
+    def fail_chat_completion_messages(*args: object, **kwargs: object) -> dict:
+        raise AssertionError("cancelled turn must not request the model")
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fail_chat_completion_messages
+    )
+
+    with pytest.raises(zeta_agent.AgentTurnAborted) as raised:
+        zeta_agent.run_agent_turn(
+            "test",
+            [],
+            zeta_agent.AgentConfig(allowed_tools=("ls",), max_turns=1),
+            event_sink=events.append,
+            cancellation_event=cancellation,
+            caused_by="prompt-event",
+        )
+
+    assert raised.value.reason == "cancelled"
+    assert raised.value.result.events == events
+    assert events == [
+        {
+            "type": "turn_aborted",
+            "id": events[0]["id"],
+            "reason": "cancelled",
+            "content": "(turn aborted: cancelled)",
+            "caused_by": "prompt-event",
+        }
+    ]
+
+
+def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "README.md"
+    target.write_text("README\n", encoding="utf-8")
+    responses = iter([read_tool_call_response(target), {"content": "too late"}])
+    events: list[dict[str, Any]] = []
+    monotonic = iter([0.0, 0.0, 0.0, 2.0])
+
+    monkeypatch.setattr(zeta_agent, "time_monotonic", lambda: next(monotonic))
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "run_tool",
+        lambda name, params, **kwargs: read_tool_payload(target),
+    )
+
+    with pytest.raises(zeta_agent.AgentTurnAborted) as raised:
+        zeta_agent.run_agent_turn(
+            "test",
+            [],
+            zeta_agent.AgentConfig(
+                allowed_tools=("read",),
+                max_turns=2,
+                max_wall_seconds=1.0,
+            ),
+            event_sink=events.append,
+        )
+
+    assert raised.value.reason == "deadline_exceeded"
+    assert [event["type"] for event in events] == [
+        "model",
+        "tool_call",
+        "tool_result",
+        "turn_aborted",
+    ]
+    assert events[-1]["reason"] == "deadline_exceeded"
+    assert events[-1]["caused_by"] == events[-2]["id"]
 
 
 def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> None:

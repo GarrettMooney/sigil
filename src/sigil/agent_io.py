@@ -13,7 +13,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TextIO
 
-from zeta.agent import AgentConfig, AgentTurnResult, registered_tools, run_agent_turn
+from zeta.agent import (
+    AgentConfig,
+    AgentTurnAborted,
+    AgentTurnResult,
+    registered_tools,
+    run_agent_turn,
+)
 from zeta.context import ZetaContext, load_project_context
 from zeta.models import (
     CODEX_RESPONSES_API,
@@ -220,14 +226,18 @@ def record_turn_abort(
     error: BaseException,
     *,
     runtime_context: ZetaContext,
+    reason: str | None = None,
     **fields: Any,
 ) -> dict[str, Any]:
     """Resolve an aborted turn in the timeline instead of dangling its question."""
+    message = str(error) or type(error).__name__
+    if reason is not None:
+        fields["reason"] = reason
     return record_zeta_event(
         "turn_aborted",
         runtime_context=runtime_context,
-        error=str(error),
-        content=f"(turn aborted: {error})",
+        error=message,
+        content=f"(turn aborted: {message})",
         **fields,
     )
 
@@ -321,6 +331,7 @@ def run_zeta_rpc_session(
                 if selected_model is not None
                 else None,
                 model_api=selected_model.api if selected_model is not None else None,
+                max_wall_seconds=optional_float_param(params, "max_wall_seconds"),
             ),
             context=(
                 str(params.get("context"))
@@ -332,13 +343,42 @@ def run_zeta_rpc_session(
             tool_registry=runtime_context.tool_registry,
             caused_by=ledger.root_event_id,
         )
+    except AgentTurnAborted as error:
+        ledger.add_model_calls(error.result.model_telemetry_calls)
+        abort_event = error.result.events[-1] if error.event_recorded else None
+        if isinstance(abort_event, dict):
+            ledger.note_runtime_event(abort_event)
+        turn = ledger.finish(
+            TURN_OUTCOME_ABORTED,
+            prompt_traces=error.result.prompt_traces,
+        )
+        publish_event(turn)
+        return {
+            "turn_id": ledger.turn_id,
+            "session_id": session_id(),
+            "outcome": TURN_OUTCOME_ABORTED,
+            "final_text": "",
+        }
+    except KeyboardInterrupt as error:
+        abort_event = record_turn_abort(
+            error,
+            runtime_context=runtime_context,
+            workflow=workflow,
+            caused_by=ledger.causal_parent_event_id(),
+            reason="keyboard_interrupt",
+        )
+        ledger.note_runtime_event(abort_event)
+        turn = ledger.finish(TURN_OUTCOME_ABORTED)
+        publish_event(turn)
+        raise
     except RuntimeError as error:
-        record_turn_abort(
+        abort_event = record_turn_abort(
             error,
             runtime_context=runtime_context,
             workflow=workflow,
             caused_by=ledger.causal_parent_event_id(),
         )
+        ledger.note_runtime_event(abort_event)
         turn = ledger.finish(TURN_OUTCOME_ABORTED)
         publish_event(turn)
         raise
@@ -357,6 +397,15 @@ def run_zeta_rpc_session(
         "outcome": outcome,
         "final_text": result.final_text,
     }
+
+
+def optional_float_param(params: dict[str, Any], key: str) -> float | None:
+    value = params.get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    return None
 
 
 def model_telemetry_fields(

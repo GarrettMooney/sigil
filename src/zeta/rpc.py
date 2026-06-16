@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any, TextIO, cast
 
-from .agent import AgentConfig, registered_tools, run_agent_turn
+from .agent import AgentConfig, AgentTurnAborted, registered_tools, run_agent_turn
 from .context import ZetaContext, default_context, load_project_context
 from .timeline import current_timeline, record_event
 from .tools.base import EFFECT_KINDS, EffectKind, ToolImpl, ToolSpec
@@ -48,21 +48,24 @@ def run_rpc_session(
         persisted = record_event(event, runtime_context=runtime_context)
         publish_event(persisted)
 
-    result = run_agent_turn(
-        objective,
-        prior_timeline,
-        rpc_agent_config(
-            params,
-            enabled_tools=enabled_tools,
-            execution_mode=execution_mode,
-            session_id=runtime_context.session_id,
-        ),
-        context=rpc_context(params),
-        event_sink=sink,
-        trace_store=runtime_context.trace_store,
-        tool_registry=runtime_context.tool_registry,
-        caused_by=str(user_event.get("id") or ""),
-    )
+    try:
+        result = run_agent_turn(
+            objective,
+            prior_timeline,
+            rpc_agent_config(
+                params,
+                enabled_tools=enabled_tools,
+                execution_mode=execution_mode,
+                session_id=runtime_context.session_id,
+            ),
+            context=rpc_context(params),
+            event_sink=sink,
+            trace_store=runtime_context.trace_store,
+            tool_registry=runtime_context.tool_registry,
+            caused_by=str(user_event.get("id") or ""),
+        )
+    except AgentTurnAborted:
+        return {"outcome": "aborted", "final_text": ""}
     return {
         "outcome": rpc_outcome(result.staged_effect, result.final_text),
         "final_text": result.final_text,
@@ -110,6 +113,7 @@ def rpc_agent_config(
         model_session_id=session_id,
         thinking=optional_str_param(params, "thinking"),
         model_api=optional_str_param(params, "api"),
+        max_wall_seconds=optional_float_param(params, "max_wall_seconds"),
     )
 
 
@@ -121,6 +125,15 @@ def rpc_context(params: dict[str, Any]) -> str:
 def optional_str_param(params: dict[str, Any], key: str) -> str | None:
     value = params.get(key)
     return value if isinstance(value, str) else None
+
+
+def optional_float_param(params: dict[str, Any], key: str) -> float | None:
+    value = params.get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    return None
 
 
 def rpc_outcome(staged_effect: dict[str, Any] | None, final_text: str) -> str:

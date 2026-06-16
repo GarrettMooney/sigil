@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import uuid
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager, nullcontext
@@ -27,6 +29,7 @@ AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]
 DEFAULT_MAX_TURNS = 25
 tool_registry = _runtime_tool_registry
+time_monotonic = time.monotonic
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,7 @@ class AgentConfig:
     model_session_id: str | None = None
     thinking: str | None = None
     model_api: str | None = None
+    max_wall_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,22 @@ class AgentTurnResult:
     prompt_traces: list[PromptTrace] = field(default_factory=list)
 
 
+class AgentTurnAborted(RuntimeError):
+    """Raised when a cooperative turn budget or cancellation request aborts."""
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        result: AgentTurnResult,
+        event_recorded: bool,
+    ) -> None:
+        super().__init__(reason.replace("_", " "))
+        self.reason = reason
+        self.result = result
+        self.event_recorded = event_recorded
+
+
 def run_agent_turn(
     objective: str,
     timeline: list[dict[str, Any]],
@@ -72,10 +92,13 @@ def run_agent_turn(
     trace_store: Store | None = None,
     tool_registry: ToolRegistry | None = None,
     caused_by: str | None = None,
+    cancellation_event: threading.Event | None = None,
+    deadline: float | None = None,
 ) -> AgentTurnResult:
     """Run an assistant/tool loop without mutating session state."""
     if not agent_model_endpoint_open(config):
         raise RuntimeError("model endpoint is not reachable")
+    deadline = agent_deadline(config, deadline)
     active_tool_registry = tool_registry or _runtime_tool_registry
     allowed_tools = agent_allowed_tools(config, tool_registry=active_tool_registry)
     events: list[dict[str, Any]] = []
@@ -89,6 +112,16 @@ def run_agent_turn(
     tools = model_tool_descriptors(allowed_tools, tool_registry=active_tool_registry)
     next_model_caused_by = caused_by
     for _ in turn_indices(config.max_turns):
+        raise_if_agent_turn_aborted(
+            events,
+            event_sink=event_sink,
+            cancellation_event=cancellation_event,
+            deadline=deadline,
+            caused_by=next_model_caused_by,
+            model_telemetry=latest_model_telemetry,
+            model_telemetry_calls=model_telemetry_calls,
+            prompt_traces=prompt_traces,
+        )
         prepared_prompt = builder.build(
             objective,
             timeline,
@@ -133,6 +166,16 @@ def run_agent_turn(
                 prompt_traces=prompt_traces,
             )
         for index, tool_call in enumerate(tool_calls):
+            raise_if_agent_turn_aborted(
+                events,
+                event_sink=event_sink,
+                cancellation_event=cancellation_event,
+                deadline=deadline,
+                caused_by=next_model_caused_by,
+                model_telemetry=latest_model_telemetry,
+                model_telemetry_calls=model_telemetry_calls,
+                prompt_traces=prompt_traces,
+            )
             result_event = handle_tool_call(
                 tool_call,
                 allowed_tools=allowed_tools,
@@ -169,6 +212,67 @@ def run_agent_turn(
         model_telemetry_calls=model_telemetry_calls,
         prompt_traces=prompt_traces,
     )
+
+
+def agent_deadline(config: AgentConfig, deadline: float | None) -> float | None:
+    if config.max_wall_seconds is None:
+        return deadline
+    configured = time_monotonic() + max(config.max_wall_seconds, 0.0)
+    if deadline is None:
+        return configured
+    return min(deadline, configured)
+
+
+def raise_if_agent_turn_aborted(
+    events: list[dict[str, Any]],
+    *,
+    event_sink: AgentEventSink | None,
+    cancellation_event: threading.Event | None,
+    deadline: float | None,
+    caused_by: str | None,
+    model_telemetry: dict[str, Any],
+    model_telemetry_calls: list[dict[str, Any]],
+    prompt_traces: list[PromptTrace],
+) -> None:
+    reason = agent_abort_reason(cancellation_event, deadline)
+    if reason is None:
+        return
+    event = turn_aborted_event(reason, caused_by=caused_by)
+    emit_event(events, event, event_sink)
+    raise AgentTurnAborted(
+        reason,
+        result=AgentTurnResult(
+            events=events,
+            model_telemetry=model_telemetry,
+            model_telemetry_calls=model_telemetry_calls,
+            prompt_traces=prompt_traces,
+        ),
+        event_recorded=True,
+    )
+
+
+def agent_abort_reason(
+    cancellation_event: threading.Event | None,
+    deadline: float | None,
+) -> str | None:
+    if cancellation_event is not None and cancellation_event.is_set():
+        return "cancelled"
+    if deadline is not None and time_monotonic() >= deadline:
+        return "deadline_exceeded"
+    return None
+
+
+def turn_aborted_event(reason: str, *, caused_by: str | None) -> dict[str, Any]:
+    message = reason.replace("_", " ")
+    event: dict[str, Any] = {
+        "type": "turn_aborted",
+        "id": str(uuid.uuid4()),
+        "reason": reason,
+        "content": f"(turn aborted: {message})",
+    }
+    if caused_by is not None:
+        event["caused_by"] = caused_by
+    return event
 
 
 def agent_model_endpoint_open(config: AgentConfig) -> bool:

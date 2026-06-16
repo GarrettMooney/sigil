@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
-from zeta.agent import AgentConfig, registered_tools, run_agent_turn
+from zeta.agent import AgentConfig, AgentTurnAborted, registered_tools, run_agent_turn
 from zeta.context import ZetaContext, load_project_context
 from zeta.models import (
     active_model_selection,
@@ -197,13 +197,37 @@ def step(
             tool_registry=runtime_context.tool_registry,
             caused_by=ledger.root_event_id,
         )
+    except AgentTurnAborted as error:
+        recorder.replay(error.result)
+        ledger.add_model_calls(error.result.model_telemetry_calls)
+        turn = ledger.finish(
+            TURN_OUTCOME_ABORTED,
+            prompt_traces=error.result.prompt_traces,
+        )
+        finalize_progress(renderer, turn)
+        if context_footer is not None:
+            context_footer.finalize(error.result.model_telemetry)
+        raise
+    except KeyboardInterrupt as error:
+        abort_event = record_turn_abort(
+            error,
+            runtime_context=runtime_context,
+            workflow=workflow,
+            caused_by=ledger.causal_parent_event_id(),
+            reason="keyboard_interrupt",
+        )
+        ledger.note_runtime_event(abort_event)
+        turn = ledger.finish(TURN_OUTCOME_ABORTED)
+        finalize_progress(renderer, turn)
+        raise
     except RuntimeError as error:
-        record_turn_abort(
+        abort_event = record_turn_abort(
             error,
             runtime_context=runtime_context,
             workflow=workflow,
             caused_by=ledger.causal_parent_event_id(),
         )
+        ledger.note_runtime_event(abort_event)
         turn = ledger.finish(TURN_OUTCOME_ABORTED)
         finalize_progress(renderer, turn)
         raise
